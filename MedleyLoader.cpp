@@ -78,13 +78,34 @@ void MedleyLoader::run()
     }
     else if (_song->songType() == "SIB")
     {
-        QString sibPath = _songDb->sibPath() + _song->path();
-        if (!QFile::exists(sibPath) && !_songDb->sibPath().isEmpty())
-            sibPath = _songDb->sibPath() + "/" + _song->path();
-        if (!QFile::exists(sibPath) && QFile::exists("D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB/" + _song->path()))
-            sibPath = "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB/" + _song->path();
-        if (!QFile::exists(sibPath))
-            sibPath = _song->path();
+        QString sibPath = _song->path();
+        QStringList candidates;
+        candidates << sibPath;
+        if (!_songDb->sibPath().isEmpty()) {
+            candidates << _songDb->sibPath() + "/" + _song->path();
+            candidates << _songDb->sibPath() + _song->path();
+            QDir pDir(_songDb->sibPath());
+            if (pDir.cdUp()) {
+                candidates << pDir.absoluteFilePath(_song->path().startsWith('/') ? _song->path().mid(1) : _song->path());
+                candidates << pDir.absolutePath() + _song->path();
+            }
+        }
+        candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI" + _song->path();
+        candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/" + _song->path();
+        candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB" + _song->path();
+        candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB/" + _song->path();
+        candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIBKLDEMO" + _song->path();
+        candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIBKLDEMO/S/" + _song->id() + ".sibkldemo";
+        if (!_song->id().isEmpty()) {
+            const QChar fc = _song->id().at(0).toUpper();
+            candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB/" + QString(fc) + "/" + _song->id() + ".sib";
+        }
+        for (const QString &cand : candidates) {
+            if (QFile::exists(cand)) {
+                sibPath = cand;
+                break;
+            }
+        }
 
         PTHKCore::SibSong sib = PTHKCore::readSib(sibPath);
         if (sib.valid && !sib.midData.isEmpty()) {

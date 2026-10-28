@@ -1055,15 +1055,37 @@ void MainWindow::play(int index, int position)
     else if (playingSong.songType() == "SIB")
     {
         QString p = playingSong.path();
-        if (!QFile::exists(p) && !db->sibPath().isEmpty())
-            p = db->sibPath() + "/" + playingSong.path();
-        if (!QFile::exists(p) && !db->sibPath().isEmpty())
-            p = db->sibPath() + playingSong.path();
-        if (!QFile::exists(p) && QFile::exists("D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB" + playingSong.path()))
-            p = "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB" + playingSong.path();
-        if (!QFile::exists(p) && QFile::exists("D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB/" + playingSong.path()))
-            p = "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB/" + playingSong.path();
-        if (!QFile::exists(p)) {
+        QStringList candidates;
+        candidates << p;
+        if (!db->sibPath().isEmpty()) {
+            candidates << db->sibPath() + "/" + playingSong.path();
+            candidates << db->sibPath() + playingSong.path();
+            QDir pDir(db->sibPath());
+            if (pDir.cdUp()) {
+                candidates << pDir.absoluteFilePath(playingSong.path().startsWith('/') ? playingSong.path().mid(1) : playingSong.path());
+                candidates << pDir.absolutePath() + playingSong.path();
+            }
+        }
+        candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI" + playingSong.path();
+        candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/" + playingSong.path();
+        candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB" + playingSong.path();
+        candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB/" + playingSong.path();
+        candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIBKLDEMO" + playingSong.path();
+        candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIBKLDEMO/S/" + playingSong.id() + ".sibkldemo";
+        if (!playingSong.id().isEmpty()) {
+            const QChar fc = playingSong.id().at(0).toUpper();
+            candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB/" + QString(fc) + "/" + playingSong.id() + ".sib";
+        }
+
+        bool found = false;
+        for (const QString &cand : candidates) {
+            if (QFile::exists(cand)) {
+                p = cand;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
             QMessageBox::warning(this, tr("ไม่สามารถเล่นเพลงได้"),
                                  tr("ไม่มีไฟล์ ") + p, QMessageBox::Ok);
             return;
