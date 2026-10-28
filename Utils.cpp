@@ -13,6 +13,8 @@
 #include <QEventLoop>
 #include <QFileInfo>
 #include <QSet>
+#include <QTextCodec>
+#include <QRegExp>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -59,39 +61,64 @@ QVector<long> Utils::readCurFile(const QByteArray &data, uint32_t resolution)
     return curs;
 }
 
+QString Utils::decodeThaiText(const QByteArray &data)
+{
+    // A UTF-8 BOM, or bytes that are valid UTF-8, mean UTF-8;
+    // TIS-620 / Windows-874 Thai (bytes 0xA1..0xFB) is almost never valid UTF-8.
+    if (data.startsWith("\xEF\xBB\xBF"))
+        return QString::fromUtf8(data.mid(3));
+
+    QTextCodec::ConverterState state;
+    QString utf8 = QTextCodec::codecForName("UTF-8")->toUnicode(data.constData(), data.size(), &state);
+    if (state.invalidChars == 0)
+        return utf8;
+
+    // Windows-874 (TIS-620 plus a few punctuation bytes Thai Windows editors write,
+    // e.g. 0xA0 no-break space, which Qt's TIS-620 codec turns into U+FFFD)
+    QString out;
+    out.reserve(data.size());
+    for (char ch : data) {
+        const uchar b = uchar(ch);
+        if (b < 0x80)
+            out += QChar(b);
+        else if (b >= 0xA1)
+            out += QChar(0x0E00 + (b - 0xA0));          // Thai block, same order as the bytes
+        else switch (b) {
+            case 0xA0: out += QChar(' '); break;
+            case 0x80: out += QChar(0x20AC); break;     // euro
+            case 0x85: out += QChar(0x2026); break;     // ellipsis
+            case 0x91: out += QChar(0x2018); break;
+            case 0x92: out += QChar(0x2019); break;
+            case 0x93: out += QChar(0x201C); break;
+            case 0x94: out += QChar(0x201D); break;
+            case 0x95: out += QChar(0x2022); break;
+            case 0x96: out += QChar(0x2013); break;
+            case 0x97: out += QChar(0x2014); break;
+            // unused bytes still become one character: the lyric cursors count characters
+            default:   out += QChar(' '); break;
+        }
+    }
+    return out;
+}
+
+// The first 4 lines are name, artist, key and a spare line
+static QString lyricsAfterHeader(const QString &text)
+{
+    QStringList lines = text.split(QRegExp("\r\n|\n|\r"));
+    return lines.mid(4).join("\n");
+}
+
 QString Utils::readLyrics(const QString &lyrFile)
 {
     QFile f(lyrFile);
-    f.open(QIODevice::ReadOnly);
-
-    QTextStream textStream(&f);
-    textStream.setCodec("TIS-620");
-
-    textStream.readLine();
-    textStream.readLine();
-    textStream.readLine();
-    textStream.readLine();
-
-    QString lyr = textStream.readAll();
-
-    f.close();
-
-    return lyr;
+    if (!f.open(QIODevice::ReadOnly))
+        return QString();
+    return lyricsAfterHeader(decodeThaiText(f.readAll()));
 }
 
 QString Utils::readLyrics(const QByteArray &data)
 {
-    QTextStream textStream(data);
-    textStream.setCodec("TIS-620");
-
-    textStream.readLine();
-    textStream.readLine();
-    textStream.readLine();
-    textStream.readLine();
-
-    QString lyr = textStream.readAll();
-
-    return lyr;
+    return lyricsAfterHeader(decodeThaiText(data));
 }
 
 uint Utils::concurentThreadsSupported()
@@ -100,7 +127,7 @@ uint Utils::concurentThreadsSupported()
 }
 
 // VSTChecker is looked up next to the program (not in the current directory) and every failed check is logged,
-// so a plug-in that does not show up in the list can be explained (~/.KaraMixer/vstscan.log).
+// so a plug-in that does not show up in the list can be explained (~/.PTHKKaraoke/vstscan.log).
 static QString vstCheckerExe()
 {
     return QCoreApplication::applicationDirPath() + "/" + QString(VST_CHECKER_NAME);
@@ -108,7 +135,7 @@ static QString vstCheckerExe()
 
 static void logVstScan(const QString &path, QProcess &process)
 {
-    QFile f(QDir::homePath() + "/.KaraMixer/vstscan.log");
+    QFile f(QDir::homePath() + "/.PTHKKaraoke/vstscan.log");
     if (f.size() > 200000)
         f.remove();
     if (!f.open(QIODevice::Append | QIODevice::Text))
@@ -126,14 +153,14 @@ static void logVstScan(const QString &path, QProcess &process)
 // Scanning loads every plug-in in a helper process. Some plug-ins open their own windows (licence / copy-protection
 // errors, "this host is not supported") that can hide behind the mixer and block the scan, or never return at all.
 // While the helper runs, any window it opens is closed automatically and written to the log; a plug-in that hangs,
-// crashes or only produced such windows is put on a skip list (~/.KaraMixer/vst-skip.txt) and not loaded again
+// crashes or only produced such windows is put on a skip list (~/.PTHKKaraoke/vst-skip.txt) and not loaded again
 // until the file changes (or the list is cleared with Ctrl+click on the update button).
 namespace {
     int g_vstSkipped = 0;
     QSet<QString> g_skip;
     bool g_skipLoaded = false;
 
-    QString skipFilePath() { return QDir::homePath() + "/.KaraMixer/vst-skip.txt"; }
+    QString skipFilePath() { return QDir::homePath() + "/.PTHKKaraoke/vst-skip.txt"; }
 
     QString skipKey(const QString &path)
     {
@@ -172,7 +199,7 @@ namespace {
 
     void logVstLine(const QString &msg)
     {
-        QFile f(QDir::homePath() + "/.KaraMixer/vstscan.log");
+        QFile f(QDir::homePath() + "/.PTHKKaraoke/vstscan.log");
         if (f.size() > 200000) f.remove();
         if (!f.open(QIODevice::Append | QIODevice::Text)) return;
         QTextStream out(&f);
@@ -403,7 +430,8 @@ bool Utils::loadPlaylist(const QString &filePath, QList<Song *> &songs)
     QTextStream in(&file);
     in.setCodec("UTF-8");
 
-    if (in.readLine() != APP_PLAYLIST_HEADTEXT)
+    const QString head = in.readLine();
+    if (head != APP_PLAYLIST_HEADTEXT && head != APP_PLAYLIST_OLD_HEADTEXT)
     {
         file.close();
         return false;

@@ -88,6 +88,30 @@ VSTDirsDialog::VSTDirsDialog(QWidget *parent, MainWindow *mainWindow) :
         ui->tableVSTiUsed->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
         connect(ui->tableVSTiUsed, SIGNAL(customContextMenuRequested(QPoint)),
                 this, SLOT(showVSTiSelectMenu(QPoint)));
+
+        connect(ui->tableVSTiUsed, &QTableWidget::cellDoubleClicked, this, [this](int row, int col) {
+            if (auto *item = ui->tableVSTiUsed->item(row, col)) {
+                QPoint p = ui->tableVSTiUsed->visualItemRect(item).center();
+                showVSTiSelectMenu(p);
+            }
+        });
+
+        QHBoxLayout *btnLayout = new QHBoxLayout();
+        QPushButton *btnAllDrumsVsti1 = new QPushButton(tr("กำหนดชุดกลองทั้งหมด -> VSTi 1"), this);
+        btnAllDrumsVsti1->setStyleSheet("padding: 6px 14px; font-weight: bold; background-color: #1976d2; color: white; border-radius: 4px;");
+        connect(btnAllDrumsVsti1, &QPushButton::clicked, this, [this]() {
+            assignAllDrumsToVSTi(0);
+        });
+
+        QPushButton *btnResetAll = new QPushButton(tr("ยกเลิก VSTi ทั้งหมด (ใช้ SoundFont)"), this);
+        btnResetAll->setStyleSheet("padding: 6px 14px; border-radius: 4px;");
+        connect(btnResetAll, &QPushButton::clicked, this, [this]() {
+            assignAllDrumsToVSTi(-1);
+        });
+
+        btnLayout->addWidget(btnAllDrumsVsti1);
+        btnLayout->addWidget(btnResetAll);
+        ui->verticalLayout_7->addLayout(btnLayout);
     }
 }
 
@@ -525,4 +549,36 @@ QModelIndexList VSTDirsDialog::selectedVstiRows()
     if (list.isEmpty() && ui->tableVSTiUsed->currentRow() >= 0)
         list << ui->tableVSTiUsed->model()->index(ui->tableVSTiUsed->currentRow(), 0);
     return list;
+}
+
+void VSTDirsDialog::assignAllDrumsToVSTi(int vstiIndex)
+{
+    auto chInstMap = mixDlg->mixChannelMap();
+    QStringList vstiNames;
+    vstiNames << tr("Not used")
+              << chInstMap.value(InstrumentType::VSTi1)->fullInstrumentName()
+              << chInstMap.value(InstrumentType::VSTi2)->fullInstrumentName()
+              << chInstMap.value(InstrumentType::VSTi3)->fullInstrumentName()
+              << chInstMap.value(InstrumentType::VSTi4)->fullInstrumentName();
+
+    QString assignedName = vstiNames[vstiIndex + 1];
+
+    for (int row = 0; row < ui->tableVSTiUsed->rowCount(); row++) {
+        InstrumentType type = static_cast<InstrumentType>(row);
+        if (type >= InstrumentType::BassDrum && type <= InstrumentType::PercussionEtc) {
+            synth->setUseVSTi(type, vstiIndex);
+            if (QTableWidgetItem *item = ui->tableVSTiUsed->item(row, 1))
+                item->setText(assignedName);
+            if (vstiIndex == -1) {
+                synth->setExtMidiOut(type, QString());
+                if (QTableWidgetItem *xi = ui->tableVSTiUsed->item(row, 2))
+                    xi->setText(tr("ใช้เสียงในโปรแกรม"));
+            }
+        }
+    }
+    synth->sendAllNotesOff();
+    QMessageBox::information(this, tr("ตั้งค่าสำเร็จ"),
+        vstiIndex >= 0
+            ? tr("กำหนดให้ชิ้นส่วนกลองทั้งหมดส่งเสียงไปยัง %1 เรียบร้อยแล้ว").arg(assignedName)
+            : tr("ยกเลิก VSTi และกลับไปใช้เสียง SoundFont ปกติเรียบร้อยแล้ว"));
 }

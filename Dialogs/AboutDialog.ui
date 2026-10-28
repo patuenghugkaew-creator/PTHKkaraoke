@@ -48,7 +48,7 @@
         <string/>
        </property>
        <property name="pixmap">
-        <pixmap resource="../icons.qrc">:/Icons/App/karamixer.png</pixmap>
+        <pixmap resource="../icons.qrc">:/Icons/App/pthk.png</pixmap>
        </property>
        <property name="scaledContents">
         <bool>true</bool>
@@ -67,7 +67,7 @@
       </font>
      </property>
      <property name="text">
-      <string>KaraMixer Edition</string>
+      <string>PTHK Karaoke</string>
      </property>
      <property name="alignment">
       <set>Qt::AlignCenter</set>

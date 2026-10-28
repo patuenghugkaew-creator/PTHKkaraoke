@@ -29,7 +29,7 @@ VSTDialog::VSTDialog(QWidget *parent, DWORD fxHandle, const QString &instName) :
 
     // Plug-in editors keep the plain native Windows frame (no neon skin): the plug-in draws
     // its own GUI straight into this window, exactly like in other hosts.
-    setProperty("buaiNoSkin", true);
+    setProperty("pthkNoSkin", true);
     setWindowFlags(Qt::Dialog | Qt::WindowTitleHint | Qt::WindowSystemMenuHint |
                    Qt::WindowMinimizeButtonHint | Qt::WindowCloseButtonHint);
 

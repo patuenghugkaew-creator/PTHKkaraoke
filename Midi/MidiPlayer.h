@@ -1,4 +1,4 @@
-﻿#ifndef MIDIPLAYER_H
+#ifndef MIDIPLAYER_H
 #define MIDIPLAYER_H
 
 #include "MidiOut.h"
@@ -42,6 +42,9 @@ public:
     bool isMasterMute() { return _masterMute; }
     void setMasterMute(bool on) { _masterMute = on; setVolume(_volume); }
     float effectiveGain() { return _masterMute ? 0.0f : FaderTaper::gain(_volume); }
+    // song fade (0..1) for the built-in synth only; MIDI out ports keep effectiveGain()
+    void setFadeGain(float f);
+    float synthGain() { return effectiveGain() * _fade; }
     int transpose() { return _midiTranspose; }
 
     int  lockDrumNumber()  { return _lockDrumNumber; }
@@ -106,6 +109,12 @@ public:
     int medleyBPM() { return _medleyBPM; }
     void setMedleyBPM(int bpm);
 
+    int medleyTransitionBars() const { return _medleyTransitionBars; }
+    void setMedleyTransitionBars(int bars) { _medleyTransitionBars = bars; }
+
+    int medleyFillPattern() const { return _medleyFillPattern; }
+    void setMedleyFillPattern(int pattern) { _medleyFillPattern = pattern; }
+
     bool loadNextMedley(const QString &file, int cutStartBar, int cutEndBar, int midiSpeed, int transpose);
     void unloadNextMedley();
 
@@ -119,6 +128,7 @@ signals:
     void bpmChanged(int bpm);
     void nextMedleyStarted();
     void nextMedleyAfterStarted();
+    void medleyCountIn(int beat, int beatsPerBar, int bar, int totalBars);
 
 private slots:
     void onSeqFinished();
@@ -147,10 +157,13 @@ private:
     int                 _midiPortInNum = -1;
     int                 _volume = 50;
     bool                _masterMute = false;
+    float               _fade = 1.0f;
     int                 _midiTranspose = 0;
     int                 _midiTransposeTemp = 0;
     int                 _seqIndex = 0;
     int                 _medleyBPM = 120;
+    int                 _medleyTransitionBars = 1;
+    int                 _medleyFillPattern = 0;
     bool                _useMedley = false;
     bool                _useSolo = false;
 

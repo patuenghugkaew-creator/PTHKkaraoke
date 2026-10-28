@@ -25,45 +25,13 @@
 #include <cstring>
 #include <mutex>
 #include <vector>
+#include "../PTHKCore/PTHKCore.h"
 
 namespace MasterDsp {
 
 const double kPi = 3.14159265358979323846;
 
-struct Params
-{
-    // ---- mastering chain
-    bool  masterOn = false;
-    float compAmount = 0.0f;     // 0..1   (ratio 1:1 .. 4:1)
-    float lowDb = 0.0f;          // tone of the three bands, -6..+6 dB
-    float midDb = 0.0f;
-    float highDb = 0.0f;
-    float exciter = 0.0f;        // 0..1   harmonic exciter on the highs
-    float width = 1.0f;          // 0..2   1 = unchanged, 0 = mono
-
-    // ---- loudness
-    bool  autoOn = false;
-    float targetLufs = -16.0f;   // short-term loudness to aim for
-    float maxBoostDb = 6.0f;
-    float maxCutDb = 12.0f;
-    bool  meter = false;         // measure the loudness even when auto level is off (dialog open)
-
-    // ---- limiter
-    bool  limOn = false;
-    float ceilingDb = -1.0f;     // output ceiling, dBFS
-    float releaseMs = 120.0f;
-    bool  softClip = false;
-    bool  truePeak = true;
-};
-
-struct Meter
-{
-    float momentary = -100.0f;   // LUFS, before the auto level gain
-    float shortTerm = -100.0f;   // LUFS, before the auto level gain
-    float autoDb = 0.0f;         // gain applied by the auto level
-    float grDb = 0.0f;           // limiter gain reduction (0 or negative)
-    float peakDb = -100.0f;      // output peak after the master volume, dBFS
-};
+// MasterDsp::Params and Meter defined in PTHKCore.h
 
 // presets of the mastering chain (only the chain's own fields are changed)
 inline int presetCount() { return 5; }
@@ -207,6 +175,7 @@ class Chain
 public:
     Chain() {}
 
+
     // set the format (call before the first process(), from a non-audio thread, while no audio is running through it)
     void prepare(int channels, int sampleRate)
     {
@@ -279,6 +248,12 @@ public:
         std::lock_guard<std::mutex> lk(pm);
         pending = p;
         dirty.store(true, std::memory_order_release);
+    }
+
+    Params params()
+    {
+        std::lock_guard<std::mutex> lk(pm);
+        return pending;
     }
 
     Meter meter() const

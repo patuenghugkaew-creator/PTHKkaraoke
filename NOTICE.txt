@@ -1,5 +1,18 @@
-KaraMixer Edition - NOTICE / ประกาศลิขสิทธิ์และสัญญาอนุญาต
-==========================================================
+PTHK Karaoke - NOTICE / ประกาศลิขสิทธิ์และสัญญาอนุญาต
+=====================================================
+
+0. PTHK Karaoke
+   PTHK Karaoke v1.0.0 is a modified version of KaraMixer Edition, licensed under
+   the GNU General Public License version 3 (GPLv3), like the original.
+   Modifications and additions: Copyright (C) 2026 PTHK
+   PTHK Karaoke เป็นเวอร์ชันที่แก้ไขจาก KaraMixer Edition ภายใต้ GNU GPL เวอร์ชัน 3
+   ส่วนที่แก้ไขและเพิ่มเติม: ลิขสิทธิ์ (C) 2026 PTHK
+   The original notices of KaraMixer Edition below are kept unchanged.
+   ประกาศเดิมของ KaraMixer Edition ด้านล่างคงไว้ตามเดิม
+
+----------------------------------------------------------
+KaraMixer Edition - NOTICE (original / ฉบับเดิม)
+----------------------------------------------------------
 
 1. This program / โปรแกรมนี้
    KaraMixer Edition is free software licensed under the GNU General Public

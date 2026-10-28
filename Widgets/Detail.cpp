@@ -17,6 +17,9 @@ void Detail::setDetail(const QString &text, const QString &value)
 {
     ui->lbText->setText(text);
     ui->lbValue->setText(value);
+    // grow with the text (longer messages such as file names were cut off)
+    setMinimumWidth(sizeHint().width());
+    adjustSize();
 }
 
 void Detail::setText(const QString &text)

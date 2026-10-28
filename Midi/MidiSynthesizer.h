@@ -17,6 +17,7 @@
 #include "BASSFX/Equalizer31BandFX.h"
 #include "BASSFX/Chorus2FX.h"
 #include "BASSFX/Reverb2FX.h"
+#include "PTHKCore.h"
 
 #define SF_PRESET_COUNT 11
 
@@ -66,6 +67,8 @@ public:
     ~MidiSynthesizer();
 
     bool isOpened() { return openned; }
+    // main output mixer (after the master effects); 0 while the synth is closed
+    DWORD mainMixerHandle() { return mixers.isEmpty() ? 0 : mixers[0].handle; }
 
     // ASIO output (-1 = normal Windows device)
     bool setAsioDevice(int asioIndex);
@@ -221,6 +224,10 @@ public:
     QList<QByteArray> masterFxChunks();
     QList<QList<float>> masterFxParams();
 
+    void setMasterParams(const MasterDsp::Params &p);
+    MasterDsp::Params masterParams();
+    MasterDsp::Meter masterMeter() const;
+
     #ifndef __linux__
     BASS_VST_INFO vstiInfo(int vstiIndex);
     QStringList vstiFiles();
@@ -327,6 +334,9 @@ private:
     int maxVoices = 500;
     bool useFX = false;
     QList<FX*> masterFXs;
+    int masterChannels = 2;
+    HDSP masterDspHandle = 0;
+    static void CALLBACK masterDspCallback(HDSP handle, DWORD channel, void *buffer, DWORD length, void *user);
     bool sfLoadAll = false;
 
     DWORD RPNType = 0;

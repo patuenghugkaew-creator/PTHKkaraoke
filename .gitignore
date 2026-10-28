@@ -26,16 +26,27 @@
 *.a
 #*.lib
 
-# Executables
+# Executables & Debug symbols
 #*.exe
 *.out
 *.app
+*.pdb
+*.ilk
+*.idb
 
-
+# Qt Creator user settings
 KaraMixer.pro.user
 KaraMixer.pro.user.*
-Widgets/km_secret.h
+PTHKKaraoke.pro.user
+PTHKKaraoke.pro.user.*
+
+# Installer / Distribution output (Large binaries >100MB)
+dist/
+build/
+*.exe.recipe
+PTHK-Installers/
 
 # KaraMixer licence PRIVATE key: never commit
 km_private.key
 license-tools/km_private.key
+Widgets/km_secret.h

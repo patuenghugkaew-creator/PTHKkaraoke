@@ -264,11 +264,11 @@ SynthMixerDialog::SynthMixerDialog(QWidget *parent, MainWindow *mainWin) : //, M
     signalBusActionMapper(this)
 {
     ui->setupUi(this);
-    setProperty("buaiNoSkin", true);   // has its own title bar
+    setProperty("pthkNoSkin", true);   // has its own title bar
 
     // Frameless window with our own themed neon title bar
     ui->verticalLayout_60->setContentsMargins(6, 6, 6, 6);
-    titleBar = new TitleBar(tr("KaraMixer Edition"), this);
+    titleBar = new TitleBar(tr("PTHK Karaoke - Mixer"), this);
     ui->verticalLayout_60->insertWidget(0, titleBar);
     {
         FrameOverlay *fo = new FrameOverlay(this);   // 1px outline; also asks Windows 11 for native rounded corners
@@ -626,7 +626,7 @@ void SynthMixerDialog::warnVstNotLoaded(const QString &name)
     QMessageBox::warning(this, QString::fromUtf8("VST"),
         QString::fromUtf8("ไม่สามารถโหลด \"%1\" เป็นเอฟเฟกต์ได้").arg(name)
         + (why.empty() ? QString() : QString("\n\n") + QString::fromUtf8(why.c_str()))
-        + QString::fromUtf8("\n\nสาเหตุที่พบบ่อย: เป็น VST instrument (ไม่ใช่เอฟเฟกต์), บิตไม่ตรงกับโปรแกรม (โปรแกรม 32 บิตใช้ได้เฉพาะ 32 บิต, 64 บิตใช้ได้เฉพาะ 64 บิต), หรือปลั๊กอินติดระบบลิขสิทธิ์\nรายละเอียด: โฟลเดอร์ .KaraMixer ไฟล์ vst3.log"));
+        + QString::fromUtf8("\n\nสาเหตุที่พบบ่อย: เป็น VST instrument (ไม่ใช่เอฟเฟกต์), บิตไม่ตรงกับโปรแกรม (โปรแกรม 32 บิตใช้ได้เฉพาะ 32 บิต, 64 บิตใช้ได้เฉพาะ 64 บิต), หรือปลั๊กอินติดระบบลิขสิทธิ์\nรายละเอียด: โฟลเดอร์ .PTHKKaraoke ไฟล์ vst3.log"));
 #endif
 }
 
@@ -769,7 +769,7 @@ void SynthMixerDialog::setFXToSynth()
         for (int i = 0; i < n; i++) {
             st.setArrayIndex(i);
             const int ty = st.value("Type", -1).toInt();
-            const QString file = st.value("File").toString();
+            const QString file = Config::relocatePath(st.value("File").toString());
             if (ty >= 0 && !file.isEmpty())
                 synth->setStripSoundfont(static_cast<InstrumentType>(ty), file, false);
         }
@@ -779,7 +779,7 @@ void SynthMixerDialog::setFXToSynth()
     }
 }
 
-// Applies the saved settings (SynthMixer.conf / KaraMixer.conf) to the RUNNING mixer, so a loaded config takes effect
+// Applies the saved settings (SynthMixer.conf / PTHKKaraoke.conf) to the RUNNING mixer, so a loaded config takes effect
 // without restarting the program and the music keeps playing. It mirrors what the constructor and setFXToSynth()
 // do at start-up, but only touches what really changed (a stream / mixer is rebuilt only when its device, bus or
 // speaker is different), so there is no gap in the sound.
@@ -1627,13 +1627,13 @@ bool SynthMixerDialog::event(QEvent *e)
     return r;
 }
 
-// ~/.KaraMixer/layout.log : numbers of the master / strip geometry when a correction was needed (for support)
+// ~/.PTHKKaraoke/layout.log : numbers of the master / strip geometry when a correction was needed (for support)
 void SynthMixerDialog::logLayout(const QString &why)
 {
     if (!masterStrip || !ui->scrollArea)
         return;
-    QDir().mkpath(QDir::homePath() + QStringLiteral("/.KaraMixer"));
-    QFile f(QDir::homePath() + QStringLiteral("/.KaraMixer/layout.log"));
+    QDir().mkpath(QDir::homePath() + QStringLiteral("/.PTHKKaraoke"));
+    QFile f(QDir::homePath() + QStringLiteral("/.PTHKKaraoke/layout.log"));
     if (f.size() > 64 * 1024)
         f.remove();
     if (!f.open(QIODevice::Append | QIODevice::Text))
@@ -2234,10 +2234,16 @@ void SynthMixerDialog::showChannelMenu(InstrumentType type, const QPoint &pos)
 
     // VST
     #ifndef __linux__
-    QMenu *vstMenu = menu.addMenu("VST Effects");
-
-    for (QMenu *m : vstVendorMenus) {
-        vstMenu->addMenu(m);
+    QMenu *vstMenu = menu.addMenu(tr("VST Effects"));
+    if (vstVendorMenus.isEmpty()) {
+        QAction *emptyAct = vstMenu->addAction(tr("(ยังไม่มีปลั๊กอินเอฟเฟกต์ VST)"));
+        emptyAct->setEnabled(false);
+        QAction *setupAct = vstMenu->addAction(tr("เปิดหน้าตั้งค่า VST..."));
+        connect(setupAct, &QAction::triggered, this, &SynthMixerDialog::showVSTDirsDlg);
+    } else {
+        for (QMenu *m : vstVendorMenus) {
+            vstMenu->addMenu(m);
+        }
     }
     #endif
 
@@ -2527,9 +2533,16 @@ void SynthMixerDialog::showMasterFxMenu(int fxIndex, const QPoint &globalPos)
     }
 
     #ifndef __linux__
-    QMenu *vstMenu = menu.addMenu("VST Effects");
-    for (QMenu *m : vstVendorMenus)
-        vstMenu->addMenu(m);
+    QMenu *vstMenu = menu.addMenu(tr("VST Effects"));
+    if (vstVendorMenus.isEmpty()) {
+        QAction *emptyAct = vstMenu->addAction(tr("(ยังไม่มีปลั๊กอินเอฟเฟกต์ VST)"));
+        emptyAct->setEnabled(false);
+        QAction *setupAct = vstMenu->addAction(tr("เปิดหน้าตั้งค่า VST..."));
+        connect(setupAct, &QAction::triggered, this, &SynthMixerDialog::showVSTDirsDlg);
+    } else {
+        for (QMenu *m : vstVendorMenus)
+            vstMenu->addMenu(m);
+    }
     #endif
 
     if (signalBFXActionMapper != nullptr)
@@ -2606,7 +2619,7 @@ void SynthMixerDialog::showVuDlg()
     vdlg.setModal(true);
     vdlg.adjustSize();
     vdlg.setFixedSize(vdlg.size());
-    vdlg.setWindowTitle(vdlg.windowTitle() + " (KaraMixer Edition)");
+    vdlg.setWindowTitle(vdlg.windowTitle() + " (PTHK Karaoke)");
     vdlg.exec();
 }
 
@@ -2681,6 +2694,13 @@ void SynthMixerDialog::paintEvent(QPaintEvent *event)
 
 void SynthMixerDialog::closeEvent(QCloseEvent *event)
 {
+    // Player edition: the karaoke window owns the program; closing the mixer only hides it.
+    if (!closeQuitsApp) {
+        settingValues();
+        event->accept();
+        return;
+    }
+
     QMessageBox::StandardButton resBtn = QMessageBox::question(
                                             this, tr("ออกจากโปรแกรม"),
                                             tr("ท่านต้องการออกจากโปรแกรม?"),

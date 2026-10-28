@@ -114,7 +114,7 @@ public:
         iconLabel = new QLabel(this);
         iconLabel->setFixedSize(22, 22);
         iconLabel->setScaledContents(true);
-        iconLabel->setPixmap(QPixmap(":/Icons/App/karamixer.png"));
+        iconLabel->setPixmap(QPixmap(":/Icons/App/pthk.png"));
         iconLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
         lay->addWidget(iconLabel);
 

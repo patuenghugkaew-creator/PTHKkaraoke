@@ -28,7 +28,7 @@
    <enum>Qt::CustomContextMenu</enum>
   </property>
   <property name="windowTitle">
-   <string>KaraMixer Edition</string>
+   <string>PTHK Karaoke</string>
   </property>
   <property name="styleSheet">
    <string notr="true">/*#MainWindow {

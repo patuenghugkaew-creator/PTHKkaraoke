@@ -18,6 +18,7 @@
 #include "pluginterfaces/vst/vsttypes.h"
 
 #include <cstring>
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -46,13 +47,13 @@ namespace vst3host {
 // small helpers
 // ---------------------------------------------------------------------------
 
-// diagnostics: ~/.KaraMixer/vst3.log (same file as the load failures)
+// diagnostics: ~/.PTHKKaraoke/vst3.log (same file as the load failures)
 static void vlog(const char *fmt, ...)
 {
 #ifdef _WIN32
     const char *home = std::getenv("USERPROFILE");
     if (!home) return;
-    std::string f = std::string(home) + "\\.KaraMixer\\vst3.log";
+    std::string f = std::string(home) + "\\.PTHKKaraoke\\vst3.log";
     FILE *fp = std::fopen(f.c_str(), "ab");
     if (!fp) return;
     SYSTEMTIME t;
@@ -276,7 +277,7 @@ class HostApp : public IHostApplication
 public:
     tresult PLUGIN_API getName(String128 name) override
     {
-        static const char *n = "KaraMixer Edition";
+        static const char *n = "PTHK Karaoke";
         int i = 0;
         for (; n[i] && i < 127; i++) name[i] = (char16)n[i];
         name[i] = 0;
@@ -481,9 +482,14 @@ public:
     double sampleRate = 44100.0;
     enum { kMaxBlock = 4096 };
 
-    std::vector<std::vector<float>> inBuf, outBuf;   // planar
-    std::vector<float *> inPtr, outPtr;
-    std::vector<AudioBusBuffers> inBuses, outBuses;
+    std::vector<std::vector<float>> inBuf;   // planar
+    std::vector<float *> inPtr;
+    std::vector<AudioBusBuffers> inBuses;
+
+    // Multi-bus output storage: allOutBuf[bus][channel][sample]
+    std::vector<std::vector<std::vector<float>>> allOutBuf;
+    std::vector<std::vector<float *>> allOutPtr;
+    std::vector<AudioBusBuffers> outBuses;
 
     std::mutex lock;                    // protects pending queues
     std::vector<Event> pendingEvents;
@@ -541,6 +547,9 @@ public:
         if (!midiMapping) return;
         ParamID pid = 0;
         if (midiMapping->getMidiControllerAssignment(0, (int16)ch, (CtrlNumber)ctrl, pid) == kResultOk) {
+            std::lock_guard<std::mutex> g(lock);
+            pendingParams.emplace_back(pid, std::min(1.0, std::max(0.0, value)));
+        } else if (ch != 0 && midiMapping->getMidiControllerAssignment(0, 0, (CtrlNumber)ctrl, pid) == kResultOk) {
             std::lock_guard<std::mutex> g(lock);
             pendingParams.emplace_back(pid, std::min(1.0, std::max(0.0, value)));
         }
@@ -817,7 +826,7 @@ Plugin *Plugin::load(const std::string &fullPathUtf8, bool wantInstrument,
     for (int i = 0; i < d->numInBuses; i++)
         d->component->activateBus(kAudio, kInput, i, i == 0);
     for (int i = 0; i < d->numOutBuses; i++)
-        d->component->activateBus(kAudio, kOutput, i, i == 0);
+        d->component->activateBus(kAudio, kOutput, i, true);
     int evIn = d->component->getBusCount(kEvent, kInput);
     for (int i = 0; i < evIn; i++)
         d->component->activateBus(kEvent, kInput, i, true);
@@ -843,11 +852,28 @@ Plugin *Plugin::load(const std::string &fullPathUtf8, bool wantInstrument,
 
     // --- buffers ---
     d->inBuf.assign((size_t)std::max(d->inCh, 0), std::vector<float>(Impl::kMaxBlock));
-    d->outBuf.assign((size_t)d->outCh, std::vector<float>(Impl::kMaxBlock));
     d->inPtr.resize(d->inBuf.size());
-    d->outPtr.resize(d->outBuf.size());
+    for (size_t c = 0; c < d->inBuf.size(); c++)
+        d->inPtr[c] = d->inBuf[c].data();
     d->inBuses.resize((size_t)d->numInBuses);
+
+    d->allOutBuf.resize((size_t)d->numOutBuses);
+    d->allOutPtr.resize((size_t)d->numOutBuses);
     d->outBuses.resize((size_t)d->numOutBuses);
+    for (int b = 0; b < d->numOutBuses; b++) {
+        SpeakerArrangement a = SpeakerArr::kStereo;
+        int chs = 2;
+        if (d->processor->getBusArrangement(kOutput, b, a) == kResultOk)
+            chs = SpeakerArr::getChannelCount(a);
+        if (chs <= 0) chs = 2;
+        d->allOutBuf[(size_t)b].assign((size_t)chs, std::vector<float>(Impl::kMaxBlock, 0.0f));
+        d->allOutPtr[(size_t)b].resize((size_t)chs);
+        for (int c = 0; c < chs; c++)
+            d->allOutPtr[(size_t)b][(size_t)c] = d->allOutBuf[(size_t)b][(size_t)c].data();
+        d->outBuses[(size_t)b].silenceFlags = 0;
+        d->outBuses[(size_t)b].numChannels = chs;
+        d->outBuses[(size_t)b].channelBuffers32 = d->allOutPtr[(size_t)b].data();
+    }
 
     std::memset(&d->ctx, 0, sizeof(ProcessContext));
     d->ctx.sampleRate = d->sampleRate;
@@ -907,6 +933,12 @@ void Plugin::process(const float *in, float *out, int frames, int hostChans)
         const int maxBlock = Impl::kMaxBlock;
         int n = std::min(frames - done, maxBlock);
 
+        // --- silence out buffers upfront ---
+        for (int b = 0; b < m->numOutBuses; b++) {
+            for (auto &chBuf : m->allOutBuf[(size_t)b])
+                std::fill(chBuf.begin(), chBuf.begin() + n, 0.0f);
+        }
+
         // --- input to planar ---
         if (m->numInBuses > 0) {
             for (int c = 0; c < (int)m->inBuf.size(); c++) {
@@ -929,8 +961,6 @@ void Plugin::process(const float *in, float *out, int frames, int hostChans)
                 m->inPtr[(size_t)c] = dst;
             }
         }
-        for (int c = 0; c < (int)m->outBuf.size(); c++)
-            m->outPtr[(size_t)c] = m->outBuf[(size_t)c].data();
 
         // --- buses ---
         for (int b = 0; b < m->numInBuses; b++) {
@@ -942,8 +972,8 @@ void Plugin::process(const float *in, float *out, int frames, int hostChans)
         for (int b = 0; b < m->numOutBuses; b++) {
             AudioBusBuffers &bb = m->outBuses[(size_t)b];
             bb.silenceFlags = 0;
-            bb.numChannels = b == 0 ? (int32)m->outBuf.size() : 0;
-            bb.channelBuffers32 = b == 0 ? m->outPtr.data() : nullptr;
+            bb.numChannels = (int32)m->allOutBuf[(size_t)b].size();
+            bb.channelBuffers32 = m->allOutPtr[(size_t)b].data();
         }
 
         // --- events and parameter changes ---
@@ -986,9 +1016,13 @@ void Plugin::process(const float *in, float *out, int frames, int hostChans)
         if (!m->diagDone && (!m->info.isInstrument || m->diagNotes > 0)) {      // instruments: count from the first note
             if (r != kResultOk && r != kResultTrue && m->diagBad++ < 3)
                 vlog("%s: process() returned 0x%x", m->diagName.c_str(), (unsigned)r);
-            for (int i = 0; i < n; i++) {
-                const float a0 = m->outBuf[0][(size_t)i] < 0 ? -m->outBuf[0][(size_t)i] : m->outBuf[0][(size_t)i];
-                if (a0 > m->diagPeak) m->diagPeak = a0;
+            for (int b = 0; b < m->numOutBuses; b++) {
+                for (const auto &chBuf : m->allOutBuf[(size_t)b]) {
+                    for (int i = 0; i < n; i++) {
+                        const float a0 = std::fabs(chBuf[(size_t)i]);
+                        if (a0 > m->diagPeak) m->diagPeak = a0;
+                    }
+                }
             }
             if (++m->diagBlocks >= 600) {
                 m->diagDone = true;
@@ -997,21 +1031,31 @@ void Plugin::process(const float *in, float *out, int frames, int hostChans)
             }
         }
 
-        // --- planar to interleaved ---
+        // --- planar to interleaved (mix all output buses down to stereo) ---
         float *dst = out + (size_t)done * hostChans;
         if (r != kResultOk && r != kResultTrue) {
             std::memset(dst, 0, sizeof(float) * (size_t)n * (size_t)hostChans);
         } else {
-            const float *l = m->outBuf[0].data();
-            const float *rr = m->outBuf.size() > 1 ? m->outBuf[1].data() : l;
-            if (hostChans == 2) {
-                for (int i = 0; i < n; i++) {
-                    dst[2 * i] = l[i];
-                    dst[2 * i + 1] = rr[i];
+            for (int i = 0; i < n; i++) {
+                float sumL = 0.0f;
+                float sumR = 0.0f;
+                for (int b = 0; b < m->numOutBuses; b++) {
+                    const auto &bBuf = m->allOutBuf[(size_t)b];
+                    if (bBuf.size() >= 2) {
+                        sumL += bBuf[0][(size_t)i];
+                        sumR += bBuf[1][(size_t)i];
+                    } else if (bBuf.size() == 1) {
+                        float v = bBuf[0][(size_t)i];
+                        sumL += v;
+                        sumR += v;
+                    }
                 }
-            } else {
-                for (int i = 0; i < n; i++)
-                    dst[i] = 0.5f * (l[i] + rr[i]);
+                if (hostChans == 2) {
+                    dst[2 * i] = sumL;
+                    dst[2 * i + 1] = sumR;
+                } else {
+                    dst[i] = 0.5f * (sumL + sumR);
+                }
             }
         }
         done += n;
@@ -1035,8 +1079,20 @@ void Plugin::noteOn(int ch, int note, int velocity)
     e.noteOn.tuning = 0.f;
     d->pushEvent(e);
     d->diagNotes++;
-    std::lock_guard<std::mutex> g(d->lock);
-    d->activeNotes.insert((ch << 8) | note);
+    {
+        std::lock_guard<std::mutex> g(d->lock);
+        d->activeNotes.insert((ch << 8) | note);
+    }
+    // Most instrument plugins (drum samplers like SSD5, EZdrummer, Addictive Drums)
+    // listen on MIDI Channel 1 (index 0). If the host sent on channel 9 (drums) or other,
+    // also dispatch to channel 0 so single-timbral instruments always trigger.
+    if (d->info.isInstrument && ch != 0) {
+        Event e0 = e;
+        e0.noteOn.channel = 0;
+        d->pushEvent(e0);
+        std::lock_guard<std::mutex> g(d->lock);
+        d->activeNotes.insert(note);
+    }
 }
 
 void Plugin::noteOff(int ch, int note, int velocity)
@@ -1052,8 +1108,17 @@ void Plugin::noteOff(int ch, int note, int velocity)
     e.noteOff.noteId = -1;
     e.noteOff.tuning = 0.f;
     d->pushEvent(e);
-    std::lock_guard<std::mutex> g(d->lock);
-    d->activeNotes.erase((ch << 8) | note);
+    {
+        std::lock_guard<std::mutex> g(d->lock);
+        d->activeNotes.erase((ch << 8) | note);
+    }
+    if (d->info.isInstrument && ch != 0) {
+        Event e0 = e;
+        e0.noteOff.channel = 0;
+        d->pushEvent(e0);
+        std::lock_guard<std::mutex> g(d->lock);
+        d->activeNotes.erase(note);
+    }
 }
 
 void Plugin::polyPressure(int ch, int note, int value)

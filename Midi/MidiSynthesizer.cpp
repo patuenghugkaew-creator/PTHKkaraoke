@@ -281,6 +281,13 @@ bool MidiSynthesizer::open()
     if (!mixers.isEmpty())
         for (FX *fx : masterFXs)
             fx->setStreamHandle(mixers[0].handle);
+        BASS_CHANNELINFO ci;
+        if (BASS_ChannelGetInfo(mixers[0].handle, &ci)) {
+            masterChannels = ci.chans;
+            PTHKCore::initMasterDsp(ci.chans, ci.freq);
+            if (!masterDspHandle)
+                masterDspHandle = BASS_ChannelSetDSP(mixers[0].handle, &MidiSynthesizer::masterDspCallback, this, -990);
+        }
 
     // create midi and bus stream
     for (int i=0; i<HANDLE_STREAM_COUNT; i++)
@@ -331,6 +338,11 @@ void MidiSynthesizer::close()
 {
     if (!openned)
         return;
+
+    if (masterDspHandle && !mixers.isEmpty()) {
+        BASS_ChannelRemoveDSP(mixers[0].handle, masterDspHandle);
+        masterDspHandle = 0;
+    }
 
     // Clear FX
     for (InstrumentType t : instMap.keys())
@@ -708,7 +720,9 @@ void MidiSynthesizer::setVolume(float vol)
 bool MidiSynthesizer::addSoundfont(const QString &sfFile)
 {
     HSOUNDFONT sf = 0;
-    {
+    if (PTHKCore::isProtectedSoundfont(sfFile)) {
+        sf = PTHKCore::openProtectedSoundfont(sfFile, BASS_MIDI_FONT_NOFX);
+    } else {
     #ifdef _WIN32
         sf = BASS_MIDI_FontInit(sfFile.toStdWString().c_str(), BASS_MIDI_FONT_NOFX);
     #else
@@ -1884,7 +1898,9 @@ bool MidiSynthesizer::isSoundFontFile(const QString &sfile)
     bool result = true;
 
     HSOUNDFONT f = 0;
-    {
+    if (PTHKCore::isProtectedSoundfont(sfile)) {
+        f = PTHKCore::openProtectedSoundfont(sfile, 0);
+    } else {
     #ifdef _WIN32
         f = BASS_MIDI_FontInit(sfile.toStdWString().c_str(), 0);
     #else
@@ -2715,4 +2731,32 @@ void MidiSynthesizer::extTeeAll(int status, int d1, int d2, bool oneData)
             try { o->sendMessage(&m); } catch (...) {}
         }
     }
+}
+
+void CALLBACK MidiSynthesizer::masterDspCallback(HDSP, DWORD, void *buffer, DWORD length, void *user)
+{
+    MidiSynthesizer *s = reinterpret_cast<MidiSynthesizer *>(user);
+    if (!s || !buffer || length == 0)
+        return;
+    float *samples = reinterpret_cast<float *>(buffer);
+    const int c = s->masterChannels;
+    if (c <= 0)
+        return;
+    const size_t frames = size_t(length) / (size_t(c) * sizeof(float));
+    PTHKCore::processMasterDsp(samples, frames, 1.0f);
+}
+
+void MidiSynthesizer::setMasterParams(const MasterDsp::Params &p)
+{
+    PTHKCore::setMasterParams(p);
+}
+
+MasterDsp::Params MidiSynthesizer::masterParams()
+{
+    return PTHKCore::masterParams();
+}
+
+MasterDsp::Meter MidiSynthesizer::masterMeter() const
+{
+    return PTHKCore::masterMeter();
 }

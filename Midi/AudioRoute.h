@@ -111,8 +111,8 @@ public:
 
     static void log(const QString &s)
     {
-        QDir().mkpath(QDir::homePath() + QStringLiteral("/.KaraMixer"));
-        QFile f(QDir::homePath() + QStringLiteral("/.KaraMixer/route.log"));
+        QDir().mkpath(QDir::homePath() + QStringLiteral("/.PTHKKaraoke"));
+        QFile f(QDir::homePath() + QStringLiteral("/.PTHKKaraoke/route.log"));
         if (f.size() > 200000) f.remove();
         if (!f.open(QIODevice::Append | QIODevice::Text)) return;
         QTextStream t(&f);

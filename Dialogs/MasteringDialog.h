@@ -23,7 +23,6 @@
 #include "Config.h"
 #include "Midi/MidiSynthesizer.h"
 #include "Midi/MasterDsp.h"
-#include "Widgets/ProLicense.h"
 
 class MasteringDialog : public QDialog
 {
@@ -83,7 +82,7 @@ public:
         if (!synth)
             return;
         MasterDsp::Params p;
-        if (ProLicense::isUnlocked())
+        if (PTHKCore::isProUnlocked())
             p = loadSaved();
         p.meter = false;
         synth->setMasterParams(p);

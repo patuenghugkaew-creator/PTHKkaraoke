@@ -4,7 +4,7 @@
 // PRO: YouTube through the mixer, with a vocal remover.
 //   * the button opens YouTube in its own browser window (Microsoft Edge / Chrome, own profile: log in once)
 //   * Windows sends that browser's sound to a virtual audio cable ("CABLE Input", e.g. VB-Cable)
-//   * KaraMixer records "CABLE Output", optionally removes the lead vocal (VocalRemover.h) and feeds it into the
+//   * PTHK Karaoke records "CABLE Output", optionally removes the lead vocal (VocalRemover.h) and feeds it into the
 //     YouTube strip of the mixer (first strip of the Bus group), so it follows the master volume, limiter,
 //     mastering, recording and the ASIO / Windows Audio output of the program
 // Header-only, no Q_OBJECT (same style as RecordDialog.h / MasteringDialog.h).
@@ -161,7 +161,7 @@ public:
         return QString();
     }
 
-    // KaraMixer's own output follows the Windows default device (then switching the default would feed the sound back)
+    // PTHK Karaoke's own output follows the Windows default device (then switching the default would feed the sound back)
     static bool outputFollowsDefault()
     {
         const DWORD d = BASS_GetDevice();
@@ -188,8 +188,8 @@ public:
             return true;
         }
         if (outputFollowsDefault()) {
-            note = QString::fromUtf8("เอาต์พุตของ KaraMixer ตั้งเป็น \"Default\" (ตามอุปกรณ์เริ่มต้นของ Windows) ถ้าเปลี่ยนจะเกิดเสียงวน: "
-                                     "ไปที่ Settings ของ KaraMixer เลือกเอาต์พุตเป็นลำโพงจริง (ระบุชื่ออุปกรณ์) หรือ ASIO ก่อน แล้วกดปุ่มนี้ใหม่");
+            note = QString::fromUtf8("เอาต์พุตของ PTHK Karaoke ตั้งเป็น \"Default\" (ตามอุปกรณ์เริ่มต้นของ Windows) ถ้าเปลี่ยนจะเกิดเสียงวน: "
+                                     "ไปที่ Settings ของ PTHK Karaoke เลือกเอาต์พุตเป็นลำโพงจริง (ระบุชื่ออุปกรณ์) หรือ ASIO ก่อน แล้วกดปุ่มนี้ใหม่");
             return false;
         }
         if (!cur.isEmpty() && st.value("YouTubePrevDefaultOut", "").toString().isEmpty())
@@ -250,7 +250,7 @@ public:
             return;
         }
         // own profile folder: the login is kept, and this browser window is separate from the everyday one
-        const QString profile = QDir::homePath() + QStringLiteral("/.KaraMixer/youtube-profile");
+        const QString profile = QDir::homePath() + QStringLiteral("/.PTHKKaraoke/youtube-profile");
         QDir().mkpath(profile);
         QStringList args;
         args << QStringLiteral("--app=") + url.toString()
@@ -499,11 +499,11 @@ public:
         v->addWidget(ge);
 
         QLabel *note = new QLabel(QString::fromUtf8(
-            "คำแนะนำ: ถ้าเสียง YouTube ไม่เข้ามิกเซอร์ในบางเครื่อง/บาง Windows (เช่น Windows 11 รุ่นใหม่) ให้ตั้งเอาต์พุตของ KaraMixer เป็น <b>ASIO</b> "
+            "คำแนะนำ: ถ้าเสียง YouTube ไม่เข้ามิกเซอร์ในบางเครื่อง/บาง Windows (เช่น Windows 11 รุ่นใหม่) ให้ตั้งเอาต์พุตของ PTHK Karaoke เป็น <b>ASIO</b> "
             "(หรือเลือกลำโพงจริงที่ระบุชื่อ ไม่ใช่ Default) แล้วกด \"ตั้งค่าอัตโนมัติ\" ใหม่ เสียงของ Windows จะเข้ามิกเซอร์ได้ถูกต้อง<br>"
-            "หมายเหตุ: อย่าตั้งเอาต์พุตของ KaraMixer เป็น CABLE Input (เสียงจะวนกลับเข้ามาเอง) "
+            "หมายเหตุ: อย่าตั้งเอาต์พุตของ PTHK Karaoke เป็น CABLE Input (เสียงจะวนกลับเข้ามาเอง) "
             "เสียงจะหน่วงเพิ่ม (ประมาณ 0.15–0.2 วินาที เมื่อเปิดตัดเสียงร้อง) ไม่กระทบเพลงที่เล่นในมิกเซอร์ "
-            "การล็อกอินใช้หน้าล็อกอินของ Google ในเบราว์เซอร์โดยตรง KaraMixer ไม่เห็นและไม่เก็บรหัสผ่าน"), this);
+            "การล็อกอินใช้หน้าล็อกอินของ Google ในเบราว์เซอร์โดยตรง PTHK Karaoke ไม่เห็นและไม่เก็บรหัสผ่าน"), this);
         note->setWordWrap(true);
         v->addWidget(note);
 
@@ -586,7 +586,7 @@ public:
             else if (p < 0.0005f)
                 t = QString::fromUtf8("⚠ ได้รับข้อมูลจากสาย (%1 KB/วินาที) แต่เป็นความเงียบ: เสียงของ Edge ยังไม่เข้า CABLE Input — "
                                       "เช็กว่า YouTube กำลังเล่นอยู่ และกดปุ่ม \"ตั้งค่าอัตโนมัติ\" แล้ว "
-                                      "ถ้ายังไม่เข้า (พบในบาง Windows) ให้ตั้งเอาต์พุตของ KaraMixer เป็น ASIO หรือเลือกลำโพงจริงที่ระบุชื่อ แล้วกดปุ่มตั้งค่าอัตโนมัติใหม่")
+                                      "ถ้ายังไม่เข้า (พบในบาง Windows) ให้ตั้งเอาต์พุตของ PTHK Karaoke เป็น ASIO หรือเลือกลำโพงจริงที่ระบุชื่อ แล้วกดปุ่มตั้งค่าอัตโนมัติใหม่")
                         .arg(int(kbps));
             else
                 t = QString::fromUtf8("✔ มีสัญญาณเข้ามิกเซอร์ (%1 KB/วินาที)").arg(int(kbps));

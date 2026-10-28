@@ -57,7 +57,7 @@ RemoteDialog::RemoteDialog(RemoteServer *srv, QWidget *parent)
     : QDialog(parent), server(srv)
 {
     setWindowTitle(tr("ควบคุมผ่านมือถือ"));
-    setProperty("buaiRemoteSkip", true);     // never mirror this dialog itself
+    setProperty("pthkRemoteSkip", true);     // never mirror this dialog itself
 
     QVBoxLayout *lay = new QVBoxLayout(this);
     lay->setSpacing(10);

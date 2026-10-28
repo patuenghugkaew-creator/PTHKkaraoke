@@ -23,7 +23,7 @@ static const char *kPage = R"HTML(<!doctype html>
 <html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<title>KaraMixer Edition</title>
+<title>PTHK Karaoke</title>
 <style>
 html,body{margin:0;height:100%;background:#07080d;color:#7dffc0;font:13px sans-serif;overflow:hidden;touch-action:none;overscroll-behavior:none}
 #s{position:absolute;left:0;top:0;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-user-drag:none;max-width:none}
@@ -504,12 +504,12 @@ QWidget *RemoteServer::targetWindow() const
     if (QWidget *w = QApplication::activePopupWidget())
         return w;
     if (QWidget *w = QApplication::activeModalWidget())
-        if (!w->property("buaiRemoteSkip").toBool())
+        if (!w->property("pthkRemoteSkip").toBool())
             return w;
 
     QWidget *a = QApplication::activeWindow();
     if (a && a != ignoreWin && a->isVisible() && !a->isMinimized() &&
-        !a->property("buaiRemoteSkip").toBool())
+        !a->property("pthkRemoteSkip").toBool())
         return a;
 
     return mainWin;

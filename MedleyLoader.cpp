@@ -1,3 +1,4 @@
+#include "PTHKCore.h"
 #include "MedleyLoader.h"
 
 #include "Config.h"
@@ -45,6 +46,36 @@ void MedleyLoader::run()
         _lyrWidget->setLyricsTemp(Utils::readLyrics(lyrPath),
             Utils::readCurFile(curPath, _player->midiFileTemp()->resorution()));
     }
+    else if (_song->songType() == "EMK")
+    {
+        QString emkPath = _songDb->hnkPath() + _song->path();
+        if (!QFile::exists(emkPath) && !_songDb->hnkPath().isEmpty())
+            emkPath = _songDb->hnkPath() + "/" + _song->path();
+        if (!QFile::exists(emkPath) && !_songDb->ncnPath().isEmpty())
+            emkPath = QFileInfo(_songDb->ncnPath()).dir().absoluteFilePath("EMK") + _song->path();
+        if (!QFile::exists(emkPath))
+            emkPath = _songDb->ncnPath() + _song->path();
+        if (!QFile::exists(emkPath))
+            emkPath = _song->path();
+
+        PTHKCore::EmkSong emk = PTHKCore::readEmk(emkPath);
+        if (emk.valid && !emk.midData.isEmpty()) {
+            QFile mid(TEMP_MIDI_DIR_PATH);
+            if (mid.exists())
+                mid.remove();
+
+            mid.open(QFile::ReadWrite);
+            mid.write(emk.midData);
+            mid.close();
+
+            _player->loadNextMedley(TEMP_MIDI_DIR_PATH, _song->cutStartBar(), _song->cutEndBar(), _song->bpmSpeed(), _song->transpose());
+
+            mid.remove();
+
+            _lyrWidget->setLyricsTemp(Utils::readLyrics(emk.lyrData),
+                Utils::readCurFile(emk.curData, _player->midiFileTemp()->resorution()));
+        }
+    }
     else if (_song->songType() == "HNK")
     {
         QString hnkPath = _songDb->hnkPath() + _song->path();
@@ -75,6 +106,9 @@ void MedleyLoader::run()
         return;
     }
 
+    if (_player->midiSequencerTemp() != nullptr) {
+        _player->midiSequencerTemp()->applyAutoMedleyBounds(_lyrWidget->curTempData(), _song->cutStartBar(), _song->cutEndBar(), _lyrWidget->lastActiveTempLyricTick());
+    }
     if (_lyrWidget2 != nullptr) {
         _lyrWidget2->setLyricsTemp(_lyrWidget->lyrTempData(), _lyrWidget->curTempData());
     }

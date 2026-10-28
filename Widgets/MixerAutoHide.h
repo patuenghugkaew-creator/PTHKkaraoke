@@ -77,11 +77,11 @@ private:
     QElapsedTimer lastAct;       // last click / key press in the karaoke program
     bool haveAct = false;
 
-    // small diagnostic log (only state changes): ~/.KaraMixer/autohide.log - kept short
+    // small diagnostic log (only state changes): ~/.PTHKKaraoke/autohide.log - kept short
     void log(const QString &msg) const
     {
-        QDir().mkpath(QDir::homePath() + QStringLiteral("/.KaraMixer"));
-        QFile f(QDir::homePath() + QStringLiteral("/.KaraMixer/autohide.log"));
+        QDir().mkpath(QDir::homePath() + QStringLiteral("/.PTHKKaraoke"));
+        QFile f(QDir::homePath() + QStringLiteral("/.PTHKKaraoke/autohide.log"));
         if (f.size() > 64 * 1024)
             f.remove();
         if (f.open(QIODevice::Append | QIODevice::Text)) {

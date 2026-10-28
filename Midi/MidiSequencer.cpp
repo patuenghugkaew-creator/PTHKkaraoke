@@ -73,7 +73,76 @@ void MidiSequencer::setPositionTick(int t)
     _playedIndex = eventIndexFromTick(tick);
     _startPlayTime = _midi->timeFromTick(tick, _midiSpeed) * 1000;
     _positionMs = _startPlayTime;
-    _positionTick = t;
+    _positionTick = tick;
+
+    int chProg[16];
+    int chVol[16];
+    int chPan[16];
+    int chRev[16];
+    int chCho[16];
+    int chExp[16];
+    for (int ch = 0; ch < 16; ch++) {
+        chProg[ch] = -1;
+        chVol[ch]  = -1;
+        chPan[ch]  = -1;
+        chRev[ch]  = -1;
+        chCho[ch]  = -1;
+        chExp[ch]  = -1;
+    }
+    int lastBpm = -1;
+    for (int i = 0; i < _playedIndex && i < _midi->events().size(); i++) {
+        MidiEvent *e = _midi->events()[i];
+        if (e->eventType() == MidiEventType::ProgramChange) {
+            int c = e->channel();
+            if (c >= 0 && c < 16) chProg[c] = e->data1();
+        } else if (e->eventType() == MidiEventType::Controller) {
+            int c = e->channel();
+            if (c >= 0 && c < 16) {
+                switch (e->data1()) {
+                case 7:  chVol[c] = e->data2(); break;
+                case 10: chPan[c] = e->data2(); break;
+                case 11: chExp[c] = e->data2(); break;
+                case 91: chRev[c] = e->data2(); break;
+                case 93: chCho[c] = e->data2(); break;
+                default: break;
+                }
+            }
+        } else if (e->eventType() == MidiEventType::Meta && e->metaEventType() == MidiMetaType::SetTempo) {
+            if (!(_midi->isSingleTempo() && (e != _midi->tempoEvents()[0])))
+                lastBpm = e->bpm();
+        }
+    }
+    if (lastBpm > 0)
+        _midiBpm = lastBpm;
+    _mutex.unlock();
+
+    if (lastBpm > 0)
+        emit bpmChanged(_midiBpm + _midiSpeed);
+
+    for (int ch = 0; ch < 16; ch++) {
+        if (chProg[ch] >= 0) {
+            MidiEvent ev;
+            ev.setEventType(MidiEventType::ProgramChange);
+            ev.setChannel(ch);
+            ev.setData1(chProg[ch]);
+            emit playingEvent(ev);
+        }
+        auto sendCc = [this, ch](int cc, int val) {
+            if (val < 0) return;
+            MidiEvent ev;
+            ev.setEventType(MidiEventType::Controller);
+            ev.setChannel(ch);
+            ev.setData1(cc);
+            ev.setData2(val);
+            emit playingEvent(ev);
+        };
+        sendCc(7,  chVol[ch]);
+        sendCc(10, chPan[ch]);
+        sendCc(11, chExp[ch]);
+        sendCc(91, chRev[ch]);
+        sendCc(93, chCho[ch]);
+    }
+    _mutex.lock();
 
     _mutex.unlock();
 
@@ -145,6 +214,7 @@ void MidiSequencer::stop(bool resetPos)
 
     if (resetPos) {
         _mutex.lock();
+        if (false) _stopped = true;
         _stopped = true;
         _startPlayTime = _midi->timeFromTick(_startTick, _midiSpeed) * 1000;;
         _startPlayIndex = eventIndexFromTick(_startTick);
@@ -172,6 +242,7 @@ void MidiSequencer::setStartTick(int tick)
 
 void MidiSequencer::setEndTick(int tick)
 {
+    if (_midi->events().isEmpty()) return;
     if (tick == 0) {
         _endTick = 0;
         if (_endEvent != nullptr) {
@@ -233,6 +304,261 @@ int MidiSequencer::currentBar()
     return _midi->barFromTick(positionTick());
 }
 
+void MidiSequencer::applyAutoMedleyBounds(const QVector<long> &lyricCursors, int manualStartBar, int manualEndBar, long lastSungLyricTick)
+{
+    if (_midi->events().isEmpty())
+        return;
+
+    const int res = qMax(1, _midi->resorution());
+    const int totalBars = _midi->barCount();
+
+    // 1. Auto-detect first active musical bar (skip empty GM-reset / stick count-in bar)
+    if (manualStartBar > 0) {
+        setCutStartBar(manualStartBar);
+    } else {
+        int firstBandTick = -1;
+        int firstGrooveDrumTick = -1;
+        for (MidiEvent *e : _midi->events()) {
+            if (e->eventType() == MidiEventType::NoteOn && e->data2() > 0) {
+                if (e->channel() != 9) {
+                    if (firstBandTick < 0)
+                        firstBandTick = int(e->tick());
+                } else {
+                    const int n = e->data1();
+                    // Kick (35,36) or Snare (38,40) or Toms (41,43,45,47,48,50) — skip count-in stick (37) / hi-hat (42)
+                    if (n == 35 || n == 36 || n == 38 || n == 40 || n == 41 || n == 43 || n == 45 || n == 47 || n == 48 || n == 50) {
+                        if (firstGrooveDrumTick < 0)
+                            firstGrooveDrumTick = int(e->tick());
+                    }
+                }
+                if (firstBandTick >= 0 && firstGrooveDrumTick >= 0)
+                    break;
+            }
+        }
+        int firstMusicTick = 0;
+        if (firstBandTick >= 0 && firstGrooveDrumTick >= 0)
+            firstMusicTick = qMax(firstBandTick, firstGrooveDrumTick);
+        else if (firstBandTick >= 0)
+            firstMusicTick = firstBandTick;
+        else if (firstGrooveDrumTick >= 0)
+            firstMusicTick = firstGrooveDrumTick;
+
+        long firstLyricTick = -1;
+        for (long c : lyricCursors) {
+            if (c > 0) { firstLyricTick = c; break; }
+        }
+        if (firstLyricTick > 0 && firstMusicTick > firstLyricTick)
+            firstMusicTick = int(firstLyricTick);
+
+        int startBar = _midi->barFromTick(uint32_t(qMax(0, firstMusicTick + res / 4)));
+        startBar = qBound(0, startBar, 8);
+        setStartTick(_midi->tickFromBar(startBar));
+    }
+
+    // 2. Auto-detect exact outro bar boundary (after last lyric, while drum groove is still active)
+    if (manualEndBar > 0) {
+        setCutEndBar(manualEndBar);
+    } else {
+        long lastLyricTick = lastSungLyricTick;
+        if (lastLyricTick <= 0) {
+            for (long c : lyricCursors) {
+                if (c > lastLyricTick)
+                    lastLyricTick = c;
+            }
+        }
+        int lastGrooveTick = -1;
+        for (int i = _midi->events().size() - 1; i >= 0; i--) {
+            MidiEvent *e = _midi->events()[i];
+            if (e->eventType() == MidiEventType::NoteOn && e->data2() > 0 && e->channel() == 9) {
+                const int n = e->data1();
+                if (n == 35 || n == 36 || n == 38 || n == 40) {
+                    lastGrooveTick = int(e->tick());
+                    break;
+                }
+            }
+        }
+        int endBar = totalBars;
+        if (lastLyricTick > 0) {
+            const int lyrBar = _midi->barFromTick(uint32_t(lastLyricTick));
+            endBar = lyrBar + 1; // cut tightly right at the end of the final lyric bar!
+            if (lastGrooveTick > 0) {
+                const int grooveBar = _midi->barFromTick(uint32_t(lastGrooveTick));
+                if (grooveBar >= lyrBar && endBar > grooveBar)
+                    endBar = grooveBar;
+            }
+        } else if (lastGrooveTick > 0) {
+            endBar = _midi->barFromTick(uint32_t(lastGrooveTick));
+        }
+        endBar = qBound(2, endBar, qMax(2, totalBars));
+        const int calcEndTick = int(_midi->tickFromBar(endBar));
+        if (calcEndTick > _startTick + res * 4)
+            setEndTick(calcEndTick);
+    }
+}
+
+void MidiSequencer::setMedleyTransition(bool enable, int bars, int pattern, int bpm)
+{
+    _isMedleyTransition = enable;
+    _medleyTransitionBars = qBound(0, bars, 8);
+    _medleyFillPattern = qBound(0, pattern, 3);
+    _medleyTargetBpm = qBound(30, bpm, 300);
+}
+
+void MidiSequencer::playMedleyTransitionFill()
+{
+    if (!_playing || _medleyTransitionBars <= 0)
+        return;
+
+    const int totalBars = qBound(1, _medleyTransitionBars, 8);
+    const int beatsPerBar = 4;
+    const int totalBeats = totalBars * beatsPerBar;
+    const int bpm = qBound(30, _medleyTargetBpm > 0 ? _medleyTargetBpm : currentBpm(), 300);
+    const double beatMs = 60000.0 / double(bpm);
+    const double totalDurationMs = totalBeats * beatMs;
+
+    struct DrumHit {
+        double beatOffset;
+        int note;
+        int velocity;
+    };
+    QVector<DrumHit> hits;
+
+    // 1. Lead-in bars (if totalBars > 1): play a steady drum groove bridge
+    for (int bar = 0; bar < totalBars - 1; ++bar) {
+        const double base = bar * beatsPerBar;
+        // Beat 1: Kick + Hi-hat (and Crash on very first bar)
+        hits.append({ base + 0.0, 36, 110 });
+        if (bar == 0)
+            hits.append({ base + 0.0, 49, 100 });
+        hits.append({ base + 0.0, 42, 90 });
+        // Beat 2: Snare + Hi-hat
+        hits.append({ base + 1.0, 38, 105 });
+        hits.append({ base + 1.0, 42, 90 });
+        // Beat 3: Kick + Hi-hat
+        hits.append({ base + 2.0, 36, 105 });
+        hits.append({ base + 2.0, 42, 90 });
+        // Beat 4: Snare + Hi-hat
+        hits.append({ base + 3.0, 38, 105 });
+        hits.append({ base + 3.0, 42, 90 });
+    }
+
+    // 2. Final bar: play selected fill pattern
+    const double fillBase = (totalBars - 1) * beatsPerBar;
+
+    switch (_medleyFillPattern) {
+    case 1: // Thai Sam-Cha / Lukthung Fill
+        hits.append({ fillBase + 0.0, 36, 115 });
+        hits.append({ fillBase + 0.0, 46, 105 });
+        hits.append({ fillBase + 0.5, 44, 95 });
+        hits.append({ fillBase + 1.0, 38, 120 });
+        hits.append({ fillBase + 1.0, 36, 110 });
+        hits.append({ fillBase + 1.0, 56, 100 });
+        hits.append({ fillBase + 2.0, 47, 108 });
+        hits.append({ fillBase + 2.0, 36, 100 });
+        hits.append({ fillBase + 2.5, 45, 112 });
+        hits.append({ fillBase + 3.0, 38, 92 });
+        hits.append({ fillBase + 3.25, 38, 104 });
+        hits.append({ fillBase + 3.5, 38, 115 });
+        hits.append({ fillBase + 3.75, 38, 126 });
+        break;
+
+    case 2: // Count-in Stick
+        hits.append({ fillBase + 0.0, 37, 110 });
+        hits.append({ fillBase + 0.0, 42, 90 });
+        hits.append({ fillBase + 1.0, 37, 110 });
+        hits.append({ fillBase + 1.0, 42, 90 });
+        hits.append({ fillBase + 2.0, 37, 115 });
+        hits.append({ fillBase + 2.0, 42, 95 });
+        hits.append({ fillBase + 3.0, 38, 105 });
+        hits.append({ fillBase + 3.5, 38, 122 });
+        hits.append({ fillBase + 3.5, 36, 115 });
+        break;
+
+    case 3: // Tom Roll Fill
+        hits.append({ fillBase + 0.0, 36, 112 });
+        hits.append({ fillBase + 0.0, 42, 95 });
+        hits.append({ fillBase + 1.0, 50, 105 });
+        hits.append({ fillBase + 1.5, 50, 105 });
+        hits.append({ fillBase + 2.0, 47, 110 });
+        hits.append({ fillBase + 2.5, 48, 110 });
+        hits.append({ fillBase + 3.0, 45, 112 });
+        hits.append({ fillBase + 3.5, 41, 118 });
+        hits.append({ fillBase + 3.75, 38, 126 });
+        break;
+
+    case 0: // Standard Rock/Pop Fill
+    default:
+        hits.append({ fillBase + 0.0, 36, 112 });
+        hits.append({ fillBase + 0.0, 42, 95 });
+        hits.append({ fillBase + 1.0, 38, 108 });
+        hits.append({ fillBase + 1.0, 42, 90 });
+        hits.append({ fillBase + 2.0, 50, 102 });
+        hits.append({ fillBase + 2.5, 47, 106 });
+        hits.append({ fillBase + 3.0, 38, 88 });
+        hits.append({ fillBase + 3.25, 38, 98 });
+        hits.append({ fillBase + 3.5, 38, 110 });
+        hits.append({ fillBase + 3.75, 38, 125 });
+        break;
+    }
+
+    std::stable_sort(hits.begin(), hits.end(), [](const DrumHit &a, const DrumHit &b) {
+        return a.beatOffset < b.beatOffset;
+    });
+
+    QElapsedTimer timer;
+    timer.start();
+
+    int nextHitIdx = 0;
+    int lastEmittedBeat = -1;
+
+    while (_playing) {
+        const double elapsedMs = timer.nsecsElapsed() / 1000000.0;
+        if (elapsedMs >= totalDurationMs)
+            break;
+
+        const double currentBeatPos = elapsedMs / beatMs;
+        const int currentBeatNum = int(currentBeatPos);
+
+        if (currentBeatNum != lastEmittedBeat && currentBeatNum < totalBeats) {
+            lastEmittedBeat = currentBeatNum;
+            int barIndex = (currentBeatNum / beatsPerBar) + 1;
+            int beatInBar = (currentBeatNum % beatsPerBar) + 1;
+            emit medleyCountIn(beatInBar, beatsPerBar, barIndex, totalBars);
+        }
+
+        while (nextHitIdx < hits.size() && (hits[nextHitIdx].beatOffset * beatMs) <= elapsedMs) {
+            MidiEvent evt;
+            evt.setEventType(MidiEventType::NoteOn);
+            evt.setChannel(9);
+            evt.setData1(hits[nextHitIdx].note);
+            evt.setData2(hits[nextHitIdx].velocity);
+            emit playingEvent(evt);
+            nextHitIdx++;
+        }
+
+        double nextTimeMs = totalDurationMs;
+        if (nextHitIdx < hits.size()) {
+            double hitTimeMs = hits[nextHitIdx].beatOffset * beatMs;
+            if (hitTimeMs < nextTimeMs)
+                nextTimeMs = hitTimeMs;
+        }
+        double nextBeatMs = (lastEmittedBeat + 1) * beatMs;
+        if (nextBeatMs < nextTimeMs)
+            nextTimeMs = nextBeatMs;
+
+        double sleepMs = nextTimeMs - (timer.nsecsElapsed() / 1000000.0);
+        if (sleepMs > 2.0) {
+            _mutex.lock();
+            _waitCondition.wait(&_mutex, qBound(1, int(sleepMs - 1.0), 30));
+            _mutex.unlock();
+        } else if (sleepMs > 0.0) {
+            while ((timer.nsecsElapsed() / 1000000.0) < nextTimeMs) {
+                if (!_playing) break;
+            }
+        }
+    }
+}
+
 void MidiSequencer::run()
 {
     if (_playing)
@@ -267,9 +593,38 @@ void MidiSequencer::run()
         }
     }
 
+    const bool wasMedleyTransition = _isMedleyTransition;
+    if (_isMedleyTransition && _medleyTransitionBars > 0) {
+        playMedleyTransitionFill();
+    }
+    _isMedleyTransition = false;
+
+    if (!_playing)
+        return;
+
     bool seqEnded = false;
 
     _eTimer->restart();
+
+    if (wasMedleyTransition) {
+        _startPlayTime = _midi->timeFromTick(_startTick, _midiSpeed) * 1000;
+        _positionMs = _startPlayTime;
+        _positionTick = _startTick;
+        // Downbeat Crash + Kick right on Beat 1 of the new medley song!
+        MidiEvent crashEvt;
+        crashEvt.setEventType(MidiEventType::NoteOn);
+        crashEvt.setChannel(9);
+        crashEvt.setData1(49);
+        crashEvt.setData2(118);
+        emit playingEvent(crashEvt);
+
+        MidiEvent kickEvt;
+        kickEvt.setEventType(MidiEventType::NoteOn);
+        kickEvt.setChannel(9);
+        kickEvt.setData1(36);
+        kickEvt.setData2(120);
+        emit playingEvent(kickEvt);
+    }
 
     for (int i = _playedIndex; i < _midi->events().count(); i++) {
 
@@ -277,6 +632,35 @@ void MidiSequencer::run()
             break;
 
         if ((_endEvent != nullptr) && (_endTick > 0) && _midi->events()[i]->tick() >= _endEvent->tick()) {
+            if (_playing) {
+                _mutex.lock();
+                long endTime = (_midi->timeFromTick(uint32_t(_endEvent->tick()), _midiSpeed) * 1000);
+                long waitTime = endTime - _startPlayTime - _eTimer->elapsed();
+                if (waitTime > 0) _waitCondition.wait(&_mutex, waitTime);
+                _positionMs = endTime;
+                _positionTick = _endEvent->tick();
+                _mutex.unlock();
+            }
+            // Release sustain pedal & notes on melodic channels ONLY (keep Channel 9 drums ringing!)
+            MidiEvent sustainOff;
+            sustainOff.setEventType(MidiEventType::Controller);
+            sustainOff.setData1(64);
+            sustainOff.setData2(0);
+            MidiEvent notesOff;
+            notesOff.setEventType(MidiEventType::Controller);
+            notesOff.setData1(123);
+            notesOff.setData2(0);
+            for (int ch = 0; ch < 16; ch++) {
+                if (ch == 9) continue;
+                sustainOff.setChannel(ch);
+                emit playingEvent(sustainOff);
+                notesOff.setChannel(ch);
+                emit playingEvent(notesOff);
+            }
+            seqEnded = true;
+            break;
+        }
+        if (false) {
             MidiEvent evt;
             evt.setEventType(MidiEventType::Controller);
             evt.setData1(123);
@@ -335,9 +719,14 @@ void MidiSequencer::run()
 
     } // End for loop
 
+    _mutex.lock();
+    _playing = false;
+    if (false) _stopped = true;
+    _mutex.unlock();
     if (seqEnded || (_playedIndex == _midi->events().size() -1)) {
         _mutex.lock();
         _finished = true;
+        _stopped = true;
         _mutex.unlock();
     }
 }

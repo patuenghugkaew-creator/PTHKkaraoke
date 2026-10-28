@@ -1,4 +1,5 @@
 #include "MidiPlayer.h"
+#include <QSettings>
 #include "Midi/FaderTaper.h"
 #include <algorithm>
 
@@ -15,6 +16,11 @@ MidiPlayer::MidiPlayer(QObject *parent) : QObject(parent)
     _midiSeq = new MidiSequencer();
 
     _midiSynth  = new MidiSynthesizer();
+
+    QSettings s("PTHK", "Karaoke");
+    _medleyBPM = s.value("MedleyBPM", 120).toInt();
+    _medleyTransitionBars = s.value("MedleyTransitionBars", 1).toInt();
+    _medleyFillPattern = s.value("MedleyFillPattern", 0).toInt();
 
     if (midiDevices().size() > 0)
     {
@@ -215,7 +221,7 @@ bool MidiPlayer::setMidiOut(int portNumber)
 
     if (portNumber == -1) {
         _midiSynth->open();
-        _midiSynth->setVolume(effectiveGain());
+        _midiSynth->setVolume(synthGain());
         _midiPortNum = -1;
         result = true;
     } else {
@@ -296,6 +302,8 @@ bool MidiPlayer::load(const QString &file, bool seekFileChunkID)
             this, SLOT(onSeqBpmChanged(int)), Qt::DirectConnection);
     connect(_midiSeq, SIGNAL(finished()),
             this, SLOT(onSeqFinished()), Qt::DirectConnection);
+    connect(_midiSeq, SIGNAL(medleyCountIn(int,int,int,int)),
+            this, SIGNAL(medleyCountIn(int,int,int,int)), Qt::DirectConnection);
 
     if (!_midiSeq->load(file, seekFileChunkID))
         return false;
@@ -359,11 +367,18 @@ void MidiPlayer::setVolume(int v)
     else if (v > 100) _volume = 100;
     else _volume = v;
 
-    _midiSynth->setVolume(effectiveGain());
+    _midiSynth->setVolume(synthGain());
     for (MidiOut *out : _midiOuts.values()) {
         if (!out) continue;
         out->setVolume(qMin(1.0f, effectiveGain()));
     }
+}
+
+void MidiPlayer::setFadeGain(float f)
+{
+    _fade = qBound(0.0f, f, 1.0f);
+    if (_midiSynth->isOpened())
+        _midiSynth->setVolume(synthGain());
 }
 
 void MidiPlayer::setVolume(int ch, int v)
@@ -627,7 +642,7 @@ void MidiPlayer::setMapChannelOutput(int ch, int port)
     {
         if (!_midiSynth->isOpened()) {
             _midiSynth->open();
-            _midiSynth->setVolume(effectiveGain());
+            _midiSynth->setVolume(synthGain());
         }
 
         if (!this->isPlayerStopped()) {
@@ -708,11 +723,13 @@ bool MidiPlayer::loadNextMedley(const QString &file, int cutStartBar, int cutEnd
 
     _midiSeqTemp->midiFile()->setSingleTempo(true);
 
-    _midiSeqTemp->setBpmSpeed(midiSpeed);
+    int targetBpm = _medleyBPM > 0 ? _medleyBPM : currentBpm();
+    _midiSeqTemp->setBpmSpeed(targetBpm - _midiSeqTemp->currentBpm()); Q_UNUSED(midiSpeed);
     _midiTransposeTemp = transpose;
 
     _midiSeqTemp->setCutStartBar(cutStartBar);
     _midiSeqTemp->setCutEndBar(cutEndBar);
+    _midiSeqTemp->setMedleyTransition(true, _medleyTransitionBars, _medleyFillPattern, targetBpm);
 
     return true;
 }
@@ -762,14 +779,15 @@ void MidiPlayer::onSeqFinished()
                     this, SLOT(onSeqBpmChanged(int)), Qt::DirectConnection);
             connect(_midiSeq, SIGNAL(finished()),
                     this, SLOT(onSeqFinished()), Qt::DirectConnection);
+    connect(_midiSeq, SIGNAL(medleyCountIn(int,int,int,int)),
+            this, SIGNAL(medleyCountIn(int,int,int,int)), Qt::DirectConnection);
 
             _midiTranspose = _midiTransposeTemp;
             _midiTransposeTemp = 0;
 
-            _midiSynth->compactSoundfont();
-            _midiSeq->start();
-
+            // Do NOT call compactSoundfont() during medley transition to prevent audio stutter!
             emit nextMedleyStarted();
+            _midiSeq->start();
             emit nextMedleyAfterStarted();
         } else if (_midiSeq->isSeqFinished() && (_midiSeqTemp == nullptr)) {
             emit finished();

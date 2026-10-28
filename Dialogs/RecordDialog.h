@@ -76,7 +76,7 @@ public:
         QString dir = QStandardPaths::writableLocation(QStandardPaths::MusicLocation);
         if (dir.isEmpty())
             dir = QDir::homePath();
-        path->setText(QDir(dir).filePath(QStringLiteral("KaraMixer_") +
+        path->setText(QDir(dir).filePath(QStringLiteral("PTHK_") +
                       QLocale::c().toString(QDateTime::currentDateTime(), QStringLiteral("yyyyMMdd_HHmmss")) + QStringLiteral(".wav")));
         QPushButton *browse = new QPushButton(QString::fromUtf8("เลือกที่บันทึก..."), this);
         h2->addWidget(path, 1);
@@ -151,6 +151,7 @@ private:
         OutputRecorder &r = OutputRecorder::instance();
         const bool rec = r.isRecording();
         startBtn->setText(rec ? QString::fromUtf8("หยุดบันทึก (Stop)") : QString::fromUtf8("เริ่มบันทึก (Rec)"));
+        DialogSkin::fitDialogButton(startBtn);
         fmt->setEnabled(!rec);
         gain->setEnabled(!rec);
         path->setEnabled(!rec);

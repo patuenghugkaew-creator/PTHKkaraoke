@@ -66,8 +66,8 @@ Colors lightColors()
     c.button = "#e9ebf1";  c.buttonHover = "#dfe2ea";
     c.border = "#9097a6";  c.border2 = "#bcc1cd";
     c.text = "#0f1015";    c.dim = "#6a7080";   c.dimTab = "#3b4150";
-    c.accent = "#6d3df0";  c.accentText = "#ffffff";
-    c.title = "#6d3df0";   c.handle = "#c3c7d2";
+    c.accent = "#0a8aa6";  c.accentText = "#ffffff";
+    c.title = "#08738c";   c.handle = "#c3c7d2";
     c.light = "#ffffff";   c.midlight = "#eceef3"; c.mid = "#b8bcc6";
     c.dark = "#a6abb8";    c.shadow = "#7d8290";
     return c;
@@ -88,7 +88,7 @@ bool systemIsDark()
 // Written once per colour to the temp folder and referenced from the style sheet.
 QString arrowImage(const QString &colorName, const QString &fileTag)
 {
-    const QString dir = QDir::tempPath() + "/KaraMixerTheme";
+    const QString dir = QDir::tempPath() + "/PTHKKaraokeTheme";
     QDir().mkpath(dir);
     const QString file = dir + "/combo-arrow-" + fileTag + ".png";
 
@@ -128,7 +128,7 @@ QString buildStyleSheet(const Colors &c)
         "QToolButton:disabled { color: @dim; }"
         "QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox { background-color: @base; color: @text;"
         "  border: 1px solid @border; border-radius: 6px; padding: 3px 6px; selection-background-color: @accent; }"
-        "QSpinBox, QDoubleSpinBox { padding: 0px 10px 0px 2px; font-size: 8pt; font-weight: normal; min-width: 0px; }"
+        "InstCh QSpinBox, InstCh QDoubleSpinBox, ChMx QSpinBox, ChMx QDoubleSpinBox { padding: 0px 10px 0px 2px; font-size: 8pt; font-weight: normal; min-width: 0px; }"
         "QSpinBox::up-button, QDoubleSpinBox::up-button, QSpinBox::down-button, QDoubleSpinBox::down-button { width: 9px; border: none; background: transparent; }"
         "QLineEdit:focus, QSpinBox:focus, QComboBox:focus { border-color: @accent; }"
         "QComboBox::drop-down { subcontrol-origin: padding; subcontrol-position: center right; width: 24px;"

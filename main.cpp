@@ -50,6 +50,21 @@ void makeVSTList(QSplashScreen *splash, MidiSynthesizer *synth);
 
 int main(int argc, char *argv[])
 {
+    // Qt 5 uses DirectShow by default on Windows, which cannot open MP4 / H.264 without extra
+    // codecs; Media Foundation (built into Windows) plays the karaoke and background videos.
+    #ifdef _WIN32
+    if (qEnvironmentVariableIsEmpty("QT_MULTIMEDIA_PREFERRED_PLUGINS"))
+        qputenv("QT_MULTIMEDIA_PREFERRED_PLUGINS", "windowsmediafoundation");
+    #endif
+
+    #ifdef PTHK_WEBENGINE
+    QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);    // required by Qt WebEngine
+    // ANGLE (OpenGL ES on Direct3D) instead of the graphics driver's desktop OpenGL: copying the
+    // YouTube picture to the 2nd screen crashed inside the AMD OpenGL driver (atio6axx.dll)
+    // within a minute; with ANGLE it runs without problems
+    QCoreApplication::setAttribute(Qt::AA_UseOpenGLES);
+    #endif
+
     QApplication a(argc, argv);
 
     // Started by "Open config": give the previous instance time to release audio/MIDI devices.
@@ -63,7 +78,7 @@ int main(int argc, char *argv[])
 
     registerMetaType();
 
-    QPixmap *pixmap = new QPixmap(":/Icons/App/karamixer-splash.png");
+    QPixmap *pixmap = new QPixmap(":/Icons/App/pthk-splash.png");
     QSplashScreen *splash = new QSplashScreen(*pixmap);
     {   // rounded splash window
         QPainterPath sp;
@@ -114,11 +129,12 @@ int main(int argc, char *argv[])
     #endif
     //----------------------------------
 
-    // KaraMixer Edition edition: MainWindow only acts as the hidden audio/MIDI
-    // back-end. The visible window of the program is the synth mixer.
+    // Player edition: MainWindow is the visible karaoke player (search, playlist,
+    // lyrics); the synth mixer is a second window that only hides when closed.
     MainWindow w;
-    qApp->setWindowIcon(QIcon(":/Icons/App/karamixer.png"));
+    qApp->setWindowIcon(QIcon(":/Icons/App/pthk.png"));
 
+    checkDatabase(splash, w.database());
     loadSoundfonts(splash, w.midiPlayer()->midiSynthesizer());
 
     #ifndef __linux__
@@ -129,9 +145,15 @@ int main(int argc, char *argv[])
     w.synthMixerDialog()->setFXToSynth();
 
     SynthMixerDialog *mixer = w.synthMixerDialog();
-    mixer->setWindowTitle("KaraMixer Edition");
-    w.hide();
-    mixer->show();
+    mixer->setWindowTitle("PTHK Karaoke - Mixer");
+    mixer->setCloseQuitsApp(false);
+    w.showSavedWindowState();
+    {   // the mixer only opens by itself when chosen in the menu (it covered the lyrics)
+        QSettings st(Config::CONFIG_APP_FILE_PATH, QSettings::IniFormat);
+        if (st.value("ShowMixerAtStart", false).toBool())
+            mixer->show();
+    }
+    w.activateWindow();     // keyboard (song number search) goes to the player, not the mixer
     {   // auto-hide of the mixer while the karaoke program is used (Settings)
         QSettings ahs(Config::CONFIG_APP_FILE_PATH, QSettings::IniFormat);
         w.setMixerAutoHide(ahs.value("MixerAutoHide", false).toBool(),
@@ -139,7 +161,27 @@ int main(int argc, char *argv[])
                            ahs.value("MixerAutoHideProgram", "").toString());
     }
 
-    splash->finish(mixer);
+    splash->finish(&w);
+
+    {   // song files given on the command line (dropped on the program icon, "Open with"): add them
+        QStringList files;
+        for (const QString &arg : a.arguments().mid(1))
+            if (QFileInfo(arg).isFile())
+                files << arg;
+        if (!files.isEmpty())
+            QTimer::singleShot(500, &w, [&w, files]() { w.importSongs(files); });
+
+        // --update-database: rebuild the whole song database (as Settings > update)
+        if (a.arguments().contains("--update-database")) {
+            QTimer::singleShot(500, &w, [&w]() {
+                w.database()->setUpdateType(UpdateType::UpdateAll);
+                w.database()->start();
+            });
+        }
+        // --update-new: only the NCN / HNK files not in the database yet
+        if (a.arguments().contains("--update-new"))
+            QTimer::singleShot(500, &w, [&w]() { w.updateNewSongs(); });
+    }
 
     delete splash;
     delete pixmap;
@@ -190,6 +232,19 @@ void loadSoundfonts(QSplashScreen *splash, MidiSynthesizer *synth)
 
     // set soundfont to synth
     QStringList sfList = settings.value("SynthSoundfonts", QStringList()).toStringList();
+    bool sfRelocated = false;
+    for (int i = 0; i < sfList.count(); i++) {
+        const QString rel = Config::relocatePath(sfList.at(i));
+        if (rel != sfList.at(i)) { sfList[i] = rel; sfRelocated = true; }
+    }
+    if (sfRelocated) settings.setValue("SynthSoundfonts", sfList);
+    if (sfList.isEmpty()) {
+        QDir sfDir(qApp->applicationDirPath() + "/SoundFonts");
+        for (const QFileInfo &fi : sfDir.entryInfoList(QStringList() << "*.sf2" << "*.SF2", QDir::Files, QDir::Name))
+            sfList.append(QDir::fromNativeSeparators(fi.absoluteFilePath()));
+        if (!sfList.isEmpty())
+            settings.setValue("SynthSoundfonts", sfList);
+    }
     settings.beginReadArray("SynthSoundfontsVolume");
     for (int i=0; i<sfList.count(); i++)
     {
@@ -203,6 +258,13 @@ void loadSoundfonts(QSplashScreen *splash, MidiSynthesizer *synth)
             synth->setSoundfontVolume(i, volume / 100.0f);
     }
     settings.endArray();
+    if (synth->soundfontFiles().isEmpty()) {
+        QDir sfDir(qApp->applicationDirPath() + "/SoundFonts");
+        for (const QFileInfo &fi : sfDir.entryInfoList(QStringList() << "*.sf2" << "*.SF2", QDir::Files, QDir::Name)) {
+            if (synth->addSoundfont(QDir::fromNativeSeparators(fi.absoluteFilePath())))
+                synth->setSoundfontVolume(synth->soundfontFiles().count() - 1, 1.0f);
+        }
+    }
 
 
     // set Map soundfont
@@ -237,7 +299,7 @@ void loadVSTi(QSplashScreen *splash, MidiSynthesizer *synth)
     {
         st.setArrayIndex(i);
 
-        QString      filePath   = st.value("VstiFilePath", "").toString();
+        QString      filePath   = Config::relocatePath(st.value("VstiFilePath", "").toString());
         int          program    = st.value("VstiPrograms", 0).toInt();
         QList<float> params     = st.value("VstiParams").value<QList<float>>();
         QByteArray   chunk      = st.value("VstiChunk", QByteArray()).toByteArray();
@@ -270,7 +332,8 @@ void makeVSTList(QSplashScreen *splash, MidiSynthesizer *synth)
     QStringList dirs = st.value("VSTDirs", QStringList()).toStringList();
 
     QStringList vstDirs;
-    vstDirs << QDir::currentPath() + "/VST";
+    vstDirs << qApp->applicationDirPath() + "/VST";
+    for (QString &d : dirs) d = Config::relocatePath(d);
     vstDirs += dirs;
 
     QMap<uint, VSTNamePath> vstList;

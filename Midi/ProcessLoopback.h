@@ -37,7 +37,7 @@
 class ProcessLoopback
 {
 public:
-    // data = interleaved float stereo, 48 kHz; count = number of floats
+    // data = interleaved float stereo at sampleRate (48 kHz unless set); count = number of floats
     using Sink = std::function<void(const float *data, int count)>;
 
     ~ProcessLoopback() { stop(); }
@@ -46,6 +46,7 @@ public:
     // 2 = muting stopped the capture, so the program was un-muted again (its sound plays at the speakers too)
     int muteState() const { return muted.load(); }
     bool running() const { return th.joinable(); }
+    void setSampleRate(int hz) { sampleRate = hz; }
     QString lastError() const { return err; }
 
     static bool alive(DWORD pid)
@@ -83,6 +84,59 @@ public:
     {
         stopFlag = true;
         if (th.joinable()) th.join();
+    }
+
+    // volume (0..1) of the program's audio sessions on the default speakers
+    static void setSessionVolume(DWORD root, float vol)
+    {
+        forEachSession(root, [vol](ISimpleAudioVolume *v) { v->SetMasterVolume(vol, nullptr); });
+    }
+
+    // A child process (not root itself) that has an audio session on the default speakers, e.g. the
+    // audio service of the embedded browser; active sessions first. 0 = none.
+    static DWORD findAudioChild(DWORD root)
+    {
+        std::set<DWORD> pids = tree(root);
+        pids.erase(root);
+        DWORD found = 0;
+        bool foundActive = false;
+        IMMDeviceEnumerator *en = nullptr;
+        if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator),
+                                    reinterpret_cast<void **>(&en))) || !en)
+            return 0;
+        IMMDevice *dev = nullptr;
+        if (SUCCEEDED(en->GetDefaultAudioEndpoint(eRender, eMultimedia, &dev)) && dev) {
+            IAudioSessionManager2 *mgr = nullptr;
+            if (SUCCEEDED(dev->Activate(__uuidof(IAudioSessionManager2), CLSCTX_ALL, nullptr,
+                                        reinterpret_cast<void **>(&mgr))) && mgr) {
+                IAudioSessionEnumerator *se = nullptr;
+                if (SUCCEEDED(mgr->GetSessionEnumerator(&se)) && se) {
+                    int n = 0;
+                    se->GetCount(&n);
+                    for (int i = 0; i < n && !foundActive; i++) {
+                        IAudioSessionControl *ctl = nullptr;
+                        if (FAILED(se->GetSession(i, &ctl)) || !ctl) continue;
+                        IAudioSessionControl2 *c2 = nullptr;
+                        if (SUCCEEDED(ctl->QueryInterface(__uuidof(IAudioSessionControl2), reinterpret_cast<void **>(&c2))) && c2) {
+                            DWORD sp = 0;
+                            AudioSessionState st = AudioSessionStateInactive;
+                            if (SUCCEEDED(c2->GetProcessId(&sp)) && pids.count(sp)) {
+                                ctl->GetState(&st);
+                                found = sp;
+                                foundActive = (st == AudioSessionStateActive);
+                            }
+                            c2->Release();
+                        }
+                        ctl->Release();
+                    }
+                    se->Release();
+                }
+                mgr->Release();
+            }
+            dev->Release();
+        }
+        en->Release();
+        return found;
     }
 
 private:
@@ -123,8 +177,8 @@ private:
 
     static void log(const QString &s)
     {
-        QDir().mkpath(QDir::homePath() + QStringLiteral("/.KaraMixer"));
-        QFile f(QDir::homePath() + QStringLiteral("/.KaraMixer/procloop.log"));
+        QDir().mkpath(QDir::homePath() + QStringLiteral("/.PTHKKaraoke"));
+        QFile f(QDir::homePath() + QStringLiteral("/.PTHKKaraoke/procloop.log"));
         if (f.size() > 200000) f.remove();
         if (!f.open(QIODevice::Append | QIODevice::Text)) return;
         QTextStream t(&f);
@@ -153,6 +207,11 @@ private:
 
     static void setMute(DWORD root, bool mute)
     {
+        forEachSession(root, [mute](ISimpleAudioVolume *v) { v->SetMute(mute ? TRUE : FALSE, nullptr); });
+    }
+
+    static void forEachSession(DWORD root, const std::function<void(ISimpleAudioVolume *)> &fn)
+    {
         const std::set<DWORD> pids = tree(root);
         IMMDeviceEnumerator *en = nullptr;
         if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator),
@@ -176,7 +235,7 @@ private:
                             if (SUCCEEDED(c2->GetProcessId(&sp)) && pids.count(sp)) {
                                 ISimpleAudioVolume *v = nullptr;
                                 if (SUCCEEDED(ctl->QueryInterface(__uuidof(ISimpleAudioVolume), reinterpret_cast<void **>(&v))) && v) {
-                                    v->SetMute(mute ? TRUE : FALSE, nullptr);
+                                    fn(v);
                                     v->Release();
                                 }
                             }
@@ -231,10 +290,10 @@ private:
             WAVEFORMATEX wf = {};
             wf.wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
             wf.nChannels = 2;
-            wf.nSamplesPerSec = 48000;
+            wf.nSamplesPerSec = DWORD(sampleRate);
             wf.wBitsPerSample = 32;
             wf.nBlockAlign = 8;
-            wf.nAvgBytesPerSec = 48000 * 8;
+            wf.nAvgBytesPerSec = DWORD(sampleRate) * 8;
             hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED,
                                     AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK |
                                     AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
@@ -326,6 +385,7 @@ private:
     std::thread th;
     std::atomic<bool> stopFlag{false}, started{false}, failed{false};
     std::atomic<int> muted{0};
+    int sampleRate = 48000;
     QString err;
 };
 

@@ -1,8 +1,8 @@
 #ifndef KMSOUNDFONT_H
 #define KMSOUNDFONT_H
 
-// KaraMixer protected soundfont (.kmsf): a normal .sf2 whose bytes are encrypted (ChaCha20, random access),
-// so other programs (Polyphone, Viena, ...) cannot open or edit it. KaraMixer decrypts it on the fly while
+// PTHK Karaoke protected soundfont (.kmsf): a normal .sf2 whose bytes are encrypted (ChaCha20, random access),
+// so other programs (Polyphone, Viena, ...) cannot open or edit it. PTHK Karaoke decrypts it on the fly while
 // BASSMIDI reads it (BASS_MIDI_FontInitUser), nothing is ever written back to disk in clear.
 //
 // MACHINE BOUND: the key is derived from the Hardware ID (the same 8-digit ID the PRO licence uses) that was typed in

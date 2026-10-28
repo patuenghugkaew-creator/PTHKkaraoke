@@ -6,34 +6,40 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>186</width>
-    <height>93</height>
+    <width>390</width>
+    <height>200</height>
    </rect>
   </property>
   <property name="font">
    <font>
-    <pointsize>16</pointsize>
+    <pointsize>12</pointsize>
    </font>
   </property>
   <property name="windowTitle">
-   <string>เมดเล่ย์</string>
+   <string>ตั้งค่าโหมดเมดเล่ย์ (Medley Mode)</string>
   </property>
   <property name="styleSheet">
-   <string notr="true">font-size: 16pt;</string>
+   <string notr="true">font-size: 12pt;</string>
   </property>
   <property name="locale">
-   <locale language="English" country="UnitedStates"/>
+   <locale language="Thai" country="Thailand"/>
   </property>
   <layout class="QVBoxLayout" name="verticalLayout">
    <property name="spacing">
-    <number>9</number>
+    <number>12</number>
    </property>
    <item>
     <layout class="QFormLayout" name="formLayout">
+     <property name="horizontalSpacing">
+      <number>10</number>
+     </property>
+     <property name="verticalSpacing">
+      <number>10</number>
+     </property>
      <item row="0" column="0">
-      <widget class="QLabel" name="label">
+      <widget class="QLabel" name="labelBpm">
        <property name="text">
-        <string>ความเร็ว :</string>
+        <string>ความเร็ว (BPM) :</string>
        </property>
       </widget>
      </item>
@@ -42,11 +48,8 @@
        <property name="alignment">
         <set>Qt::AlignCenter</set>
        </property>
-       <property name="buttonSymbols">
-        <enum>QAbstractSpinBox::UpDownArrows</enum>
-       </property>
        <property name="minimum">
-        <number>25</number>
+        <number>40</number>
        </property>
        <property name="maximum">
         <number>250</number>
@@ -54,6 +57,63 @@
        <property name="value">
         <number>120</number>
        </property>
+      </widget>
+     </item>
+     <item row="1" column="0">
+      <widget class="QLabel" name="labelBars">
+       <property name="text">
+        <string>จำนวนห้องลูกส่งรอ :</string>
+       </property>
+      </widget>
+     </item>
+     <item row="1" column="1">
+      <widget class="QSpinBox" name="spinBars">
+       <property name="alignment">
+        <set>Qt::AlignCenter</set>
+       </property>
+       <property name="suffix">
+        <string> ห้อง (0 = ต่อทันที)</string>
+       </property>
+       <property name="minimum">
+        <number>0</number>
+       </property>
+       <property name="maximum">
+        <number>4</number>
+       </property>
+       <property name="value">
+        <number>1</number>
+       </property>
+      </widget>
+     </item>
+     <item row="2" column="0">
+      <widget class="QLabel" name="labelPattern">
+       <property name="text">
+        <string>รูปแบบลูกส่งกลอง :</string>
+       </property>
+      </widget>
+     </item>
+     <item row="2" column="1">
+      <widget class="QComboBox" name="comboPattern">
+       <item>
+        <property name="text">
+         <string>ลูกส่งมาตรฐาน (Standard Rock/Pop)</string>
+        </property>
+       </item>
+       <item>
+        <property name="text">
+         <string>ลูกส่งสามช่า / ลูกทุ่ง (Sam-Cha)</string>
+        </property>
+       </item>
+       <item>
+        <property name="text">
+         <string>เคาะจังหวะนำ (Count-in Stick)</string>
+        </property>
+       </item>
+       <item>
+        <property name="text">
+         <string>ลูกส่งทอมไล่เสียง (Tom Roll)</string>
+        </property>
+       </item>
       </widget>
      </item>
     </layout>
@@ -64,12 +124,12 @@
       <widget class="QPushButton" name="btnOk">
        <property name="minimumSize">
         <size>
-         <width>80</width>
-         <height>0</height>
+         <width>90</width>
+         <height>34</height>
         </size>
        </property>
        <property name="text">
-        <string>OK</string>
+        <string>ตกลง</string>
        </property>
       </widget>
      </item>
@@ -77,12 +137,12 @@
       <widget class="QPushButton" name="btnCancel">
        <property name="minimumSize">
         <size>
-         <width>80</width>
-         <height>0</height>
+         <width>90</width>
+         <height>34</height>
         </size>
        </property>
        <property name="text">
-        <string>Cancel</string>
+        <string>ยกเลิก</string>
        </property>
       </widget>
      </item>

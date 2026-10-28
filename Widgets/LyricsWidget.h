@@ -29,6 +29,40 @@ public:
 
     QString lyrTempData() { return lyricsTemp.join("\r\n"); }
     QVector<long> curTempData() { return cursorsTemp; }
+    long lastActiveLyricTick() const { return computeLastLyricTick(lyrics, cursors); }
+    long lastActiveTempLyricTick() const { return computeLastLyricTick(lyricsTemp, cursorsTemp); }
+    static long computeLastLyricTick(const QStringList &lyrs, const QVector<long> &curs)
+    {
+        int idx = 0;
+        long lastSung = -1;
+        for (const QString &rawLine : lyrs) {
+            const int len = rawLine.length();
+            const QString t = rawLine.trimmed();
+            bool isMeta = t.isEmpty() || t.startsWith("(") || t.startsWith("[") || t.startsWith("*") || t.startsWith("-") || t.startsWith(".");
+            if (!isMeta) {
+                const QString low = t.toLower();
+                if (low.contains("ดนตรี") || low.contains("จบ") || low.contains("outro") || low.contains("solo") || low.contains("intro") || low.contains("music"))
+                    isMeta = true;
+            }
+            if (!isMeta) {
+                for (int k = 0; k <= len && (idx + k) < curs.size(); k++) {
+                    const long c = curs[idx + k];
+                    if (c > lastSung)
+                        lastSung = c;
+                }
+            }
+            idx += len + 1;
+            if (idx >= curs.size())
+                break;
+        }
+        if (lastSung > 0)
+            return lastSung;
+        for (long c : curs) {
+            if (c > lastSung)
+                lastSung = c;
+        }
+        return lastSung;
+    }
 
     QFont   textFont()          { return font(); }
     QColor  textColor()         { return tColor; }

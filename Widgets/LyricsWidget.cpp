@@ -498,6 +498,12 @@ void LyricsWidget::setTextLine2(const QString &text, bool andUpdate)
 
 void LyricsWidget::resizeEvent(QResizeEvent *event)
 {
+    // lines drawn while the widget had no real size yet (e.g. the 2nd-monitor lyrics before
+    // they are shown) were shrunk to the smallest auto font size: draw them again
+    if (!tLine1.isEmpty())
+        setTextLine1(tLine1, false);
+    if (!tLine2.isEmpty())
+        setTextLine2(tLine2, false);
     update();
     updateArea = calculateUpdateArea();
 }
@@ -617,17 +623,29 @@ QFont LyricsWidget::getPerfectFont(const QString &text)
 {
     QFont f = font();
     QFontMetrics m(f);
-    while (m.width(text) > this->width() - (getAllBorderSize() * 2)) {
-        f.setPointSize(f.pointSize() - 2);
+    // stop at 8 pt: Qt ignores sizes <= 0, so a line that never fits (or a widget that is not
+    // laid out yet and has no width) used to loop here forever and freeze the program
+    while (m.width(text) > this->width() - (getAllBorderSize() * 2) && f.pointSize() > 8) {
+        f.setPointSize(qMax(8, f.pointSize() - 2));
         m = QFontMetrics(f);
     }
     return f;
 }
 
+// The line heights (Settings > lyrics) were made for the 600 px high lyrics area of the normal
+// window. On a full screen / TV the lower line's distance from the bottom grows with the height
+// (otherwise the lyrics sit at the very bottom, under the playback bar), while the gap between
+// the two lines stays as set: the text does not grow, so a scaled gap looked far too wide.
+static int scaledLineY(int y, int height)
+{
+    return qRound(y * qMax(1.0, height / 600.0));
+}
+
 QPoint LyricsWidget::getLine1Point()
 {
     QPoint p;
-    p.setY(this->height() - line1_y);
+    const int lower = qMin(line1_y, line2_y);
+    p.setY(this->height() - scaledLineY(lower, height()) - (line1_y - lower));
     switch (line1_p) {
     case LinePosition::Center: {
         int x = (this->width() - pixLine1.width()) / 2;
@@ -650,7 +668,8 @@ QPoint LyricsWidget::getLine1Point()
 QPoint LyricsWidget::getLine2Point()
 {
     QPoint p;
-    p.setY(this->height() - line2_y);
+    const int lower = qMin(line1_y, line2_y);
+    p.setY(this->height() - scaledLineY(lower, height()) - (line2_y - lower));
     switch (line2_p) {
     case LinePosition::Center: {
         int x = (this->width() - pixLine2.width()) / 2;

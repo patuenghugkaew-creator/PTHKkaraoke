@@ -11,14 +11,15 @@
 #endif
 
 
-#define TEMP_DIR_PATH           QDir::tempPath() + "/KaraMixer"
+#define TEMP_DIR_PATH           QDir::tempPath() + "/PTHKKaraoke"
 #define TEMP_MIDI_DIR_PATH      TEMP_DIR_PATH + "/temp.mid"
 
-#define ALL_DATA_DIR_PATH       QDir::homePath() + "/.KaraMixer"
+#define ALL_DATA_DIR_PATH       QDir::homePath() + "/.PTHKKaraoke"
 
 
 #define APP_PLAYLIST_FILTER_TEXT  "Playlist file (*.bmpl)"
-#define APP_PLAYLIST_HEADTEXT     "KaraMixer playlist file"
+#define APP_PLAYLIST_HEADTEXT     "PTHK Karaoke playlist file"
+#define APP_PLAYLIST_OLD_HEADTEXT "KaraMixer playlist file"     // playlists saved before the rename still open
 #define APP_PLAYLIST_VERSION      "Version="
 #define APP_PLAYLIST_VERSION_1    "Version=1"
 #define APP_PLAYLIST_VERSION_2    "Version=2"
@@ -40,6 +41,8 @@ public:
     static QString CONFIG_SYNTH_FILE_PATH;
 
     static void initConfigDataPath();
+    static bool isPortableMode();
+    static QString relocatePath(const QString &savedPath);
 };
 
 #endif // CONFIG_H

@@ -104,9 +104,9 @@ namespace {
 }
 
 namespace {
-    void asioLog(const QString &msg)   // ~/.KaraMixer/asio.log : what the driver reported (for support)
+    void asioLog(const QString &msg)   // ~/.PTHKKaraoke/asio.log : what the driver reported (for support)
     {
-        QFile f(QDir::homePath() + "/.KaraMixer/asio.log");
+        QFile f(QDir::homePath() + "/.PTHKKaraoke/asio.log");
         if (f.size() > 200000) f.remove();
         if (f.open(QIODevice::Append | QIODevice::Text)) {
             QTextStream(&f) << QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss") << "  " << msg << "\n";
@@ -124,8 +124,8 @@ QStringList AsioOutput::devices()
 }
 
 namespace {
-    QString startMarker() { return QDir::homePath() + "/.KaraMixer/asio.starting"; }
-    void markStart() { QDir().mkpath(QDir::homePath() + "/.KaraMixer"); QFile f(startMarker()); if (f.open(QIODevice::WriteOnly)) f.write("1"); }
+    QString startMarker() { return QDir::homePath() + "/.PTHKKaraoke/asio.starting"; }
+    void markStart() { QDir().mkpath(QDir::homePath() + "/.PTHKKaraoke"); QFile f(startMarker()); if (f.open(QIODevice::WriteOnly)) f.write("1"); }
     void clearStart() { QFile::remove(startMarker()); }
     struct StartGuard { ~StartGuard() { clearStart(); } };     // removed on every normal return; stays only after a hang / crash
 }

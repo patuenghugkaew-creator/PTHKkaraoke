@@ -21,6 +21,8 @@ public:
     static QVector<long> readCurFile(const QString &curFile, uint32_t resolution);
     static QVector<long> readCurFile(const QByteArray &data, uint32_t resolution);
 
+    // Thai text files are TIS-620 (old) or UTF-8 (newer song packs): picks the right one
+    static QString decodeThaiText(const QByteArray &data);
     static QString readLyrics(const QString &lyrFile);
     static QString readLyrics(const QByteArray &data);
 

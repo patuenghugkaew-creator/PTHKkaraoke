@@ -9,6 +9,14 @@
 #include <QPointer>
 #include <QDialog>
 #include <QTranslator>
+#include <QMediaPlayer>
+#include <QVideoWidget>
+#include <QLabel>
+#include <QPushButton>
+#include <QElapsedTimer>
+#include <functional>
+#include <deque>
+#include <QImage>
 
 #ifdef _WIN32
 #include <QWinTaskbarButton>
@@ -26,11 +34,18 @@
 
 #include "Dialogs/SynthMixerDialog.h"
 #include "Dialogs/SecondMonitorDialog.h"
+#include "Widgets/VideoFrameSurface.h"
+#include "Dialogs/YouTube.h"
 
 
 class MedleyLoader;
 class RemoteServer;
+class SongRequestServer;
+class QFrame;
 class MixerAutoHide;
+class DmxLights;
+class YtAudio;
+class AiVocalEngine;
 
 
 namespace Ui {
@@ -70,6 +85,46 @@ public:
     void saveConfigFile();
     void openConfigFile();
     void applyConfigLive();   // apply the saved config files to the running program (no restart)
+    void showSavedWindowState();   // show the player normal / maximized / full screen as last closed
+    void playVideo(const QString &path, bool isVideo = true);   // songtype "VIDEO", or "MP3" (+ .lrc lyrics)
+    QString searchWithThaiFallback(const QString &text);   // returns the text actually searched
+
+    // MP3 songs played through the synth's main mixer (BASS)
+    bool startMp3Stream(const QString &path);
+    void stopMp3Stream();
+    void setMp3Volume();
+    qint64 mp3PositionMs();
+
+    // Karaoke recording (music + microphone, F12) and vocal score
+    void showHelpDialog();     // F1: shortcut keys and how to use the player
+    QStringList importSongs(const QStringList &files, bool quiet = false);
+    void showImportDialog();
+    void showYouTubeDownload(const QString &url = QString());
+    bool isSongPlaying();
+    void updateNewSongs();
+    void showArtistCodeDialog();
+    void refreshArtistCodes();          // new songs get their codes by artist (when codes are in use)
+    void showYouTubeSearch();
+    void addYouTubeToQueue(const YtItem &item, bool playNow);
+    void playYouTube();
+    void showDmxDialog();
+    void toggleRecording();
+    void stopRecording();
+    void setVocalScore(bool on);
+    void updateMicUse();
+    void resetScore();
+    void showScore();
+
+    // Song transitions (settings: "การต่อเพลง"): fade in / out, and end a song some seconds after
+    // its last lyric; the next song then starts at once.
+    int effectiveVolume() const;        // volume slider x fade (0 when muted)
+    void applyVolume();
+    void startFade(double to, int ms, std::function<void()> done = nullptr);
+    void songFinished();                // a song came to its end: the next one
+    void endSongSmoothly();             // End key / "จบเพลง": fade out first
+    void checkEndAfterLyrics(qint64 pos, qint64 remainingMs);
+    void loadTransitionSettings();
+    void showTransitionDialog();
 
 public slots:
     void play(int index, int position = 0);
@@ -89,6 +144,9 @@ protected:
     void closeEvent(QCloseEvent *event);
     void keyPressEvent(QKeyEvent *event);
     void keyReleaseEvent(QKeyEvent *event);
+    bool eventFilter(QObject *watched, QEvent *event);   // shortcuts from the mixer window
+    void dragEnterEvent(QDragEnterEvent *event);     // drop song files / folders to add them
+    void dropEvent(QDropEvent *event);
 
 private:
     void loadNextMedley(Song *song);
@@ -147,6 +205,7 @@ private slots:
     void switchMedleyLyrics2();
     void onNextMedleyStarted();
     void onNextMedleyAfterStarted();
+    void onMedleyCountIn(int beat, int beatsPerBar, int bar, int totalBars);
     void onPlayerThreadFinished();
 
     void onDbUpdateChanged(int v);
@@ -165,6 +224,64 @@ private:
     Ui::MainWindow *ui;
     QSettings *settings;
     bool skipSaveOnExit = false;
+    bool startMaximized = false;
+    bool startFullScreen = false;
+    QMediaPlayer *videoPlayer;
+    FrameVideoWidget *videoWidget;
+    bool videoActive = false;   // a video or MP3 song is loaded (playing or paused)
+    bool mediaIsAudio = false;  // ... and it is an MP3 song (lyrics from its .lrc)
+    DWORD mp3Stream = 0;        // BASS decode stream of the MP3 song in the main mixer, 0 = none
+    QTimer *mp3Timer;
+
+    bool vocalScore = false;
+    int melodyNote = -1;        // sounding note of the vocal melody (channel 9), -1 = none
+    int scoreFrames = 0;        // 50 ms steps with a melody note
+    int scoreHits = 0;          // ... of which the singer was on pitch
+    QTimer *scoreTimer;
+    QLabel *scoreLabel;
+    DmxLights *dmxLights;
+    bool ytActive = false;      // a YouTube song is playing (online, in ytPlayer)
+#ifdef PTHK_WEBENGINE
+    YouTubePlayer *ytPlayer = nullptr;
+    QTimer *ytMirrorTimer = nullptr;
+
+    // YouTube sound through the main mixer (vocal cut, key, EQ); off where Windows can't do it
+    YtAudio *ytAudio = nullptr;
+    QElapsedTimer ytAudioTry;           // looking for the browser's audio process: not too often
+    QElapsedTimer ytQuietClock;
+    bool ytAudioWarned = false;
+    bool ytAudioLive() const;           // captured, muted at the speakers, playing in the mixer
+    void updateYtAudio();
+
+    // YouTube vocal cut: AI (separation, sound and picture a few seconds late) or fast
+    AiVocalEngine *aiEngine = nullptr;
+    bool ytAiLatched = false;           // AI was used: it keeps running, so the cut key works at once
+    void applyYtVocalCut();             // after the cut key / settings changed
+    void showYtVocalDialog();
+    struct DelayedFrame { qint64 t; QImage img; };
+    std::deque<DelayedFrame> delayedFrames;     // the YouTube picture kept for the AI delay
+    QElapsedTimer frameClock;
+    void changeYtKey(int step);
+
+    // song transitions
+    int fadeInMs = 1000;
+    int fadeOutMs = 3000;
+    bool endAfterLyrics = true;
+    int endAfterLyricsSec = 8;
+    QTimer *fadeTimer = nullptr;
+    double fadeGain = 1.0, fadeFrom = 1.0, fadeTo = 1.0;
+    int fadeMs = 0;
+    QElapsedTimer fadeClock;
+    std::function<void()> fadeDone;
+    bool endingSong = false;            // fading out to the end of the song
+    long lastLyricPos = -2;             // -2 = not looked up yet, -1 = song without lyrics
+    bool afterLyrics = false;
+    QElapsedTimer afterLyricsClock;
+    int midiBaseVolume = -1;
+#endif
+    QPushButton *btnMuteVocal;
+    QPushButton *btnMedley = nullptr;
+    QPushButton *btnSecondScreen = nullptr;
     SongDatabase *db;
     QTimer *timer1, *timer2, *positionTimer, *lyricsTimer;
     QTimer *detailTimer;
@@ -180,6 +297,13 @@ private:
 
     MedleyLoader *medleyLoader = nullptr;
     RemoteServer *remoteServer = nullptr;
+
+    // song requests from phones (customers ask, the owner approves)
+    SongRequestServer *reqServer = nullptr;
+    QFrame *reqToast = nullptr;         // the requests waiting for approval, top right on the PC
+    void ensureRequestServer();
+    void showSongRequestDialog();
+    void updateRequestToast();
     QPointer<QDialog> remoteDialog;
 
     Background *bgWidget = nullptr;

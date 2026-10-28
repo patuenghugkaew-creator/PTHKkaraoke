@@ -20,7 +20,9 @@
 
 #include <bass.h>
 #include <cmath>
+#include <vector>
 #include "Midi/AsioOutput.h"
+#include "Midi/MicInput.h"
 
 class OutputRecorder
 {
@@ -40,6 +42,8 @@ public:
     void setGainDb(double db) { userGain = std::pow(10.0, db / 20.0); }
     // TPDF dither (+-1 LSB triangular noise) before the 16 / 24-bit rounding: no harsh quantisation distortion on quiet tails
     void setDither(bool on) { ditherOn = on; }
+    // karaoke recording: also mix the microphone (MicInput, must be running) into the file
+    void setMixMic(bool on, double gain = 1.0) { mixMic = on; micGain = float(gain); }
     float peakValue() const { return peak.load(); }
     QString path() const { return filePath; }
 
@@ -160,6 +164,11 @@ private:
         vol *= float(userGain);
         float pk = peak.load();
 
+        if (mixMic.load()) {
+            micBuf.resize(n);
+            MicInput::get().pop(micBuf.data(), int(n));
+        }
+
         for (size_t i = 0; i < n; i++) {
             const size_t b = i * size_t(chans);
             float l, r;
@@ -181,8 +190,9 @@ private:
                     }
                 }
             }
+            const float mic = mixMic.load() ? micBuf[i] * micGain : 0.0f;
             for (int s = 0; s < 2; s++) {
-                float v = (s == 0 ? l : r) * vol;
+                float v = (s == 0 ? l : r) * vol + mic;
                 if (std::fabs(v) > pk) pk = std::fabs(v);
                 if (bits == 32) {
                     std::memcpy(p, &v, 4);
@@ -264,6 +274,9 @@ private:
     bool inFloat = true;
     bool applyVol = true;
     double userGain = 1.0;
+    std::atomic<bool> mixMic{false};
+    float micGain = 1.0f;
+    std::vector<float> micBuf;                  // audio thread only
     std::atomic<float> peak{0.0f};
 };
 

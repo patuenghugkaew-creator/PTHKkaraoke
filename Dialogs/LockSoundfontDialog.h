@@ -26,7 +26,8 @@
 #include "Config.h"
 #include "Utils.h"
 #include "Midi/MidiSynthesizer.h"
-#include "Midi/KmSoundfont.h"
+#include "PTHKCore.h"
+#include "Widgets/DialogSkin.h"
 
 class LockSoundfontDialog : public QDialog
 {
@@ -41,7 +42,7 @@ public:
 
         QLabel *help = new QLabel(QString::fromUtf8(
             "เลือก Soundfont ที่จะล็อก เลือกว่าจะผูกกับ \"เครื่อง\" หรือ \"แฟลชไดร์ USB\" กรอก ID แล้วกด Lock\n"
-            "ระบบจะสร้างไฟล์ .kmsf (เล่นได้เฉพาะใน KaraMixer แก้ไขไม่ได้) บันทึกในโฟลเดอร์ Kmsf (อยู่ข้างโฟลเดอร์ Config)\n"
+            "ระบบจะสร้างไฟล์ .kmsf (เล่นได้เฉพาะใน PTHK Karaoke แก้ไขไม่ได้) บันทึกในโฟลเดอร์ Kmsf (อยู่ข้างโฟลเดอร์ Config)\n"
             "แบบเครื่อง: ใช้ได้เฉพาะเครื่องที่มี Hardware ID ตรงกัน  แบบ USB: ใช้ได้เมื่อเสียบแฟลชไดร์ตัวนั้นก่อนเปิดโปรแกรม"), this);
         help->setWordWrap(true);
         v->addWidget(help);
@@ -72,6 +73,8 @@ public:
             mono.setBold(true);
             mine->setFont(mono);
             mine->setTextInteractionFlags(Qt::TextSelectableByMouse);
+            mine->setMinimumHeight(36);
+            mine->setStyleSheet(QString::fromLatin1("QLabel { background-color: #161d26; color: #38bdf8; border: 1px solid #0a8aa6; border-radius: 6px; padding: 6px 14px; font-weight: bold; }"));
             QPushButton *copy = new QPushButton(QString::fromUtf8("คัดลอก"), this);
             copy->setObjectName(QString::fromLatin1("lockCopy"));
             QHBoxLayout *r1 = new QHBoxLayout();
@@ -149,14 +152,14 @@ private:
     // the ID shown above the entry: this computer's Hardware ID, or the USB ID of the selected flash drive
     QString shownId() const
     {
-        return usbMode() ? usbBox->currentData().toString() : KmSf::thisMachineId();
+        return usbMode() ? usbBox->currentData().toString() : PTHKCore::ownerMachineId();
     }
 
     void fillUsb(bool force)
     {
         usbBox->blockSignals(true);
         usbBox->clear();
-        for (const UsbDongle::Drive &d : UsbDongle::drives(force))
+        for (const PTHKCore::UsbDrive &d : PTHKCore::scanUsbDrives(force))
             usbBox->addItem(d.label(), d.id);
         usbBox->blockSignals(false);
         updateMode();
@@ -168,6 +171,7 @@ private:
         usbBox->setVisible(usb);
         usbRefreshBtn->setVisible(usb);
         useMine->setText(usb ? QString::fromUtf8("ใช้ ID ไดร์ที่เลือก") : QString::fromUtf8("ใช้ ID เครื่องนี้"));
+        DialogSkin::fitDialogButton(useMine);
         idEdit->setPlaceholderText(usb ? QString::fromUtf8("กรอก USB ID ของแฟลชไดร์ (8 ตัว เช่น 1A2B3C4D)")
                                        : QString::fromUtf8("กรอก Hardware ID ของเครื่องปลายทาง (8 ตัว เช่น 556BAE3D)"));
         if (usb) {
@@ -175,7 +179,7 @@ private:
             mine->setText(id.isEmpty() ? QString::fromUtf8("ไม่พบแฟลชไดร์ USB (เสียบแล้วกด \"ค้นหาไดร์ใหม่\")")
                                        : QString::fromUtf8("USB ID ของไดร์ที่เลือก: ") + id);
         } else {
-            mine->setText(QString::fromUtf8("Hardware ID ของเครื่องนี้: ") + KmSf::thisMachineId());
+            mine->setText(QString::fromUtf8("Hardware ID ของเครื่องนี้: ") + PTHKCore::ownerMachineId());
         }
     }
 
@@ -183,7 +187,7 @@ private:
     {
         list->clear();
         for (const QString &f : synth->soundfontFiles()) {
-            if (KmSf::isProtectedFile(f))
+            if (PTHKCore::isProtectedSoundfont(f))
                 continue;   // already locked
             if (!f.endsWith(QLatin1String(".sf2"), Qt::CaseInsensitive))
                 continue;   // only .sf2 can be locked
@@ -203,7 +207,7 @@ private:
         const QString src = it->data(Qt::UserRole).toString();
 
         // the Hardware ID of the computer the soundfont is for: typed in every time
-        const QString id = KmSf::normalizeId(idEdit->text());
+        const QString id = PTHKCore::normalizeId(idEdit->text());
         if (id.isEmpty()) {
             status->setText(QString::fromUtf8("กรุณากรอก ID ให้ถูกต้อง (8 ตัว 0-9, A-F)"));
             idEdit->setFocus();
@@ -226,7 +230,7 @@ private:
         QApplication::setOverrideCursor(Qt::WaitCursor);
         qApp->processEvents();
         QString err;
-        const bool ok = KmSf::protectFile(src, dst, id, &err, usb);
+        const bool ok = PTHKCore::lockSoundfont(src, dst, id, usb, &err);
         QApplication::restoreOverrideCursor();
         lockBtn->setEnabled(true);
 
@@ -237,7 +241,7 @@ private:
 
         idEdit->clear();     // the ID has to be typed again for the next lock
 
-        const bool playsHere = usb ? UsbDongle::connectedIds(true).contains(id) : (id == KmSf::thisMachineId());
+        const bool playsHere = usb ? PTHKCore::connectedUsbIds().contains(id) : (id == PTHKCore::ownerMachineId());
         if (!playsHere) {
             // made for another computer / another flash drive: it cannot play here, so it is not added to the list
             status->setText(QString::fromUtf8(usb ? "ล็อกแล้วสำหรับแฟลชไดร์ USB ID " : "ล็อกแล้วสำหรับเครื่อง ID ") + id

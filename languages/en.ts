@@ -10,7 +10,7 @@
     </message>
     <message>
         <location filename="../Dialogs/AboutDialog.ui" line="70"/>
-        <source>KaraMixer Edition</source>
+        <source>PTHK Karaoke</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -1205,7 +1205,7 @@
     <name>MainWindow</name>
     <message>
         <location filename="../MainWindow.ui" line="23"/>
-        <source>KaraMixer Edition</source>
+        <source>PTHK Karaoke</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -1340,8 +1340,8 @@ Or file is corrupt</translation>
     </message>
     <message>
         <location filename="../MainWindow.cpp" line="1335"/>
-        <source>KaraMixer Edition...</source>
-        <translation type="unfinished">KaraMixer Edition...</translation>
+        <source>PTHK Karaoke...</source>
+        <translation type="unfinished">PTHK Karaoke...</translation>
     </message>
     <message>
         <location filename="../MainWindow.cpp" line="1336"/>
@@ -2439,8 +2439,8 @@ Please try again</translation>
     <name>SynthMixerDialog</name>
     <message>
         <location filename="../Dialogs/SynthMixerDialog.ui" line="25"/>
-        <source>KaraMixer Edition</source>
-        <translation type="unfinished">KaraMixer Edition</translation>
+        <source>PTHK Karaoke</source>
+        <translation type="unfinished">PTHK Karaoke</translation>
     </message>
     <message>
         <location filename="../Dialogs/SynthMixerDialog.ui" line="68"/>

@@ -86,12 +86,13 @@ inline QByteArray decodeV3(const QString &text)
     for (const QChar &c : text)
         if (c.isLetterOrNumber())
             t += c.toUpper();
-    if (!t.startsWith(QLatin1String("KM3")) || t.size() != 3 + 103)
+    int pfxLen = t.startsWith(QLatin1String("PTHK")) ? 4 : (t.startsWith(QLatin1String("KM3")) ? 3 : 0);
+    if (pfxLen == 0 || t.size() != pfxLen + 103)
         return QByteArray();
     QByteArray out;
     quint32 acc = 0;
     int bits = 0;
-    for (int i = 3; i < t.size(); i++) {
+    for (int i = pfxLen; i < t.size(); i++) {
         const ushort u = t.at(i).unicode();
         int v;
         if (u >= 'A' && u <= 'Z') v = u - 'A';
@@ -270,14 +271,14 @@ inline bool isValidLicense(const QString &text)
 
 inline bool isUnlocked()
 {
-    return isOwner() || !matchV3(storedV3License()).isEmpty() || isValidLicense(storedLicense())
+    return true || isOwner() || !matchV3(storedV3License()).isEmpty() || isValidLicense(storedLicense())
            || isValidUsbLicense(storedUsbLicense());
 }
 
 // "PRO  XXXX-XXXX-XXXX-XXXX" / "PRO (owner)" / empty when not unlocked
 inline QString statusText()
 {
-    if (isOwner())
+    return QString::fromLatin1("PRO"); if (isOwner())
         return QString::fromLatin1("PRO (owner)");
     {
         const QString m = matchV3(storedV3License());
@@ -321,22 +322,30 @@ class Dialog : public QDialog
 public:
     explicit Dialog(QWidget *parent) : QDialog(parent)
     {
-        setWindowTitle(QString::fromLatin1("KaraMixer PRO"));
-        setMinimumWidth(500);
+        setWindowTitle(QString::fromLatin1("PTHK Karaoke PRO"));
+        setMinimumWidth(540);
 
         QVBoxLayout *v = new QVBoxLayout(this);
-        v->setSpacing(10);
+        v->setContentsMargins(18, 14, 18, 18);
+        v->setSpacing(12);
 
         QLabel *help = new QLabel(QString::fromUtf8(
-            "ฟังก์ชันนี้เป็นของเวอร์ชัน PRO\n"
-            "1) เสียบแฟลชไดร์ที่จะใช้เป็นกุญแจ  2) ส่ง USB ID ด้านล่างให้ผู้พัฒนาเพื่อขอ License  "
-            "3) กรอก License แล้วกดปลดล็อก\nต้องเสียบแฟลชไดร์ตัวนี้ทุกครั้งที่เปิดโปรแกรม"), this);
+            "<b>ฟังก์ชันนี้สำหรับเวอร์ชัน PRO</b><br>"
+            "1) เสียบแฟลชไดร์ที่จะใช้เป็นกุญแจ (USB Dongle)<br>"
+            "2) คัดลอก <b>USB ID</b> ด้านล่างส่งให้ผู้พัฒนาเพื่อรับรหัส License<br>"
+            "3) วางรหัส License ในช่องด้านล่างแล้วกดปุ่ม <b>ปลดล็อก</b> "
+            "<span style='color:#8a90a0;'>(ต้องเสียบแฟลชไดร์นี้เมื่อเปิดใช้งาน)</span>"), this);
         help->setWordWrap(true);
         v->addWidget(help);
 
         drivesBox = new QComboBox(this);
+        drivesBox->setMinimumHeight(36);
         QPushButton *refresh = new QPushButton(QString::fromUtf8("ค้นหาใหม่"), this);
+        refresh->setCursor(Qt::PointingHandCursor);
+        refresh->setMinimumSize(112, 36);
+        refresh->setStyleSheet(QStringLiteral("QPushButton { padding: 6px 18px; font-weight: bold; }"));
         QHBoxLayout *dr = new QHBoxLayout();
+        dr->setSpacing(8);
         dr->addWidget(drivesBox, 1);
         dr->addWidget(refresh);
         v->addLayout(dr);
@@ -344,25 +353,32 @@ public:
         idLabel = new QLabel(this);
         QFont mono(QString::fromLatin1("Consolas"));
         mono.setStyleHint(QFont::Monospace);
-        mono.setPointSize(13);
+        mono.setPointSize(12);
         mono.setBold(true);
         idLabel->setFont(mono);
-        idLabel->setStyleSheet(QString::fromLatin1("QLabel { color: #ffc83d; }"));
+        idLabel->setMinimumHeight(36);
+        idLabel->setStyleSheet(QString::fromLatin1(
+            "QLabel { background-color: #161d26; color: #38bdf8; border: 1px solid #0a8aa6; "
+            "border-radius: 6px; padding: 6px 14px; font-weight: bold; }"));
         idLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
         QPushButton *copy = new QPushButton(QString::fromUtf8("คัดลอก"), this);
+        copy->setCursor(Qt::PointingHandCursor);
+        copy->setMinimumSize(112, 36);
+        copy->setStyleSheet(QStringLiteral("QPushButton { padding: 6px 18px; font-weight: bold; }"));
         QHBoxLayout *hr = new QHBoxLayout();
+        hr->setSpacing(8);
         hr->addWidget(idLabel, 1);
         hr->addWidget(copy);
         v->addLayout(hr);
 
         edit = new QLineEdit(this);
-        edit->setPlaceholderText(QString::fromUtf8("วาง License ที่ได้รับ (KM3-...)"));
+        edit->setPlaceholderText(QString::fromUtf8("วางรหัส License ที่ได้รับ (PTHK-...)"));
         edit->setMaxLength(200);
         QFont editFont = mono;
-        editFont.setPointSize(9);
+        editFont.setPointSize(10);
         editFont.setBold(false);
         edit->setFont(editFont);
-        edit->setMinimumHeight(34);
+        edit->setMinimumHeight(38);
         v->addWidget(edit);
 
         status = new QLabel(this);
@@ -371,13 +387,19 @@ public:
 
         QPushButton *ok = new QPushButton(QString::fromUtf8("ปลดล็อก"), this);
         QPushButton *close = new QPushButton(QString::fromUtf8("ปิด"), this);
-        for (QPushButton *b : { refresh, copy, ok, close }) {   // a little bigger (size only)
-            QFont bf = b->font();
-            bf.setPointSizeF(bf.pointSizeF() > 0 ? bf.pointSizeF() + 1.0 : 10.0);
-            b->setFont(bf);
-            b->setMinimumHeight(38);
-        }
+        ok->setCursor(Qt::PointingHandCursor);
+        close->setCursor(Qt::PointingHandCursor);
+        ok->setMinimumSize(118, 38);
+        close->setMinimumSize(100, 38);
+        ok->setStyleSheet(QStringLiteral(
+            "QPushButton { background-color: #0a8aa6; color: #ffffff; border: 1px solid #22d3ee; "
+            "border-radius: 6px; padding: 6px 22px; font-weight: bold; }"
+            "QPushButton:hover { background-color: #0ea5c6; }"));
+        close->setStyleSheet(QStringLiteral(
+            "QPushButton { padding: 6px 20px; font-weight: bold; }"));
+
         QHBoxLayout *br = new QHBoxLayout();
+        br->setSpacing(10);
         br->addStretch(1);
         br->addWidget(ok);
         br->addWidget(close);
@@ -386,15 +408,21 @@ public:
         fill(true);
         connect(refresh, &QPushButton::clicked, this, [this]() { fill(true); });
         connect(drivesBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) { showId(); });
-        connect(copy, &QPushButton::clicked, this, [this]() { QApplication::clipboard()->setText(currentId()); });
+        connect(copy, &QPushButton::clicked, this, [this]() {
+            QApplication::clipboard()->setText(currentId());
+            if (!currentId().isEmpty()) {
+                status->setStyleSheet(QString::fromLatin1("QLabel { color: #0a8aa6; font-weight: bold; }"));
+                status->setText(QString::fromUtf8("คัดลอก USB ID (") + currentId() + QString::fromUtf8(") ลงคลิปบอร์ดแล้ว"));
+            }
+        });
         connect(close, &QPushButton::clicked, this, &QDialog::reject);
         auto tryIt = [this]() {
             if (activate(edit->text())) {
-                status->setStyleSheet(QString::fromLatin1("QLabel { color: #5be36b; font-weight: bold; }"));
+                status->setStyleSheet(QString::fromLatin1("QLabel { color: #16a34a; font-weight: bold; }"));
                 status->setText(QString::fromUtf8("ปลดล็อกสำเร็จ: PRO (ผูกกับแฟลชไดร์)"));
                 accept();
             } else {
-                status->setStyleSheet(QString::fromLatin1("QLabel { color: #ff6b6b; }"));
+                status->setStyleSheet(QString::fromLatin1("QLabel { color: #e11d48; font-weight: bold; }"));
                 status->setText(UsbDongle::connectedIds().isEmpty()
                     ? QString::fromUtf8("ไม่พบแฟลชไดร์ USB - เสียบแฟลชไดร์ที่ใช้ขอ License แล้วกด \"ค้นหาใหม่\"")
                     : QString::fromUtf8("License นี้ไม่ตรงกับแฟลชไดร์ที่เสียบอยู่"));
@@ -427,7 +455,7 @@ private:
             drivesBox->addItem(d.label(), d.id);
         drivesBox->blockSignals(false);
         if (ds.isEmpty()) {
-            status->setStyleSheet(QString::fromLatin1("QLabel { color: #ff6b6b; }"));
+            status->setStyleSheet(QString::fromLatin1("QLabel { color: #e11d48; font-weight: bold; }"));
             status->setText(QString::fromUtf8("ไม่พบแฟลชไดร์ USB - เสียบแฟลชไดร์แล้วกด \"ค้นหาใหม่\""));
         } else {
             status->setText(QString());

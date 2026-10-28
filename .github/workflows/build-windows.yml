@@ -46,7 +46,7 @@ jobs:
         run: |
           mkdir build-mixer
           cd build-mixer
-          qmake ..\KaraMixer.pro CONFIG+=release
+          qmake ..\PTHKKaraoke.pro CONFIG+=release
           nmake
 
       - name: Compile translations

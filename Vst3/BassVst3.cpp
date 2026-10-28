@@ -106,7 +106,7 @@ void logFailure(const std::string &path, const std::string &why)
 #ifdef _WIN32
     const char *home = std::getenv("USERPROFILE");
     if (!home) return;
-    std::string f = std::string(home) + "\\.KaraMixer\\vst3.log";
+    std::string f = std::string(home) + "\\.PTHKKaraoke\\vst3.log";
     FILE *fp = std::fopen(f.c_str(), "ab");
     if (!fp) return;
     SYSTEMTIME t;

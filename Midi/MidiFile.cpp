@@ -98,9 +98,22 @@ bool MidiFile::read(QFile *in, bool seekFileChunkID)
     in->read((char*)chunkID, 4);
 
     if (seekFileChunkID == false) {
-        if (memcmp(chunkID, "MThd", 4) != 0){
-            in->close();
-            return false;
+        if (memcmp(chunkID, "MThd", 4) != 0) {
+            // Support locked/obfuscated MIDI files (e.g. "Lock", "Good", "TECH", "MTdd", etc.)
+            // A locked MIDI file has chunkSize == 6, format 0 or 1, and the first track chunk at offset 14 is "MTrk"
+            qint64 curPos = in->pos();
+            quint32 testSize = readUInt32(in);
+            quint16 testFmt = readUInt16(in);
+            in->seek(14);
+            char testTrk[4];
+            qint64 trkBytes = in->read(testTrk, 4);
+            in->seek(curPos);
+            if (testSize == 6 && (testFmt == 0 || testFmt == 1) && trkBytes == 4 && memcmp(testTrk, "MTrk", 4) == 0) {
+                // Valid locked MIDI file - accepted!
+            } else {
+                in->close();
+                return false;
+            }
         }
     }
 
@@ -484,7 +497,7 @@ uint32_t MidiFile::tickFromBeat(float beat)
 
 uint32_t MidiFile::tickFromBar(int barNumber)
 {
-    uint32_t result = 0, lastBar = 0, lastBeat = 0, lastBeatInBar = 0;
+    if (barNumber <= 0) return 0; uint32_t result = 0, lastBar = 0, lastBeat = 0, lastBeatInBar = 4;
 
     for (const SignatureBeat &sigBeat : MidiHelper::calculateBeats(this)) {
         uint32_t nBar = lastBar + ((sigBeat.nBeat - lastBeat) / sigBeat.nBeatInBar);

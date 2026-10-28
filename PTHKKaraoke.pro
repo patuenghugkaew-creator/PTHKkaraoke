@@ -4,19 +4,32 @@
 #
 #-------------------------------------------------
 
-QT       += core gui sql network
+QT       += core gui sql network multimedia multimediawidgets serialport
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
+# PTHK Core proprietary library (AI separation, KMSF soundfonts, Pro Dongle, Studio DSP)
+INCLUDEPATH += $$PWD/PTHKCore
+win32: LIBS += -L$$PWD/../PTHK-Build/build-core/release -lPTHKCore
+
+# YouTube window (online playback) when Qt WebEngine is installed
+qtHaveModule(webenginewidgets) {
+    QT += webenginewidgets
+    DEFINES += PTHK_WEBENGINE
+}
+
 CONFIG += c++11
 
-TARGET = KaraMixer
+TARGET = PTHKKaraoke
 TEMPLATE = app
 
 SOURCES += main.cpp\
     Config.cpp \
     Theme.cpp \
     Dialogs/MedleyDialog.cpp \
+    Dialogs/SongListsDialog.cpp \
+    Dialogs/YouTube.cpp \
+    Dmx/DmxLights.cpp \
         MainWindow.cpp \
     MedleyLoader.cpp \
     SettingsDialog.cpp \
@@ -89,6 +102,7 @@ SOURCES += main.cpp\
     Remote/QrCode.cpp \
     Remote/RemoteServer.cpp \
     Remote/RemoteDialog.cpp \
+    Remote/SongRequestServer.cpp \
     3rdParty/vst3sdk/pluginterfaces/base/funknown.cpp \
     3rdParty/vst3sdk/pluginterfaces/base/coreiids.cpp \
     3rdParty/vst3sdk/pluginterfaces/base/conststringtable.cpp \
@@ -98,6 +112,12 @@ SOURCES += main.cpp\
 HEADERS  += Widgets/PanKnob.h \
     MainWindow.h \
     Dialogs/MedleyDialog.h \
+    Dialogs/SongListsDialog.h \
+    Dialogs/YouTube.h \
+    Midi/AiVocal.h \
+    Midi/YtAudio.h \
+    Midi/VocalRemover.h \
+    Dmx/DmxLights.h \
     MedleyLoader.h \
     SettingsDialog.h \
     SongDatabase.h \
@@ -178,6 +198,7 @@ HEADERS  += Widgets/PanKnob.h \
     Vst3/BassVst3.h \
     Remote/QrCode.h \
     Remote/RemoteServer.h \
+    Remote/SongRequestServer.h \
     Remote/RemoteDialog.h
 
 FORMS    += MainWindow.ui \

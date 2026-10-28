@@ -177,6 +177,13 @@ SettingsDialog::SettingsDialog(QWidget *parent, MainWindow *m) :
 
     // Database
     ui->leNCNPath->setText(db->ncnPath());
+    if ((db->hnkPath().isEmpty() || !QDir(db->hnkPath()).exists() || db->hnkPath().endsWith("/Songs/HNK")) && !db->ncnPath().isEmpty()) {
+        QString autoEmk = QFileInfo(db->ncnPath()).dir().absoluteFilePath("EMK");
+        if (QDir(autoEmk).exists()) {
+            db->setHNKPath(autoEmk);
+            settings->setValue("HNKPath", autoEmk);
+        }
+    }
     ui->leHNKPath->setText(db->hnkPath());
     ui->leKARPath->setText(db->karPath());
     ui->lbCountSongsValue->setText(QString::number(db->count()) + " เพลง");
@@ -301,17 +308,15 @@ public:
 
 void SettingsDialog::initDeviceTab()
 {
-    // Midi out device
+    // Midi out device: system/virtual MIDI ports first, the SoundFont synthesizer last
+    // (on_cbMidiOut_activated treats the last item as the synthesizer).
     MidiPlayer *player = mainWin->midiPlayer();
-    int dfd = player->midiOutPortNumber();
-
-
-    // Mixer edition: only the SoundFont synthesizer is offered as output.
-    Q_UNUSED(dfd)
+    for (QString deviceName : MidiPlayer::midiDevices()) {
+        ui->cbMidiOut->addItem(deviceName);
+    }
     ui->cbMidiOut->addItem("Midi Synthesizer (SoundFont)");
-    ui->cbMidiOut->setCurrentIndex(0);
-    ui->cbMidiOut->setVisible(false);   // only one choice: no need to show it
-    ui->label_3->setVisible(false);
+    int dfd = player->midiOutPortNumber();
+    ui->cbMidiOut->setCurrentIndex(dfd == -1 ? ui->cbMidiOut->count() - 1 : dfd);
 
 
     // Midi In device
@@ -853,11 +858,8 @@ void SettingsDialog::initDeviceTab()
         tl->addWidget(sa);
     }
 
-    // Mixer edition: karaoke-player settings (playlist, lyrics, song database,
-    // background, auto update) are not used, keep only audio / synth settings.
-    ui->tabWidget->removeTab(ui->tabWidget->indexOf(ui->tab));
-    ui->tabWidget->removeTab(ui->tabWidget->indexOf(ui->tab_2));
-    ui->tabWidget->removeTab(ui->tabWidget->indexOf(ui->tab_3));
+    // Player edition: the karaoke-player tabs (playlist, lyrics, song database,
+    // background) are used again, so all tabs stay.
 }
 
 void SettingsDialog::on_chbRemoveFromList_toggled(bool checked)
@@ -988,7 +990,7 @@ void SettingsDialog::on_btnNCNPath_clicked()
 void SettingsDialog::on_btnHNKPath_clicked()
 {
     QString path = QFileDialog::getExistingDirectory(
-                this, tr("เลือกที่เก็บไฟล์เพลง HNK"), Utils::LAST_OPEN_DIR,
+                this, tr("เลือกที่เก็บไฟล์เพลง EMK"), Utils::LAST_OPEN_DIR,
                 QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
 
     if (path == "")
@@ -1067,20 +1069,20 @@ void SettingsDialog::on_btnMapChannel_clicked()
 
 void SettingsDialog::on_cbMidiOut_activated(int index)
 {
-    // Mixer edition: only the SoundFont synth exists; re-selecting it must be a no-op.
-    if (mainWin->midiPlayer()->midiOutPortNumber() == -1) {
-        ui->cbMidiOut->setCurrentIndex(0);
-        return;
-    }
-    mainWin->stop();
+    const int synthIndex = ui->cbMidiOut->count() - 1;
+    const int port = (index == synthIndex) ? -1 : index;
+    if (port == mainWin->midiPlayer()->midiOutPortNumber())
+        return;     // same output re-selected: don't stop playback / reopen port
 
-    if (index == (ui->cbMidiOut->count() - 1)) {
-        settings->setValue("MidiOut", -1);
-        mainWin->midiPlayer()->setMidiOut(-1);
-    } else {
-        settings->setValue("MidiOut", index);
-        mainWin->midiPlayer()->setMidiOut(index);
-    }
+    mainWin->stop();
+    mainWin->midiPlayer()->setMidiOut(port);
+
+    // show what is really active (a busy/missing port keeps the previous output)
+    const int cur = mainWin->midiPlayer()->midiOutPortNumber();
+    ui->cbMidiOut->setCurrentIndex(cur == -1 ? synthIndex : cur);
+    settings->setValue("MidiOut", cur);
+    // remembered by device name, because port numbers shift (same as MIDI-in)
+    settings->setValue("MidiOutName", cur == -1 ? QString() : ui->cbMidiOut->itemText(cur));
 
     QList<int> ports;
     for (int i=0; i<16; i++) {
@@ -1495,7 +1497,7 @@ void SettingsDialog::on_btnSfAdd_clicked()
     QStringList sfFiles = QFileDialog::getOpenFileNames(this,
                                                         tr("Add Soundfont"),
                                                         Utils::LAST_OPEN_DIR,
-                                                        "SoundFont (*.sf2 *.SF2 *.sfz *.SFZ)");
+                                                        "SoundFont (*.sf2 *.SF2 *.kmsf *.KMSF *.sfz *.SFZ)");
 
     if (sfFiles.count() > 0)
         Utils::LAST_OPEN_DIR = QFileInfo(sfFiles[0]).dir().absolutePath();

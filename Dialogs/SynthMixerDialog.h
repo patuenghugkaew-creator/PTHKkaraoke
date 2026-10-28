@@ -37,6 +37,8 @@ public:
 
     bool isStaysOnTop() const { return staysOnTop; }
     void setSkipSave(bool skip) { skipSave = skip; }
+    // false: closing the mixer only hides it (the karaoke window owns the program)
+    void setCloseQuitsApp(bool quits) { closeQuitsApp = quits; }
 
 public slots:
     void syncQuickChecks();
@@ -152,6 +154,7 @@ private:
     bool addToMaster = false;   // FX menus add to the master strip instead of currentType
 
     bool staysOnTop = false;
+    bool closeQuitsApp = true;
     bool skipSave = false;
     class TitleBar *titleBar = nullptr;
     Qt::Edges edgesAt(const QPoint &pos) const;
