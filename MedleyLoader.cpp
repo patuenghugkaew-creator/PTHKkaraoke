@@ -76,6 +76,34 @@ void MedleyLoader::run()
                 Utils::readCurFile(emk.curData, _player->midiFileTemp()->resorution()));
         }
     }
+    else if (_song->songType() == "SIB")
+    {
+        QString sibPath = _songDb->sibPath() + _song->path();
+        if (!QFile::exists(sibPath) && !_songDb->sibPath().isEmpty())
+            sibPath = _songDb->sibPath() + "/" + _song->path();
+        if (!QFile::exists(sibPath) && QFile::exists("D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB/" + _song->path()))
+            sibPath = "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB/" + _song->path();
+        if (!QFile::exists(sibPath))
+            sibPath = _song->path();
+
+        PTHKCore::SibSong sib = PTHKCore::readSib(sibPath);
+        if (sib.valid && !sib.midData.isEmpty()) {
+            QFile mid(TEMP_MIDI_DIR_PATH);
+            if (mid.exists())
+                mid.remove();
+
+            mid.open(QFile::ReadWrite);
+            mid.write(sib.midData);
+            mid.close();
+
+            _player->loadNextMedley(TEMP_MIDI_DIR_PATH, _song->cutStartBar(), _song->cutEndBar(), _song->bpmSpeed(), _song->transpose());
+
+            mid.remove();
+
+            _lyrWidget->setLyricsTemp(Utils::readLyrics(sib.lyrData),
+                Utils::readCurFile(sib.curData, _player->midiFileTemp()->resorution()));
+        }
+    }
     else if (_song->songType() == "HNK")
     {
         QString hnkPath = _songDb->hnkPath() + _song->path();

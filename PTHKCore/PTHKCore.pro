@@ -1,4 +1,4 @@
-QT       += core gui widgets network
+QT       += core gui widgets network gui-private
 
 CONFIG   += c++11 dll
 TARGET    = PTHKCore
@@ -13,7 +13,7 @@ INCLUDEPATH += $$PWD/.. \
                $$PWD/../3rdParty/onnxruntime/include \
                $$PWD/../3rdParty/pocketfft
 
-win32: LIBS += -L$$PWD/../3rdParty/onnxruntime/lib -lonnxruntime
+win32: LIBS += -L$$PWD/../3rdParty/onnxruntime/lib -lonnxruntime -lbcrypt
 
 win32 {
     LIBS += -L$$PWD/../BASS/bass24/x64 -lbass \

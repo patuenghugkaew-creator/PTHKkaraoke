@@ -183,9 +183,15 @@ MainWindow::MainWindow(QWidget *parent) :
     db = new SongDatabase();
     kar = Config::relocatePath(useAppSongs && !settings->contains("KARPath") ? (appSongs + "/KAR") : kar);
     settings->setValue("KARPath", kar);
+    QString sib = Config::relocatePath(settings->value("SIBPath", "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB").toString());
+    settings->setValue("SIBPath", sib);
     db->setNcnPath(ncn);
     db->setHNKPath(hnk);
     db->setKarPath(kar);
+    db->setSibPath(sib);
+    if (db->songPaths("SIB").isEmpty() && QFile::exists("D:/REA/SIBSIB KARAOKE/DATA/sibsib_songs.dat")) {
+        db->importSibDatabase("D:/REA/SIBSIB KARAOKE/DATA/sibsib_songs.dat", sib);
+    }
 
 
     timer1 = new QTimer();
@@ -878,6 +884,7 @@ void MainWindow::play(int index, int position)
 {
     const bool targetIsMidi = (index >= 0 && index < playlist.size() &&
         (playlist[index]->songType() == "NCN" || playlist[index]->songType() == "EMK" ||
+         playlist[index]->songType() == "SIB" ||
          playlist[index]->songType() == "HNK" || playlist[index]->songType() == "KAR"));
     if (player->isUseMedley() && player->isPlayerPlaying() && targetIsMidi) {
         loadNextMedley(playlist[index]);
@@ -1044,6 +1051,53 @@ void MainWindow::play(int index, int position)
 
         lyrWidget->setLyrics(Utils::readLyrics(emk.lyrData),
             Utils::readCurFile(emk.curData, player->midiFile()->resorution()));
+    }
+    else if (playingSong.songType() == "SIB")
+    {
+        QString p = playingSong.path();
+        if (!QFile::exists(p) && !db->sibPath().isEmpty())
+            p = db->sibPath() + "/" + playingSong.path();
+        if (!QFile::exists(p) && !db->sibPath().isEmpty())
+            p = db->sibPath() + playingSong.path();
+        if (!QFile::exists(p) && QFile::exists("D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB" + playingSong.path()))
+            p = "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB" + playingSong.path();
+        if (!QFile::exists(p) && QFile::exists("D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB/" + playingSong.path()))
+            p = "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB/" + playingSong.path();
+        if (!QFile::exists(p)) {
+            QMessageBox::warning(this, tr("ไม่สามารถเล่นเพลงได้"),
+                                 tr("ไม่มีไฟล์ ") + p, QMessageBox::Ok);
+            return;
+        }
+
+        PTHKCore::SibSong sib = PTHKCore::readSib(p);
+        if (!sib.valid || sib.midData.isEmpty()) {
+            QMessageBox::warning(this, tr("ไม่สามารถเล่นเพลงได้"),
+                                 tr("ไฟล์อาจเสียหายไม่สามารถอ่านได้"), QMessageBox::Ok);
+            return;
+        }
+
+        QFile mid(TEMP_MIDI_DIR_PATH);
+        if (mid.exists())
+            mid.remove();
+
+        mid.open(QFile::ReadWrite);
+        mid.write(sib.midData);
+        mid.close();
+
+        if (!player->load(TEMP_MIDI_DIR_PATH, true)) {
+            QMessageBox::warning(this, tr("ไม่สามารถเล่นเพลงได้"),
+                                 tr("ไฟล์อาจเสียหายไม่สามารถอ่านได้"), QMessageBox::Ok);
+            mid.remove();
+            return;
+        }
+
+        mid.remove();
+
+        lyrWidget->setLyrics(Utils::readLyrics(sib.lyrData),
+            Utils::readCurFile(sib.curData, player->midiFile()->resorution()));
+        if (secondLyr != nullptr)
+            secondLyr->setLyrics(Utils::readLyrics(sib.lyrData),
+                Utils::readCurFile(sib.curData, player->midiFile()->resorution()));
     }
     else if (playingSong.songType() == "HNK")
     {
@@ -1444,6 +1498,9 @@ QStringList MainWindow::importSongs(const QStringList &files, bool quiet)
         } else if (ext == "emk") {
             type = "EMK";
             root = db->ncnPath();
+        } else if (ext == "sib") {
+            type = "SIB";
+            root = db->sibPath().isEmpty() ? "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB" : db->sibPath();
         } else if (ext == "kar" || ext == "mid" || ext == "midi") {
             type = "KAR";
             root = db->karPath();
@@ -1468,6 +1525,10 @@ QStringList MainWindow::importSongs(const QStringList &files, bool quiet)
             }
         } else if (type == "EMK") {
             PTHKCore::EmkSong s = PTHKCore::readEmk(fi.absoluteFilePath());
+            songTitle = s.title.trimmed();
+            songArtist = s.artist.trimmed();
+        } else if (type == "SIB") {
+            PTHKCore::SibSong s = PTHKCore::readSib(fi.absoluteFilePath());
             songTitle = s.title.trimmed();
             songArtist = s.artist.trimmed();
         } else if (type == "KAR") {
@@ -1508,6 +1569,7 @@ QStringList MainWindow::importSongs(const QStringList &files, bool quiet)
         QString rel = dst.mid(root.length());
         db->removeSongFile(type, rel);
         bool ok = (type == "EMK") ? db->insertEMK(root, fi.completeBaseName(), dst)
+                                  : (type == "SIB") ? db->insertSIB(root, fi.completeBaseName(), dst)
                                   : (type == "KAR") ? db->insertKAR(root, "-------", dst, QFileInfo(dst).fileName())
                                   : db->insertVideo(root, dst, QFileInfo(dst).fileName(), type, type == "MP3" ? "M" : "V");
         if (ok) {
@@ -2540,7 +2602,7 @@ void MainWindow::showImportDialog()
     } else if (pick == aFiles) {
         files = QFileDialog::getOpenFileNames(
                     dialogParent(), tr("เลือกไฟล์เพลงที่จะเพิ่ม (เพลง NCN เลือก .mid .lyr .cur มาด้วยกัน)"), Utils::LAST_OPEN_DIR,
-                    tr("เพลงคาราโอเกะ (*.mid *.midi *.lyr *.cur *.mp4 *.mkv *.avi *.mpg *.mpeg *.wmv *.vob *.dat *.mp3 *.kar *.emk);;ทุกไฟล์ (*)"));
+                    tr("เพลงคาราโอเกะ (*.mid *.midi *.lyr *.cur *.mp4 *.mkv *.avi *.mpg *.mpeg *.wmv *.vob *.dat *.mp3 *.kar *.emk *.sib);;ทุกไฟล์ (*)"));
         if (files.isEmpty())
             return;
         Utils::LAST_OPEN_DIR = QFileInfo(files.first()).absolutePath();

@@ -2,6 +2,14 @@
 #include <QFile>
 #include <QTextCodec>
 #include <QRegExp>
+#include <QBuffer>
+#include <QFileInfo>
+#include <QtGui/private/qzipreader_p.h>
+#ifdef Q_OS_WIN
+#include <windows.h>
+#include <bcrypt.h>
+#pragma comment(lib, "bcrypt.lib")
+#endif
 #include "../Config.h"
 #include "../Widgets/Ed25519.h"
 #include "../Widgets/UsbDongle.h"
@@ -263,6 +271,146 @@ EmkSong readEmk(const QString &filePath)
     if (!song.midData.isEmpty() && !song.lyrData.isEmpty())
         song.valid = true;
 
+    return song;
+}
+
+// ---- 6. SIB Karaoke Engine (AES-256-CBC + ZIP) ----
+bool isSibFile(const QString &filePath)
+{
+    return filePath.endsWith(QLatin1String(".sib"), Qt::CaseInsensitive);
+}
+
+static QByteArray decryptSibAES(const QByteArray &cipherData)
+{
+#ifdef Q_OS_WIN
+    if (cipherData.size() < 16)
+        return QByteArray();
+
+    static const unsigned char keyBytes[32] = {
+        'S','i','b','s','i','b','@','K','A','R','A','O','K','E','_','P',
+        'r','o','#','2','0','2','6','!','G','l','o','b','a','l','$','$'
+    };
+    static const unsigned char ivBytes[16] = {
+        'S','i','b','#','2','0','2','6','!','I','n','i','t','V','e','c'
+    };
+
+    BCRYPT_ALG_HANDLE hAlg = NULL;
+    NTSTATUS status = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_AES_ALGORITHM, NULL, 0);
+    if (status != 0)
+        return QByteArray();
+
+    status = BCryptSetProperty(hAlg, BCRYPT_CHAINING_MODE, (PUCHAR)BCRYPT_CHAIN_MODE_CBC, sizeof(BCRYPT_CHAIN_MODE_CBC), 0);
+    if (status != 0) {
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+        return QByteArray();
+    }
+
+    BCRYPT_KEY_HANDLE hKey = NULL;
+    DWORD keyObjSize = 0, cbResult = 0;
+    BCryptGetProperty(hAlg, BCRYPT_OBJECT_LENGTH, (PUCHAR)&keyObjSize, sizeof(DWORD), &cbResult, 0);
+    QByteArray keyObj;
+    keyObj.resize((int)keyObjSize);
+
+    status = BCryptGenerateSymmetricKey(hAlg, &hKey, (PUCHAR)keyObj.data(), keyObjSize, (PUCHAR)keyBytes, 32, 0);
+    if (status != 0) {
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+        return QByteArray();
+    }
+
+    unsigned char ivBuf[16];
+    memcpy(ivBuf, ivBytes, 16);
+
+    DWORD decryptedSize = 0;
+    status = BCryptDecrypt(hKey, (PUCHAR)cipherData.constData(), (ULONG)cipherData.size(), NULL,
+                           ivBuf, 16, NULL, 0, &decryptedSize, BCRYPT_BLOCK_PADDING);
+
+    QByteArray plain;
+    if (status == 0 && decryptedSize > 0) {
+        plain.resize((int)decryptedSize);
+        memcpy(ivBuf, ivBytes, 16);
+        DWORD actualDec = 0;
+        status = BCryptDecrypt(hKey, (PUCHAR)cipherData.constData(), (ULONG)cipherData.size(), NULL,
+                               ivBuf, 16, (PUCHAR)plain.data(), (ULONG)plain.size(), &actualDec, BCRYPT_BLOCK_PADDING);
+        if (status == 0 && actualDec > 0) {
+            plain.resize((int)actualDec);
+        } else {
+            plain.clear();
+        }
+    }
+
+    BCryptDestroyKey(hKey);
+    BCryptCloseAlgorithmProvider(hAlg, 0);
+    return plain;
+#else
+    Q_UNUSED(cipherData);
+    return QByteArray();
+#endif
+}
+
+SibSong readSibData(const QByteArray &data)
+{
+    SibSong song;
+    if (data.size() < 16)
+        return song;
+
+    QByteArray cipherData;
+    if (data.startsWith("SIBAES")) {
+        cipherData = data.mid(6);
+    } else {
+        cipherData = data;
+    }
+
+    QByteArray plain = decryptSibAES(cipherData);
+    if (plain.size() < 30 || !plain.startsWith("PK"))
+        return song;
+
+    QBuffer buf(&plain);
+    buf.open(QIODevice::ReadOnly);
+    QZipReader zip(&buf);
+    if (!zip.isReadable())
+        return song;
+
+    const auto entries = zip.fileInfoList();
+    for (const auto &e : entries) {
+        const QString lower = e.filePath.toLower();
+        if (lower.endsWith(".mid") || lower.endsWith(".midi")) {
+            song.midData = zip.fileData(e.filePath);
+            if (song.code.isEmpty())
+                song.code = QFileInfo(e.filePath).completeBaseName();
+        } else if (lower.endsWith(".lyr")) {
+            song.lyrData = zip.fileData(e.filePath);
+        } else if (lower.endsWith(".cur")) {
+            song.curData = zip.fileData(e.filePath);
+        }
+    }
+
+    if (!song.lyrData.isEmpty()) {
+        QTextCodec *tis620 = QTextCodec::codecForName("TIS-620");
+        if (!tis620) tis620 = QTextCodec::codecForName("Windows-874");
+        const QString lyrText = tis620 ? tis620->toUnicode(song.lyrData) : QString::fromLatin1(song.lyrData);
+        const QStringList lines = lyrText.split(QRegExp("[\r\n]+"), Qt::SkipEmptyParts);
+        if (lines.size() > 0) song.title = lines[0].trimmed();
+        if (lines.size() > 1) song.artist = lines[1].trimmed();
+        if (lines.size() > 2) song.key = lines[2].trimmed();
+    }
+
+    if (!song.midData.isEmpty() && !song.lyrData.isEmpty())
+        song.valid = true;
+
+    return song;
+}
+
+SibSong readSib(const QString &filePath)
+{
+    SibSong song;
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly))
+        return song;
+    const QByteArray raw = file.readAll();
+    file.close();
+    song = readSibData(raw);
+    if (song.code.isEmpty())
+        song.code = QFileInfo(filePath).completeBaseName();
     return song;
 }
 

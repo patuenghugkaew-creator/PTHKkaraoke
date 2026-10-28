@@ -77,6 +77,12 @@ public:
     QString mp3Path() { return _mp3Path; }
     void setMp3Path(const QString &p) { _mp3Path = p; }
 
+    // SIB songs (SIBSIB Karaoke AES-256 + ZIP); songtype "SIB"
+    QString sibPath() { return _sibPath; }
+    void setSibPath(const QString &p) { _sibPath = p; }
+    bool insertSIB(const QString &basePath, const QString &songId, const QString &sibFilePath);
+    int importSibDatabase(const QString &datPath, const QString &sibBasePath);
+
     // remove the row of one file (before adding it again), songtype + path as stored
     void removeSongFile(const QString &type, const QString &path);
     QString songIdFor(const QString &type, const QString &path);
@@ -152,6 +158,7 @@ private:
     QString _karPath = "";
     QString _videoPath = "";
     QString _mp3Path = "";
+    QString _sibPath = "";
 
 
     int upCount = 0;

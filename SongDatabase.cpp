@@ -767,6 +767,127 @@ bool SongDatabase::insertEMK(const QString &basePath, const QString &songId, con
     return ok;
 }
 
+bool SongDatabase::insertSIB(const QString &basePath, const QString &songId, const QString &sibFilePath)
+{
+    PTHKCore::SibSong s = PTHKCore::readSib(sibFilePath);
+    if (!s.valid || s.midData.isEmpty())
+        return false;
+
+    QString id = songId;
+    if (id.isEmpty())
+        id = s.code.isEmpty() ? QFileInfo(sibFilePath).completeBaseName() : s.code;
+
+    QString name = s.title.isEmpty() ? QFileInfo(sibFilePath).completeBaseName() : s.title;
+    QString artist = s.artist;
+    QString key = s.key;
+    int bpm = s.tempo > 0 ? s.tempo : 120;
+    QString type = "SIB";
+
+    QTextCodec *tis620 = QTextCodec::codecForName("TIS-620");
+    if (!tis620) tis620 = QTextCodec::codecForName("Windows-874");
+    QString lyrText = tis620 ? tis620->toUnicode(s.lyrData) : QString::fromLatin1(s.lyrData);
+    QStringList lines = lyrText.split(QRegExp("[\r\n]+"), Qt::SkipEmptyParts);
+    QString lyrSample;
+    for (int j = 0; j < qMin(5, lines.size()); ++j) {
+        lyrSample += lines[j] + " ";
+    }
+    lyrSample = lyrSample.trimmed();
+
+    QString path = sibFilePath;
+    if (!basePath.isEmpty() && path.startsWith(basePath))
+        path = path.mid(basePath.length());
+
+    QSqlQuery query(db);
+    query.prepare("INSERT INTO songs VALUES (?, ?, ?, ?, ?, ?, ?, ?);");
+    query.bindValue(0, id);
+    query.bindValue(1, name);
+    query.bindValue(2, artist);
+    query.bindValue(3, key);
+    query.bindValue(4, bpm);
+    query.bindValue(5, type);
+    query.bindValue(6, lyrSample);
+    query.bindValue(7, path);
+
+    bool ok = query.exec();
+    query.finish();
+    query.clear();
+    return ok;
+}
+
+int SongDatabase::importSibDatabase(const QString &datPath, const QString &sibBasePath)
+{
+    QFile file(datPath);
+    if (!file.open(QIODevice::ReadOnly))
+        return 0;
+
+    const QByteArray data = file.readAll();
+    file.close();
+    if (data.size() < 494)
+        return 0;
+
+    const int count = (int)(*(const quint32*)data.constData());
+    if (count <= 0)
+        return 0;
+
+    QTextCodec *cp874 = QTextCodec::codecForName("TIS-620");
+    if (!cp874) cp874 = QTextCodec::codecForName("Windows-874");
+
+    QSet<QString> existingKeys = songNameArtistKeys();
+    int added = 0;
+    db.transaction();
+    QSqlQuery query(db);
+    query.prepare("INSERT INTO songs VALUES (?, ?, ?, ?, ?, ?, ?, ?);");
+
+    const int recSize = 490;
+    for (int i = 0; i < count; ++i) {
+        const int off = 4 + i * recSize;
+        if (off + recSize > data.size())
+            break;
+
+        const char *rec = data.constData() + off;
+        const QString id = QString::fromLatin1(rec, qstrnlen(rec, 20)).trimmed();
+        if (id.isEmpty())
+            continue;
+
+        const QString title = cp874 ? cp874->toUnicode(rec + 20, qstrnlen(rec + 20, 100)).trimmed()
+                                    : QString::fromLatin1(rec + 20, qstrnlen(rec + 20, 100)).trimmed();
+        const QString artist = cp874 ? cp874->toUnicode(rec + 120, qstrnlen(rec + 120, 100)).trimmed()
+                                     : QString::fromLatin1(rec + 120, qstrnlen(rec + 120, 100)).trimmed();
+        const QString key = QString::fromLatin1(rec + 480, qstrnlen(rec + 480, 6)).trimmed();
+        const QString songType = QString::fromLatin1(rec + 220, qstrnlen(rec + 220, 30)).trimmed();
+
+        const QString songKey = makeSongKey(title, artist);
+        if (!songKey.isEmpty() && existingKeys.contains(songKey))
+            continue;
+
+        QString relPath;
+        if (songType == "SIBKLDEMO") {
+            relPath = QStringLiteral("/SIBKLDEMO/") + id + QStringLiteral(".sibkldemo");
+        } else {
+            const QChar firstChar = id.isEmpty() ? QChar('0') : id.at(0).toUpper();
+            relPath = QStringLiteral("/") + QString(firstChar) + QStringLiteral("/") + id + QStringLiteral(".sib");
+        }
+
+        query.bindValue(0, id);
+        query.bindValue(1, title);
+        query.bindValue(2, artist);
+        query.bindValue(3, key);
+        query.bindValue(4, 120);
+        query.bindValue(5, QStringLiteral("SIB"));
+        query.bindValue(6, QString());
+        query.bindValue(7, relPath);
+
+        if (query.exec()) {
+            added++;
+            if (!songKey.isEmpty())
+                existingKeys.insert(songKey);
+        }
+    }
+
+    db.commit();
+    return added;
+}
+
 bool SongDatabase::insertKAR(const QString &karPath, const QString &songId, const QString &karFilePath, const QString &fileName)
 {
     QString id = songId;

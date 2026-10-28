@@ -95,6 +95,23 @@ struct EmkSong {
 PTHKCORE_EXPORT bool isEmkFile(const QString &filePath);
 PTHKCORE_EXPORT EmkSong readEmk(const QString &filePath);
 
+// ---- 6. SIB Karaoke Engine (SIBSIB Karaoke AES-256 + ZIP) ----
+struct SibSong {
+    bool valid = false;
+    QString code;
+    QString title;
+    QString artist;
+    QString key;
+    int tempo = 120;
+    QByteArray midData;
+    QByteArray lyrData;
+    QByteArray curData;
+};
+
+PTHKCORE_EXPORT bool isSibFile(const QString &filePath);
+PTHKCORE_EXPORT SibSong readSib(const QString &filePath);
+PTHKCORE_EXPORT SibSong readSibData(const QByteArray &data);
+
 } // namespace PTHKCore
 
 // Compatibility namespace for MasterDsp
