@@ -150,6 +150,7 @@ protected:
 
 private:
     void loadNextMedley(Song *song);
+    void openMedleySettings();
     void addToPlaylist(Song *song);
     void removeFromPlaylist(int index);
     void swapInPlaylist(int index, int toIndex);

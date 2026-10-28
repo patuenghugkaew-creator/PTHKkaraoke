@@ -758,6 +758,9 @@ MainWindow::MainWindow(QWidget *parent) :
                 btnMedley->setChecked(player->isUseMedley());
             });
 
+            QPushButton *btnMedleySettings = addBarButton(tr("ตั้งค่าเมดเลย์"), tr("ตั้งค่าเมดเลย์: BPM, จำนวนห้องลูกส่งรอ, ลายกลองส่ง"));
+            connect(btnMedleySettings, &QPushButton::clicked, this, [this]() { openMedleySettings(); });
+
             btnMuteVocal = addBarButton(tr("ตัดเสียงร้อง"), tr("ปิด / เปิด เสียงร้องนำ (*)"));
             btnMuteVocal->setCheckable(true);
             connect(btnMuteVocal, &QPushButton::toggled, this, [this](bool on) {
@@ -3287,11 +3290,17 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         player->midiSequencer()->applyAutoMedleyBounds(lyrWidget->curData(), playingSong.cutStartBar(), playingSong.cutEndBar(), lyrWidget->lastActiveLyricTick());
     }
     if (player->isUseMedley()) {
-            QMessageBox::StandardButton resBtn = QMessageBox::question(
-                                                    this, tr("ปิดเมลเลย์"),
-                                                    tr("ท่านต้องการปิดโหมดเมลเลย์?"),
-                                                    QMessageBox::Yes|QMessageBox::No);
-            if (resBtn == QMessageBox::Yes) {
+            QMessageBox box(this);
+            box.setWindowTitle(tr("เมดเลย์"));
+            box.setText(tr("โหมดเมดเลย์กำลังเปิดอยู่ ต้องการทำอะไร?"));
+            QPushButton *btnSettings = box.addButton(tr("ตั้งค่าเมดเลย์"), QMessageBox::AcceptRole);
+            QPushButton *btnOff = box.addButton(tr("ปิดเมดเลย์"), QMessageBox::DestructiveRole);
+            box.addButton(tr("ยกเลิก"), QMessageBox::RejectRole);
+            box.setDefaultButton(btnSettings);
+            box.exec();
+            if (box.clickedButton() == btnSettings) {
+                openMedleySettings();
+            } else if (box.clickedButton() == btnOff) {
                 player->setUseMedley(false);
                 player->unloadNextMedley();
                 if (!player->isPlayerStopped())
@@ -3304,33 +3313,9 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
                     ui->lcdTime->hide();
             }
         } else {
-            MedleyDialog dlg(this, player);
-            dlg.adjustSize();
-            dlg.setFixedSize(dlg.size());
-            dlg.setModal(true);
-            dlg.exec();
-
-            if (player->isUseMedley()) {
-                if (player->midiFile() && !player->midiFile()->events().isEmpty()) {
-                    player->midiFile()->setSingleTempo(true);
-                    const int targetBpm = player->medleyBPM() > 0 ? player->medleyBPM() : player->currentBpm();
-                    const int baseBpm = player->currentBpm() - player->bpmSpeed();
-                    player->setBpmSpeed(targetBpm - baseBpm);
-                    playingSong.setBpmSpeed(player->bpmSpeed());
-                    player->midiSequencer()->applyAutoMedleyBounds(lyrWidget->curData(), playingSong.cutStartBar(), playingSong.cutEndBar(), lyrWidget->lastActiveLyricTick());
-                }
-                if (!player->isPlayerStopped() && (playlist.size() > (playingIndex + 1)))
-                    loadNextMedley(playlist[playingIndex + 1]);
-                const QString barsInfo = player->medleyTransitionBars() > 0
-                    ? tr("(%1 BPM, ลูกส่งรอ %2 ห้อง)").arg(player->medleyBPM()).arg(player->medleyTransitionBars())
-                    : tr("(%1 BPM, ต่อทันที)").arg(player->medleyBPM());
-                ui->detail->setDetail(tr("เมดเลย์ "), tr("เปิด %1").arg(barsInfo));
-                ui->detail->show();
-                detailTimer->start(3000);
-                if (this->width() < 1160 && ui->chMix->isVisible())
-                    ui->lcdTime->hide();
-            }
+            openMedleySettings();
         }
+        if (btnMedley) { QSignalBlocker b(btnMedley); btnMedley->setChecked(player->isUseMedley()); }
         break;
     }
     case Qt::Key_F5: {
@@ -3675,8 +3660,10 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                     const int maxVal = ui->sliderPosition->maximum();
                     const int val = int(minVal + ratio * (maxVal - minVal));
                     ui->sliderPosition->setValue(val);
+                    // setSliderDown(true) emits sliderPressed() -> onSliderPositionPressed().
+                    // Do NOT call it again here: a second call reads the already-paused
+                    // state, sets playAfterSeek=false and the song stays paused after seek.
                     ui->sliderPosition->setSliderDown(true);
-                    onSliderPositionPressed();
                     emit ui->sliderPosition->sliderMoved(val);
                     return true;
                 }
@@ -3698,8 +3685,10 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         } else if (event->type() == QEvent::MouseButtonRelease) {
             QMouseEvent *me = static_cast<QMouseEvent *>(event);
             if (me->button() == Qt::LeftButton) {
-                ui->sliderPosition->setSliderDown(false);
-                onSliderPositionReleased();
+                // setSliderDown(false) emits sliderReleased() -> onSliderPositionReleased().
+                // Calling it twice would seek twice and break resume.
+                if (ui->sliderPosition->isSliderDown())
+                    ui->sliderPosition->setSliderDown(false);
                 return true;
             }
         }
@@ -3729,6 +3718,40 @@ void MainWindow::keyReleaseEvent(QKeyEvent *event)
     if (event->modifiers() == Qt::ControlModifier) {
         this->sendDrumPads(event, false);
     }
+}
+
+// Opens the Medley settings (BPM / transition bars / drum fill pattern).
+// Works whether Medley is currently ON or OFF; OK always turns Medley ON
+// with the new settings and re-prepares the next song.
+void MainWindow::openMedleySettings()
+{
+    MedleyDialog dlg(this, player);
+    dlg.adjustSize();
+    dlg.setFixedSize(dlg.size());
+    dlg.setModal(true);
+    dlg.exec();
+
+    if (player->isUseMedley()) {
+        if (player->midiFile() && !player->midiFile()->events().isEmpty()) {
+            player->midiFile()->setSingleTempo(true);
+            const int targetBpm = player->medleyBPM() > 0 ? player->medleyBPM() : player->currentBpm();
+            const int baseBpm = player->currentBpm() - player->bpmSpeed();
+            player->setBpmSpeed(targetBpm - baseBpm);
+            playingSong.setBpmSpeed(player->bpmSpeed());
+            player->midiSequencer()->applyAutoMedleyBounds(lyrWidget->curData(), playingSong.cutStartBar(), playingSong.cutEndBar(), lyrWidget->lastActiveLyricTick());
+        }
+        if (!player->isPlayerStopped() && (playlist.size() > (playingIndex + 1)))
+            loadNextMedley(playlist[playingIndex + 1]);
+        const QString barsInfo = player->medleyTransitionBars() > 0
+            ? tr("(%1 BPM, ลูกส่งรอ %2 ห้อง)").arg(player->medleyBPM()).arg(player->medleyTransitionBars())
+            : tr("(%1 BPM, ต่อทันที)").arg(player->medleyBPM());
+        ui->detail->setDetail(tr("เมดเลย์ "), tr("เปิด %1").arg(barsInfo));
+        ui->detail->show();
+        detailTimer->start(3000);
+        if (this->width() < 1160 && ui->chMix->isVisible())
+            ui->lcdTime->hide();
+    }
+    if (btnMedley) { QSignalBlocker b(btnMedley); btnMedley->setChecked(player->isUseMedley()); }
 }
 
 void MainWindow::loadNextMedley(Song *song)
