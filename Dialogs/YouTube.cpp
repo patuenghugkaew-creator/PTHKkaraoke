@@ -1137,7 +1137,7 @@ void YouTubePlayer::playVideo(const QString &videoId, int volume)
         "    ifr.contentWindow.postMessage({type:'PTHK_TOGGLE_CAPTIONS',visible:showCc},'*');"
         "  }"
         "},"
-        "onStateChange:function(e){if(e.data===1&&VQ&&e.target.setPlaybackQuality)e.target.setPlaybackQuality(VQ);},"
+        "onStateChange:function(e){},"
         "onError:function(e){E=e.data;}"
         "}});}"
         "function pthkState(){if(!P||!P.getPlayerState)return JSON.stringify({s:-2,e:E});"

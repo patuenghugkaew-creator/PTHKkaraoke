@@ -2531,6 +2531,7 @@ void MainWindow::playYouTube()
             if (!pm.isNull()) {
 #ifdef KM_HAVE_PROCLOOP
                 static bool delayedPrimed = false;
+                static bool firstFrameShown = false;
                 const double d = (ytAudio && settings->value("YtDelayPicture", true).toBool()) ? ytAudio->delaySeconds() : 0.0;
                 if (d > 0.15) {
                     if (!frameClock.isValid())
@@ -2538,8 +2539,10 @@ void MainWindow::playYouTube()
                     const qint64 now = frameClock.elapsed();
 
                     // ถ้าคิวว่างเปล่า แปลว่าเพิ่งเริ่มเพลงใหม่ ให้รีเซ็ตสถานะการ Prime อัตโนมัติ
-                    if (delayedFrames.empty())
+                    if (delayedFrames.empty()) {
                         delayedPrimed = false;
+                        firstFrameShown = false;
+                    }
 
                     delayedFrames.push_back({ now, pm.toImage() });
 
@@ -2559,9 +2562,14 @@ void MainWindow::playYouTube()
                         if (secondLyr != nullptr && secondMonitor)
                             secondMonitor->setVideoPixmap(showPm);
                     } else if (!delayedPrimed) {
-                        videoWidget->setPixmap(pm);
-                        if (secondLyr != nullptr && secondMonitor)
-                            secondMonitor->setVideoPixmap(pm);
+                        // ช่วงที่กำลังเริ่มบัฟเฟอร์ แสดงเฉพาะภาพแรก (Frame 0) ค้างไว้
+                        // เพื่อไม่ให้ภาพวิดีโอเล่นล่วงหน้าไปก่อนแล้วกระโดดถอยหลังกลับมาเล่นซ้ำ
+                        if (!firstFrameShown) {
+                            firstFrameShown = true;
+                            videoWidget->setPixmap(pm);
+                            if (secondLyr != nullptr && secondMonitor)
+                                secondMonitor->setVideoPixmap(pm);
+                        }
                     }
                 } else {
                     delayedPrimed = false;
