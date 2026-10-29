@@ -37,6 +37,9 @@ public:
             return true;
         if (surfaceFormat().scanLineDirection() == QVideoSurfaceFormat::BottomToTop)
             img = img.mirrored(false, true);
+        // แปลงเป็น RGB32 ให้เสร็จใน Background Thread เพื่อให้ QPainter วาดลงจอได้ทันทีโดยไม่ต้องแปลงสีซ้ำใน UI Thread
+        if (img.format() != QImage::Format_RGB32 && img.format() != QImage::Format_ARGB32_Premultiplied)
+            img = std::move(img).convertToFormat(QImage::Format_RGB32);
         if (onFrame)
             onFrame(img);
         return true;
@@ -76,20 +79,28 @@ protected:
     void paintEvent(QPaintEvent *) override
     {
         QPainter p(this);
-        // Guaranteed solid black clear to prevent double-buffer oscillation or transparent bleed
-        p.fillRect(rect(), Qt::black);
+        p.setCompositionMode(QPainter::CompositionMode_Source);
+        p.setRenderHint(QPainter::SmoothPixmapTransform, false);
+        p.setRenderHint(QPainter::Antialiasing, false);
 
         const QSize frameSize = hasPixmap ? pixmap.size() : frame.size();
-        if (frameSize.isEmpty())
+        if (frameSize.isEmpty()) {
+            p.fillRect(rect(), Qt::black);
             return;
+        }
 
         QSize s = frameSize.scaled(size(), Qt::KeepAspectRatio);
         QRect r(QPoint((width() - s.width()) / 2, (height() - s.height()) / 2), s);
 
-        // CompositionMode_Source directly overwrites destination buffer without alpha-blend flicker
-        p.setCompositionMode(QPainter::CompositionMode_Source);
-        p.setRenderHint(QPainter::SmoothPixmapTransform, false);
-        p.setRenderHint(QPainter::Antialiasing, false);
+        // ระบายสีดำเฉพาะขอบที่เหลือ (ไม่ระบายทับพื้นที่วิดีโอตรงกลาง)
+        if (r.top() > 0)
+            p.fillRect(0, 0, width(), r.top(), Qt::black);
+        if (r.bottom() < height() - 1)
+            p.fillRect(0, r.bottom() + 1, width(), height() - r.bottom() - 1, Qt::black);
+        if (r.left() > 0)
+            p.fillRect(0, r.top(), r.left(), r.height(), Qt::black);
+        if (r.right() < width() - 1)
+            p.fillRect(r.right() + 1, r.top(), width() - r.right() - 1, r.height(), Qt::black);
 
         if (hasPixmap) {
             p.drawPixmap(r, pixmap);

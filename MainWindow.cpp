@@ -151,8 +151,11 @@ MainWindow::MainWindow(QWidget *parent) :
     videoWidget = new FrameVideoWidget(this);  // karaoke video songs: above the background, below the lyrics
     videoWidget->hide();
     videoWidget->onFrameShown = [this](const QImage &img) {     // mirror on the 2nd screen
-        if (secondLyr != nullptr && videoActive && !mediaIsAudio)
-            secondMonitor->setVideoFrame(img);
+        if (secondLyr != nullptr && videoActive && !mediaIsAudio) {
+            QPixmap sharedPm = QPixmap::fromImage(img);
+            videoWidget->setPixmap(sharedPm);
+            secondMonitor->setVideoPixmap(sharedPm);
+        }
     };
     lyrWidget = new LyricsWidget(this);
     updateDetail = new Detail(this);
@@ -2534,7 +2537,10 @@ void MainWindow::playYouTube()
                         frameClock.start();
                     const qint64 now = frameClock.elapsed();
 
-                    // ytPlayer is already 854x480, directly store pm.toImage() without redundant CPU scaling
+                    // ถ้าคิวว่างเปล่า แปลว่าเพิ่งเริ่มเพลงใหม่ ให้รีเซ็ตสถานะการ Prime อัตโนมัติ
+                    if (delayedFrames.empty())
+                        delayedPrimed = false;
+
                     delayedFrames.push_back({ now, pm.toImage() });
 
                     const qint64 target = now - qint64(d * 1000);
@@ -2548,17 +2554,15 @@ void MainWindow::playYouTube()
 
                     if (!show.isNull()) {
                         delayedPrimed = true;
-                        videoWidget->setFrame(show);
+                        QPixmap showPm = QPixmap::fromImage(std::move(show));
+                        videoWidget->setPixmap(showPm);
                         if (secondLyr != nullptr && secondMonitor)
-                            secondMonitor->setVideoFrame(show);
+                            secondMonitor->setVideoPixmap(showPm);
                     } else if (!delayedPrimed) {
-                        // While the delayed buffer is priming for the first time, show live frame
                         videoWidget->setPixmap(pm);
                         if (secondLyr != nullptr && secondMonitor)
                             secondMonitor->setVideoPixmap(pm);
                     }
-                    // Once primed, if no new frame is due in this tick (timer jitter), keep previous frame.
-                    // NEVER alternate back to live pm, preventing severe past/present flickering!
                 } else {
                     delayedPrimed = false;
                     if (!delayedFrames.empty())
