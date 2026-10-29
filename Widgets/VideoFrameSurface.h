@@ -4,6 +4,7 @@
 #include <QAbstractVideoSurface>
 #include <QImage>
 #include <QPainter>
+#include <QPixmap>
 #include <QVideoSurfaceFormat>
 #include <QWidget>
 #include <functional>
@@ -59,25 +60,46 @@ public:
     std::function<void(const QImage &)> onFrameShown;   // e.g. to mirror the video on the 2nd screen
 
     QAbstractVideoSurface *videoSurface() const { return surface; }
-    void setFrame(const QImage &img) { frame = img; update(); }
-    void clear() { frame = QImage(); update(); }
+    void setFrame(const QImage &img) { frame = img; pixmap = QPixmap(); hasPixmap = false; update(); }
+    void setPixmap(const QPixmap &pm) { pixmap = pm; frame = QImage(); hasPixmap = true; update(); }
+    void clear() { frame = QImage(); pixmap = QPixmap(); hasPixmap = false; update(); }
 
 protected:
     void paintEvent(QPaintEvent *) override
     {
         QPainter p(this);
-        p.fillRect(rect(), Qt::black);
-        if (frame.isNull())
+        const QSize frameSize = hasPixmap ? pixmap.size() : frame.size();
+        if (frameSize.isEmpty()) {
+            p.fillRect(rect(), Qt::black);
             return;
-        QSize s = frame.size().scaled(size(), Qt::KeepAspectRatio);
+        }
+
+        QSize s = frameSize.scaled(size(), Qt::KeepAspectRatio);
         QRect r(QPoint((width() - s.width()) / 2, (height() - s.height()) / 2), s);
-        p.setRenderHint(QPainter::SmoothPixmapTransform);
-        p.drawImage(r, frame);
+
+        // Fill black only in letterbox/pillarbox margins (avoid full-screen fill overhead)
+        if (r.top() > 0)
+            p.fillRect(0, 0, width(), r.top(), Qt::black);
+        if (r.bottom() < height() - 1)
+            p.fillRect(0, r.bottom() + 1, width(), height() - r.bottom() - 1, Qt::black);
+        if (r.left() > 0)
+            p.fillRect(0, r.top(), r.left(), r.height(), Qt::black);
+        if (r.right() < width() - 1)
+            p.fillRect(r.right() + 1, r.top(), width() - r.right() - 1, r.height(), Qt::black);
+
+        if (hasPixmap) {
+            p.drawPixmap(r, pixmap);
+        } else {
+            p.setRenderHint(QPainter::SmoothPixmapTransform);
+            p.drawImage(r, frame);
+        }
     }
 
 private:
     VideoFrameSurface *surface;
     QImage frame;
+    QPixmap pixmap;
+    bool hasPixmap = false;
 };
 
 #endif // VIDEOFRAMESURFACE_H

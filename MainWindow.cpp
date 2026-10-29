@@ -2514,13 +2514,14 @@ void MainWindow::playYouTube()
         ytMirrorTimer = new QTimer(this);
         ytMirrorTimer->setInterval(33);
         connect(ytMirrorTimer, &QTimer::timeout, this, [this]() {
-            if (!ytActive || !ytPlayer->isVisible())
+            if (!ytActive || !ytPlayer || !ytPlayer->isVisible() || !ytPlayer->isStarted())
                 return;
-            // copy only while the new clip plays: before that the view can still show the last
-            // picture of the previous song, which (delayed for the AI) would flash up before the new one
-            QImage img;
-            if (ytPlayer->isStarted())
-                img = ytPlayer->grab().toImage();
+
+            static bool busy = false;
+            if (busy)
+                return;     // Drop frame if previous grab/render is still active to prevent timer event pile-up
+            busy = true;
+
 #ifdef KM_HAVE_PROCLOOP
             // AI vocal cut: the sound is D seconds late, so the picture is shown D seconds late too
             const double d = (ytAudio && settings->value("YtDelayPicture", true).toBool()) ? ytAudio->delaySeconds() : 0.0;
@@ -2528,10 +2529,12 @@ void MainWindow::playYouTube()
                 if (!frameClock.isValid())
                     frameClock.start();
                 const qint64 now = frameClock.elapsed();
-                // kept small (854 x 480, 3 bytes a pixel): about 240 MB for 6.5 s at 30 frames a second
-                if (!img.isNull())
-                    delayedFrames.push_back({ now, img.scaled(854, 480, Qt::KeepAspectRatio, Qt::FastTransformation)
+                QPixmap pm = ytPlayer->grab();
+                if (!pm.isNull()) {
+                    // kept small (854 x 480, 3 bytes a pixel): about 240 MB for 6.5 s at 30 frames a second
+                    delayedFrames.push_back({ now, pm.toImage().scaled(854, 480, Qt::KeepAspectRatio, Qt::FastTransformation)
                                                        .convertToFormat(QImage::Format_RGB888) });
+                }
                 const qint64 target = now - qint64(d * 1000);
                 QImage show;
                 while (!delayedFrames.empty() && delayedFrames.front().t <= target) {
@@ -2540,16 +2543,34 @@ void MainWindow::playYouTube()
                 }
                 while (delayedFrames.size() > 400)          // never more than ~13 s of picture
                     delayedFrames.pop_front();
-                img = show;                                 // null: the delayed picture is not due yet
-            } else if (!delayedFrames.empty()) {
-                delayedFrames.clear();
+
+                if (!show.isNull()) {
+                    QPixmap showPm = QPixmap::fromImage(show);
+                    videoWidget->setPixmap(showPm);
+                    if (secondLyr != nullptr && secondMonitor)
+                        secondMonitor->setVideoPixmap(showPm);
+                }
+            } else {
+                if (!delayedFrames.empty())
+                    delayedFrames.clear();
+
+                // FAST PATH: Zero CPU conversions! Direct GPU hardware texture blit via QPixmap
+                QPixmap pm = ytPlayer->grab();
+                if (!pm.isNull()) {
+                    videoWidget->setPixmap(pm);
+                    if (secondLyr != nullptr && secondMonitor)
+                        secondMonitor->setVideoPixmap(pm);
+                }
+            }
+#else
+            QPixmap pm = ytPlayer->grab();
+            if (!pm.isNull()) {
+                videoWidget->setPixmap(pm);
+                if (secondLyr != nullptr && secondMonitor)
+                    secondMonitor->setVideoPixmap(pm);
             }
 #endif
-            if (img.isNull())
-                return;
-            videoWidget->setFrame(img);
-            if (secondLyr != nullptr)
-                secondMonitor->setVideoFrame(img);
+            busy = false;
         });
         ytPlayer->stackUnder(videoWidget);  // under the copies; search box, queue and lyrics stay on top
         connect(ytPlayer, &YouTubePlayer::durationChanged, this, [this](qint64 d) {
@@ -2660,7 +2681,7 @@ void MainWindow::playYouTube()
 
     ui->sliderPosition->setValue(0);
     bgWidget->setVideoPaused(true);
-    ytPlayer->resize(ui->centralWidget->size());
+    ytPlayer->resize(1280, 720);
     ytPlayer->show();
     videoWidget->clear();
     videoWidget->resize(ui->centralWidget->size());
@@ -3302,7 +3323,7 @@ void MainWindow::resizeEvent(QResizeEvent *event)
     videoWidget->resize(ui->centralWidget->size());
 #ifdef PTHK_WEBENGINE
     if (ytPlayer)
-        ytPlayer->resize(ui->centralWidget->size());
+        ytPlayer->resize(1280, 720);
 #endif
     lyrWidget->resize(ui->centralWidget->size());
     updateDetail->move(width() - 260, 70);

@@ -30,6 +30,7 @@ public:
 
     // video songs / YouTube mirrored from the player's screen
     void setVideoFrame(const QImage &img) { videoView->setFrame(img); }
+    void setVideoPixmap(const QPixmap &pm) { videoView->setPixmap(pm); }
     void setVideoVisible(bool on);
 
 signals:
