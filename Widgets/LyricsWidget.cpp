@@ -554,7 +554,10 @@ void LyricsWidget::paintEvent(QPaintEvent *event)
 
 void LyricsWidget::onAnimationValueChanged(const QVariant &v)
 {
-    cursor_width = v.toInt();
+    const int w = v.toInt();
+    if (w == cursor_width)
+        return;
+    cursor_width = w;
     update(updateArea);
 }
 

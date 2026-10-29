@@ -199,10 +199,11 @@ MainWindow::MainWindow(QWidget *parent) :
     timer2->setSingleShot(true);
 
     positionTimer = new QTimer(this);
-    positionTimer->setInterval(30);
+    positionTimer->setInterval(80); // 12.5 FPS for slider and background, saving GUI cycles
 
     lyricsTimer = new QTimer(0);
-    lyricsTimer->setInterval(30);
+    lyricsTimer->setTimerType(Qt::PreciseTimer);
+    lyricsTimer->setInterval(25); // 40 FPS for smooth lyrics sweep
 
     detailTimer = new QTimer();
     detailTimer->setSingleShot(true);
@@ -2512,7 +2513,8 @@ void MainWindow::playYouTube()
         // covers the live player. Shown directly, the player's GPU picture vanished from the screen
         // for seconds whenever a menu opened over it; the copies are not affected.
         ytMirrorTimer = new QTimer(this);
-        ytMirrorTimer->setInterval(33);
+        ytMirrorTimer->setTimerType(Qt::PreciseTimer);
+        ytMirrorTimer->setInterval(40); // 25 FPS standard cinema/PAL frame rate, reduces GUI load by 20%
         connect(ytMirrorTimer, &QTimer::timeout, this, [this]() {
             if (!ytActive || !ytPlayer || !ytPlayer->isVisible() || !ytPlayer->isStarted())
                 return;
@@ -2522,54 +2524,47 @@ void MainWindow::playYouTube()
                 return;     // Drop frame if previous grab/render is still active to prevent timer event pile-up
             busy = true;
 
+            QPixmap pm = ytPlayer->grab();
+            if (!pm.isNull()) {
 #ifdef KM_HAVE_PROCLOOP
-            // AI vocal cut: the sound is D seconds late, so the picture is shown D seconds late too
-            const double d = (ytAudio && settings->value("YtDelayPicture", true).toBool()) ? ytAudio->delaySeconds() : 0.0;
-            if (d > 0.15) {
-                if (!frameClock.isValid())
-                    frameClock.start();
-                const qint64 now = frameClock.elapsed();
-                QPixmap pm = ytPlayer->grab();
-                if (!pm.isNull()) {
-                    // kept small (854 x 480, 3 bytes a pixel): about 240 MB for 6.5 s at 30 frames a second
-                    delayedFrames.push_back({ now, pm.toImage().scaled(854, 480, Qt::KeepAspectRatio, Qt::FastTransformation)
-                                                       .convertToFormat(QImage::Format_RGB888) });
-                }
-                const qint64 target = now - qint64(d * 1000);
-                QImage show;
-                while (!delayedFrames.empty() && delayedFrames.front().t <= target) {
-                    show = delayedFrames.front().img;
-                    delayedFrames.pop_front();
-                }
-                while (delayedFrames.size() > 400)          // never more than ~13 s of picture
-                    delayedFrames.pop_front();
+                const double d = (ytAudio && settings->value("YtDelayPicture", true).toBool()) ? ytAudio->delaySeconds() : 0.0;
+                if (d > 0.15) {
+                    if (!frameClock.isValid())
+                        frameClock.start();
+                    const qint64 now = frameClock.elapsed();
 
-                if (!show.isNull()) {
-                    QPixmap showPm = QPixmap::fromImage(show);
-                    videoWidget->setPixmap(showPm);
-                    if (secondLyr != nullptr && secondMonitor)
-                        secondMonitor->setVideoPixmap(showPm);
-                }
-            } else {
-                if (!delayedFrames.empty())
-                    delayedFrames.clear();
+                    // ytPlayer is already 854x480, directly store pm.toImage() without redundant CPU scaling
+                    delayedFrames.push_back({ now, pm.toImage() });
 
-                // FAST PATH: Zero CPU conversions! Direct GPU hardware texture blit via QPixmap
-                QPixmap pm = ytPlayer->grab();
-                if (!pm.isNull()) {
+                    const qint64 target = now - qint64(d * 1000);
+                    QImage show;
+                    while (!delayedFrames.empty() && delayedFrames.front().t <= target) {
+                        show = delayedFrames.front().img;
+                        delayedFrames.pop_front();
+                    }
+                    while (delayedFrames.size() > 320)
+                        delayedFrames.pop_front();
+
+                    if (!show.isNull()) {
+                        videoWidget->setFrame(show);
+                        if (secondLyr != nullptr && secondMonitor)
+                            secondMonitor->setVideoFrame(show);
+                    }
+                } else {
+                    if (!delayedFrames.empty())
+                        delayedFrames.clear();
+
+                    // FAST PATH: Zero CPU conversions! Direct GPU hardware texture blit via QPixmap
                     videoWidget->setPixmap(pm);
                     if (secondLyr != nullptr && secondMonitor)
                         secondMonitor->setVideoPixmap(pm);
                 }
-            }
 #else
-            QPixmap pm = ytPlayer->grab();
-            if (!pm.isNull()) {
                 videoWidget->setPixmap(pm);
                 if (secondLyr != nullptr && secondMonitor)
                     secondMonitor->setVideoPixmap(pm);
-            }
 #endif
+            }
             busy = false;
         });
         ytPlayer->stackUnder(videoWidget);  // under the copies; search box, queue and lyrics stay on top
@@ -2681,7 +2676,7 @@ void MainWindow::playYouTube()
 
     ui->sliderPosition->setValue(0);
     bgWidget->setVideoPaused(true);
-    ytPlayer->resize(1280, 720);
+    ytPlayer->resize(854, 480); // 854x480 reduces GPU readback bandwidth by >55%
     ytPlayer->show();
     videoWidget->clear();
     videoWidget->resize(ui->centralWidget->size());
@@ -3323,7 +3318,7 @@ void MainWindow::resizeEvent(QResizeEvent *event)
     videoWidget->resize(ui->centralWidget->size());
 #ifdef PTHK_WEBENGINE
     if (ytPlayer)
-        ytPlayer->resize(1280, 720);
+        ytPlayer->resize(854, 480); // 854x480 reduces GPU readback bandwidth by >55%
 #endif
     lyrWidget->resize(ui->centralWidget->size());
     updateDetail->move(width() - 260, 70);
@@ -5095,7 +5090,11 @@ void MainWindow::onPositiomTimerTimeOut()
     int tick = player->positionTick();
     ui->sliderPosition->setValue(tick);
     #ifdef _WIN32
-    taskbarButton->progress()->setValue(tick);
+    static int lastTaskbarUpdate = 0;
+    if (qAbs(tick - lastTaskbarUpdate) > 200) {
+        taskbarButton->progress()->setValue(tick);
+        lastTaskbarUpdate = tick;
+    }
     #endif
     onPlayerPositionMSChanged(player->positionMs());
     ui->rhmWidget->setCurrentBeat( player->currentBeat() );
@@ -5118,6 +5117,12 @@ void MainWindow::onPlayerDurationMSChanged(qint64 d)
 
 void MainWindow::onPlayerPositionMSChanged(qint64 p)
 {
+    static qint64 lastSec = -1;
+    qint64 curSec = p / 1000;
+    if (p != 0 && curSec == lastSec)
+        return;
+    lastSec = curSec;
+
     QDateTime t = QDateTime::fromMSecsSinceEpoch(p);
     ui->lbPosition->setText( locale.toString(t, "mm:ss") );
 }

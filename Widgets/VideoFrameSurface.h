@@ -7,6 +7,7 @@
 #include <QPixmap>
 #include <QVideoSurfaceFormat>
 #include <QWidget>
+#include <atomic>
 #include <functional>
 
 // Receives decoded frames and hands them on as QImages.
@@ -21,14 +22,16 @@ public:
     {
         if (type != QAbstractVideoBuffer::NoHandle)
             return {};
-        // decoders usually hand out YUV (NV12 for H.264 on Windows); QVideoFrame::image() converts
-        return { QVideoFrame::Format_RGB32, QVideoFrame::Format_ARGB32, QVideoFrame::Format_RGB24,
-                 QVideoFrame::Format_BGR32, QVideoFrame::Format_NV12, QVideoFrame::Format_YV12,
-                 QVideoFrame::Format_YUV420P, QVideoFrame::Format_YUYV, QVideoFrame::Format_UYVY };
+        // Prioritize lightweight formats that don't need heavy CPU conversion
+        return { QVideoFrame::Format_RGB32, QVideoFrame::Format_ARGB32,
+                 QVideoFrame::Format_BGR32, QVideoFrame::Format_NV12,
+                 QVideoFrame::Format_YUV420P, QVideoFrame::Format_YV12 };
     }
 
     bool present(const QVideoFrame &frame) override
     {
+        if (!frame.isValid())
+            return true;
         QImage img = frame.image();     // copies, any supported pixel format
         if (img.isNull())
             return true;
@@ -48,8 +51,14 @@ public:
     explicit FrameVideoWidget(QWidget *parent) : QWidget(parent), surface(new VideoFrameSurface(this))
     {
         setAttribute(Qt::WA_OpaquePaintEvent);
+        setAttribute(Qt::WA_NoSystemBackground);
         surface->onFrame = [this](const QImage &img) {
+            // Drop frame if previous frame is still pending in UI thread to prevent queue congestion
+            if (framePending.exchange(true))
+                return;
+
             QMetaObject::invokeMethod(this, [this, img]() {
+                framePending.store(false);
                 setFrame(img);
                 if (onFrameShown)
                     onFrameShown(img);
@@ -68,6 +77,9 @@ protected:
     void paintEvent(QPaintEvent *) override
     {
         QPainter p(this);
+        p.setRenderHint(QPainter::SmoothPixmapTransform, false);
+        p.setRenderHint(QPainter::Antialiasing, false);
+
         const QSize frameSize = hasPixmap ? pixmap.size() : frame.size();
         if (frameSize.isEmpty()) {
             p.fillRect(rect(), Qt::black);
@@ -90,7 +102,6 @@ protected:
         if (hasPixmap) {
             p.drawPixmap(r, pixmap);
         } else {
-            p.setRenderHint(QPainter::SmoothPixmapTransform);
             p.drawImage(r, frame);
         }
     }
@@ -100,6 +111,7 @@ private:
     QImage frame;
     QPixmap pixmap;
     bool hasPixmap = false;
+    std::atomic<bool> framePending{false};
 };
 
 #endif // VIDEOFRAMESURFACE_H
