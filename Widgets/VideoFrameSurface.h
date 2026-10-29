@@ -51,7 +51,6 @@ public:
     explicit FrameVideoWidget(QWidget *parent) : QWidget(parent), surface(new VideoFrameSurface(this))
     {
         setAttribute(Qt::WA_OpaquePaintEvent);
-        setAttribute(Qt::WA_NoSystemBackground);
         surface->onFrame = [this](const QImage &img) {
             // Drop frame if previous frame is still pending in UI thread to prevent queue congestion
             if (framePending.exchange(true))
@@ -77,27 +76,20 @@ protected:
     void paintEvent(QPaintEvent *) override
     {
         QPainter p(this);
-        p.setRenderHint(QPainter::SmoothPixmapTransform, false);
-        p.setRenderHint(QPainter::Antialiasing, false);
+        // Guaranteed solid black clear to prevent double-buffer oscillation or transparent bleed
+        p.fillRect(rect(), Qt::black);
 
         const QSize frameSize = hasPixmap ? pixmap.size() : frame.size();
-        if (frameSize.isEmpty()) {
-            p.fillRect(rect(), Qt::black);
+        if (frameSize.isEmpty())
             return;
-        }
 
         QSize s = frameSize.scaled(size(), Qt::KeepAspectRatio);
         QRect r(QPoint((width() - s.width()) / 2, (height() - s.height()) / 2), s);
 
-        // Fill black only in letterbox/pillarbox margins (avoid full-screen fill overhead)
-        if (r.top() > 0)
-            p.fillRect(0, 0, width(), r.top(), Qt::black);
-        if (r.bottom() < height() - 1)
-            p.fillRect(0, r.bottom() + 1, width(), height() - r.bottom() - 1, Qt::black);
-        if (r.left() > 0)
-            p.fillRect(0, r.top(), r.left(), r.height(), Qt::black);
-        if (r.right() < width() - 1)
-            p.fillRect(r.right() + 1, r.top(), width() - r.right() - 1, r.height(), Qt::black);
+        // CompositionMode_Source directly overwrites destination buffer without alpha-blend flicker
+        p.setCompositionMode(QPainter::CompositionMode_Source);
+        p.setRenderHint(QPainter::SmoothPixmapTransform, false);
+        p.setRenderHint(QPainter::Antialiasing, false);
 
         if (hasPixmap) {
             p.drawPixmap(r, pixmap);

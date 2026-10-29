@@ -2514,7 +2514,7 @@ void MainWindow::playYouTube()
         // for seconds whenever a menu opened over it; the copies are not affected.
         ytMirrorTimer = new QTimer(this);
         ytMirrorTimer->setTimerType(Qt::PreciseTimer);
-        ytMirrorTimer->setInterval(40); // 25 FPS standard cinema/PAL frame rate, reduces GUI load by 20%
+        ytMirrorTimer->setInterval(33); // 30 FPS matches YouTube native frame rate for judder-free playback
         connect(ytMirrorTimer, &QTimer::timeout, this, [this]() {
             if (!ytActive || !ytPlayer || !ytPlayer->isVisible() || !ytPlayer->isStarted())
                 return;
@@ -2527,6 +2527,7 @@ void MainWindow::playYouTube()
             QPixmap pm = ytPlayer->grab();
             if (!pm.isNull()) {
 #ifdef KM_HAVE_PROCLOOP
+                static bool delayedPrimed = false;
                 const double d = (ytAudio && settings->value("YtDelayPicture", true).toBool()) ? ytAudio->delaySeconds() : 0.0;
                 if (d > 0.15) {
                     if (!frameClock.isValid())
@@ -2546,16 +2547,20 @@ void MainWindow::playYouTube()
                         delayedFrames.pop_front();
 
                     if (!show.isNull()) {
+                        delayedPrimed = true;
                         videoWidget->setFrame(show);
                         if (secondLyr != nullptr && secondMonitor)
                             secondMonitor->setVideoFrame(show);
-                    } else {
-                        // While the delayed buffer is priming, continue rendering live frames smoothly (never freeze)
+                    } else if (!delayedPrimed) {
+                        // While the delayed buffer is priming for the first time, show live frame
                         videoWidget->setPixmap(pm);
                         if (secondLyr != nullptr && secondMonitor)
                             secondMonitor->setVideoPixmap(pm);
                     }
+                    // Once primed, if no new frame is due in this tick (timer jitter), keep previous frame.
+                    // NEVER alternate back to live pm, preventing severe past/present flickering!
                 } else {
+                    delayedPrimed = false;
                     if (!delayedFrames.empty())
                         delayedFrames.clear();
 
@@ -2703,6 +2708,7 @@ void MainWindow::playYouTube()
             aiEngine->reset();
     }
     delayedFrames.clear();
+    frameClock.invalidate();
 #endif
     ytPlayer->playVideo(playingSong.path(), ytAudioLive() ? 100 : effectiveVolume());
     dmxLights->setPlaying(true);
