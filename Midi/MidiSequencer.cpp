@@ -1,4 +1,5 @@
 #include "MidiSequencer.h"
+#include <QRandomGenerator>
 
 MidiSequencer::MidiSequencer(QObject *parent) : QThread(parent)
 {
@@ -304,7 +305,14 @@ int MidiSequencer::currentBar()
     return _midi->barFromTick(positionTick());
 }
 
-void MidiSequencer::applyAutoMedleyBounds(const QVector<long> &lyricCursors, int manualStartBar, int manualEndBar, long lastSungLyricTick)
+void MidiSequencer::applyAutoMedleyBounds(const QVector<long> &lyricCursors,
+                                         int manualStartBar,
+                                         int manualEndBar,
+                                         long lastSungLyricTick,
+                                         bool skipIntro,
+                                         bool autoCutOutro,
+                                         int waitBars,
+                                         bool quantizeBar)
 {
     if (_midi->events().isEmpty())
         return;
@@ -312,9 +320,11 @@ void MidiSequencer::applyAutoMedleyBounds(const QVector<long> &lyricCursors, int
     const int res = qMax(1, _midi->resorution());
     const int totalBars = _midi->barCount();
 
-    // 1. Auto-detect first active musical bar (skip empty GM-reset / stick count-in bar)
+    // 1. Auto-detect first active musical bar (Cue-In)
     if (manualStartBar > 0) {
         setCutStartBar(manualStartBar);
+    } else if (!skipIntro) {
+        setCutStartBar(0);
     } else {
         int firstBandTick = -1;
         int firstGrooveDrumTick = -1;
@@ -350,14 +360,16 @@ void MidiSequencer::applyAutoMedleyBounds(const QVector<long> &lyricCursors, int
         if (firstLyricTick > 0 && firstMusicTick > firstLyricTick)
             firstMusicTick = int(firstLyricTick);
 
-        int startBar = _midi->barFromTick(uint32_t(qMax(0, firstMusicTick + res / 4)));
+        int startBar = _midi->barFromTick(uint32_t(qMax(0, firstMusicTick + (quantizeBar ? 0 : res / 4))));
         startBar = qBound(0, startBar, 8);
         setStartTick(_midi->tickFromBar(startBar));
     }
 
-    // 2. Auto-detect exact outro bar boundary (after last lyric, while drum groove is still active)
+    // 2. Auto-detect exact outro bar boundary (Cue-Out)
     if (manualEndBar > 0) {
         setCutEndBar(manualEndBar);
+    } else if (!autoCutOutro) {
+        setCutEndBar(totalBars);
     } else {
         long lastLyricTick = lastSungLyricTick;
         if (lastLyricTick <= 0) {
@@ -380,7 +392,7 @@ void MidiSequencer::applyAutoMedleyBounds(const QVector<long> &lyricCursors, int
         int endBar = totalBars;
         if (lastLyricTick > 0) {
             const int lyrBar = _midi->barFromTick(uint32_t(lastLyricTick));
-            endBar = lyrBar + 1; // cut tightly right at the end of the final lyric bar!
+            endBar = lyrBar + qMax(0, waitBars);
             if (lastGrooveTick > 0) {
                 const int grooveBar = _midi->barFromTick(uint32_t(lastGrooveTick));
                 if (grooveBar >= lyrBar && endBar > grooveBar)
@@ -396,12 +408,15 @@ void MidiSequencer::applyAutoMedleyBounds(const QVector<long> &lyricCursors, int
     }
 }
 
-void MidiSequencer::setMedleyTransition(bool enable, int bars, int pattern, int bpm)
+void MidiSequencer::setMedleyTransition(bool enable, int bars, int pattern, int bpm, int fillVolume, int tempoMode, bool preserveEffects)
 {
     _isMedleyTransition = enable;
     _medleyTransitionBars = qBound(0, bars, 8);
-    _medleyFillPattern = qBound(0, pattern, 3);
+    _medleyFillPattern = qBound(0, pattern, 4);
     _medleyTargetBpm = qBound(30, bpm, 300);
+    _medleyFillVolume = qBound(50, fillVolume, 130);
+    _medleyTempoMode = qBound(0, tempoMode, 2);
+    _medleyPreserveEffectsTail = preserveEffects;
 }
 
 void MidiSequencer::playMedleyTransitionFill()
@@ -412,9 +427,11 @@ void MidiSequencer::playMedleyTransitionFill()
     const int totalBars = qBound(1, _medleyTransitionBars, 8);
     const int beatsPerBar = 4;
     const int totalBeats = totalBars * beatsPerBar;
-    const int bpm = qBound(30, _medleyTargetBpm > 0 ? _medleyTargetBpm : currentBpm(), 300);
-    const double beatMs = 60000.0 / double(bpm);
-    const double totalDurationMs = totalBeats * beatMs;
+    const int startBpm = currentBpm() > 0 ? currentBpm() : 120;
+    const int targetBpm = qBound(30, _medleyTargetBpm > 0 ? _medleyTargetBpm : startBpm, 300);
+    const double baseBpm = (_medleyTempoMode == 2) ? double(startBpm) : double(targetBpm);
+    double beatMs = 60000.0 / baseBpm;
+    double totalDurationMs = totalBeats * beatMs;
 
     struct DrumHit {
         double beatOffset;
@@ -423,81 +440,88 @@ void MidiSequencer::playMedleyTransitionFill()
     };
     QVector<DrumHit> hits;
 
+    const double volScale = _medleyFillVolume / 100.0;
+
     // 1. Lead-in bars (if totalBars > 1): play a steady drum groove bridge
     for (int bar = 0; bar < totalBars - 1; ++bar) {
         const double base = bar * beatsPerBar;
         // Beat 1: Kick + Hi-hat (and Crash on very first bar)
-        hits.append({ base + 0.0, 36, 110 });
+        hits.append({ base + 0.0, 36, int(110 * volScale) });
         if (bar == 0)
-            hits.append({ base + 0.0, 49, 100 });
-        hits.append({ base + 0.0, 42, 90 });
+            hits.append({ base + 0.0, 49, int(100 * volScale) });
+        hits.append({ base + 0.0, 42, int(90 * volScale) });
         // Beat 2: Snare + Hi-hat
-        hits.append({ base + 1.0, 38, 105 });
-        hits.append({ base + 1.0, 42, 90 });
+        hits.append({ base + 1.0, 38, int(105 * volScale) });
+        hits.append({ base + 1.0, 42, int(90 * volScale) });
         // Beat 3: Kick + Hi-hat
-        hits.append({ base + 2.0, 36, 105 });
-        hits.append({ base + 2.0, 42, 90 });
+        hits.append({ base + 2.0, 36, int(105 * volScale) });
+        hits.append({ base + 2.0, 42, int(90 * volScale) });
         // Beat 4: Snare + Hi-hat
-        hits.append({ base + 3.0, 38, 105 });
-        hits.append({ base + 3.0, 42, 90 });
+        hits.append({ base + 3.0, 38, int(105 * volScale) });
+        hits.append({ base + 3.0, 42, int(90 * volScale) });
     }
 
     // 2. Final bar: play selected fill pattern
     const double fillBase = (totalBars - 1) * beatsPerBar;
 
-    switch (_medleyFillPattern) {
+    int activePattern = _medleyFillPattern;
+    if (activePattern == 4) { // Random / Dynamic pattern
+        activePattern = QRandomGenerator::global()->bounded(4);
+    }
+
+    switch (activePattern) {
     case 1: // Thai Sam-Cha / Lukthung Fill
-        hits.append({ fillBase + 0.0, 36, 115 });
-        hits.append({ fillBase + 0.0, 46, 105 });
-        hits.append({ fillBase + 0.5, 44, 95 });
-        hits.append({ fillBase + 1.0, 38, 120 });
-        hits.append({ fillBase + 1.0, 36, 110 });
-        hits.append({ fillBase + 1.0, 56, 100 });
-        hits.append({ fillBase + 2.0, 47, 108 });
-        hits.append({ fillBase + 2.0, 36, 100 });
-        hits.append({ fillBase + 2.5, 45, 112 });
-        hits.append({ fillBase + 3.0, 38, 92 });
-        hits.append({ fillBase + 3.25, 38, 104 });
-        hits.append({ fillBase + 3.5, 38, 115 });
-        hits.append({ fillBase + 3.75, 38, 126 });
+        hits.append({ fillBase + 0.0, 36, int(115 * volScale) });
+        hits.append({ fillBase + 0.0, 46, int(105 * volScale) });
+        hits.append({ fillBase + 0.5, 44, int(95 * volScale) });
+        hits.append({ fillBase + 1.0, 38, int(120 * volScale) });
+        hits.append({ fillBase + 1.0, 36, int(110 * volScale) });
+        hits.append({ fillBase + 1.0, 56, int(100 * volScale) });
+        hits.append({ fillBase + 2.0, 47, int(108 * volScale) });
+        hits.append({ fillBase + 2.0, 36, int(100 * volScale) });
+        hits.append({ fillBase + 2.5, 45, int(112 * volScale) });
+        hits.append({ fillBase + 3.0, 38, int(92 * volScale) });
+        hits.append({ fillBase + 3.25, 38, int(104 * volScale) });
+        hits.append({ fillBase + 3.5, 38, int(115 * volScale) });
+        hits.append({ fillBase + 3.75, 38, int(126 * volScale) });
         break;
 
     case 2: // Count-in Stick
-        hits.append({ fillBase + 0.0, 37, 110 });
-        hits.append({ fillBase + 0.0, 42, 90 });
-        hits.append({ fillBase + 1.0, 37, 110 });
-        hits.append({ fillBase + 1.0, 42, 90 });
-        hits.append({ fillBase + 2.0, 37, 115 });
-        hits.append({ fillBase + 2.0, 42, 95 });
-        hits.append({ fillBase + 3.0, 38, 105 });
-        hits.append({ fillBase + 3.5, 38, 122 });
-        hits.append({ fillBase + 3.5, 36, 115 });
+        hits.append({ fillBase + 0.0, 37, int(110 * volScale) });
+        hits.append({ fillBase + 0.0, 42, int(90 * volScale) });
+        hits.append({ fillBase + 1.0, 37, int(110 * volScale) });
+        hits.append({ fillBase + 1.0, 42, int(90 * volScale) });
+        hits.append({ fillBase + 2.0, 37, int(115 * volScale) });
+        hits.append({ fillBase + 2.0, 42, int(95 * volScale) });
+        hits.append({ fillBase + 3.0, 38, int(105 * volScale) });
+        hits.append({ fillBase + 3.5, 38, int(122 * volScale) });
+        hits.append({ fillBase + 3.5, 36, int(115 * volScale) });
         break;
 
     case 3: // Tom Roll Fill
-        hits.append({ fillBase + 0.0, 36, 112 });
-        hits.append({ fillBase + 0.0, 42, 95 });
-        hits.append({ fillBase + 1.0, 50, 105 });
-        hits.append({ fillBase + 1.5, 50, 105 });
-        hits.append({ fillBase + 2.0, 47, 110 });
-        hits.append({ fillBase + 2.5, 48, 110 });
-        hits.append({ fillBase + 3.0, 45, 112 });
-        hits.append({ fillBase + 3.5, 41, 118 });
-        hits.append({ fillBase + 3.75, 38, 126 });
+        hits.append({ fillBase + 0.0, 36, int(112 * volScale) });
+        hits.append({ fillBase + 0.0, 42, int(95 * volScale) });
+        hits.append({ fillBase + 1.0, 50, int(105 * volScale) });
+        hits.append({ fillBase + 1.5, 50, int(105 * volScale) });
+        hits.append({ fillBase + 2.0, 47, int(110 * volScale) });
+        hits.append({ fillBase + 2.5, 48, int(110 * volScale) });
+        hits.append({ fillBase + 3.0, 45, int(112 * volScale) });
+        hits.append({ fillBase + 3.5, 41, int(118 * volScale) });
+        hits.append({ fillBase + 3.75, 38, int(126 * volScale) });
         break;
 
     case 0: // Standard Rock/Pop Fill
     default:
-        hits.append({ fillBase + 0.0, 36, 112 });
-        hits.append({ fillBase + 0.0, 42, 95 });
-        hits.append({ fillBase + 1.0, 38, 108 });
-        hits.append({ fillBase + 1.0, 42, 90 });
-        hits.append({ fillBase + 2.0, 50, 102 });
-        hits.append({ fillBase + 2.5, 47, 106 });
-        hits.append({ fillBase + 3.0, 38, 88 });
-        hits.append({ fillBase + 3.25, 38, 98 });
-        hits.append({ fillBase + 3.5, 38, 110 });
-        hits.append({ fillBase + 3.75, 38, 125 });
+        hits.append({ fillBase + 0.0, 36, int(112 * volScale) });
+        hits.append({ fillBase + 0.0, 42, int(95 * volScale) });
+        hits.append({ fillBase + 1.0, 38, int(108 * volScale) });
+        hits.append({ fillBase + 1.0, 42, int(90 * volScale) });
+        hits.append({ fillBase + 2.0, 50, int(102 * volScale) });
+        hits.append({ fillBase + 2.5, 47, int(106 * volScale) });
+        hits.append({ fillBase + 3.0, 38, int(88 * volScale) });
+        hits.append({ fillBase + 3.25, 38, int(98 * volScale) });
+        hits.append({ fillBase + 3.5, 38, int(110 * volScale) });
+        hits.append({ fillBase + 3.75, 38, int(125 * volScale) });
         break;
     }
 
@@ -510,11 +534,23 @@ void MidiSequencer::playMedleyTransitionFill()
 
     int nextHitIdx = 0;
     int lastEmittedBeat = -1;
+    int lastEmittedBpm = startBpm;
 
     while (_playing) {
         const double elapsedMs = timer.nsecsElapsed() / 1000000.0;
         if (elapsedMs >= totalDurationMs)
             break;
+
+        // Dynamic Tempo Ramp (Morphing) over the transition bridge
+        if (_medleyTempoMode == 2 && totalDurationMs > 0) {
+            const double progress = qBound(0.0, elapsedMs / totalDurationMs, 1.0);
+            const int rampBpm = qBound(30, int(startBpm + (targetBpm - startBpm) * progress), 300);
+            if (rampBpm != lastEmittedBpm) {
+                lastEmittedBpm = rampBpm;
+                beatMs = 60000.0 / double(rampBpm);
+                emit bpmChanged(rampBpm);
+            }
+        }
 
         const double currentBeatPos = elapsedMs / beatMs;
         const int currentBeatNum = int(currentBeatPos);
@@ -611,18 +647,19 @@ void MidiSequencer::run()
         _positionMs = _startPlayTime;
         _positionTick = _startTick;
         // Downbeat Crash + Kick right on Beat 1 of the new medley song!
+        const double volScale = _medleyFillVolume / 100.0;
         MidiEvent crashEvt;
         crashEvt.setEventType(MidiEventType::NoteOn);
         crashEvt.setChannel(9);
         crashEvt.setData1(49);
-        crashEvt.setData2(118);
+        crashEvt.setData2(qBound(1, int(118 * volScale), 127));
         emit playingEvent(crashEvt);
 
         MidiEvent kickEvt;
         kickEvt.setEventType(MidiEventType::NoteOn);
         kickEvt.setChannel(9);
         kickEvt.setData1(36);
-        kickEvt.setData2(120);
+        kickEvt.setData2(qBound(1, int(120 * volScale), 127));
         emit playingEvent(kickEvt);
     }
 

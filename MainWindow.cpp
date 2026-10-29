@@ -1238,7 +1238,14 @@ void MainWindow::play(int index, int position)
         const int baseBpm = player->currentBpm() - player->bpmSpeed();
         player->setBpmSpeed(targetBpm - baseBpm);
         playingSong.setBpmSpeed(player->bpmSpeed());
-        player->midiSequencer()->applyAutoMedleyBounds(lyrWidget->curData(), playingSong.cutStartBar(), playingSong.cutEndBar(), lyrWidget->lastActiveLyricTick());
+        player->midiSequencer()->applyAutoMedleyBounds(lyrWidget->curData(),
+                                                       playingSong.cutStartBar(),
+                                                       playingSong.cutEndBar(),
+                                                       lyrWidget->lastActiveLyricTick(),
+                                                       player->medleySkipIntro(),
+                                                       player->medleyAutoCutOutro(),
+                                                       player->medleyWaitBars(),
+                                                       player->medleyQuantizeBar());
     }
     if (player->isUseMedley()) {
         if (false) player->midiSequencer()->setCutStartBar(playingSong.cutStartBar());
@@ -2037,9 +2044,11 @@ void MainWindow::checkEndAfterLyrics(qint64 pos, qint64 remainingMs)
         if (player->isUseMedley()) {
             if (player->isPlayerPlaying() && (player->midiSequencerTemp() != nullptr || playlist.size() > (playingIndex + 1))) {
                 MidiSequencer *seq = player->midiSequencer();
-                int nextBarTick = seq->midiFile()->tickFromBar(seq->currentBar() + 1);
+                const int waitBars = player->medleyWaitBars();
+                int targetBar = seq->currentBar() + waitBars + 1;
+                int nextBarTick = seq->midiFile()->tickFromBar(targetBar);
                 if (nextBarTick <= seq->positionTick() + seq->midiFile()->resorution() / 2)
-                    nextBarTick = seq->midiFile()->tickFromBar(seq->currentBar() + 2);
+                    nextBarTick = seq->midiFile()->tickFromBar(targetBar + 1);
                 if (seq->endTick() == 0 || seq->endTick() > nextBarTick)
                     seq->setEndTick(nextBarTick);
             }
@@ -2926,11 +2935,93 @@ bool MainWindow::startMp3Stream(const QString &path)
 void MainWindow::stopMp3Stream()
 {
     mp3Timer->stop();
+    if (mp3CrossfadeTimer && mp3CrossfadeTimer->isActive())
+        mp3CrossfadeTimer->stop();
+    if (mp3StreamNext) {
+        BASS_Mixer_ChannelRemove(mp3StreamNext);
+        BASS_StreamFree(mp3StreamNext);
+        mp3StreamNext = 0;
+    }
     if (!mp3Stream)
         return;
     BASS_Mixer_ChannelRemove(mp3Stream);
     BASS_StreamFree(mp3Stream);
     mp3Stream = 0;
+}
+
+bool MainWindow::startMp3Crossfade(const QString &nextPath, double durationSec, int curve)
+{
+    MidiSynthesizer *synth = player->midiSynthesizer();
+    const DWORD mixer = synth->isOpened() ? synth->mainMixerHandle() : 0;
+    if (!mixer || !mp3Stream)
+        return false;
+
+    if (mp3StreamNext) {
+        BASS_Mixer_ChannelRemove(mp3StreamNext);
+        BASS_StreamFree(mp3StreamNext);
+        mp3StreamNext = 0;
+    }
+
+    mp3StreamNext = BASS_StreamCreateFile(FALSE, nextPath.utf16(), 0, 0,
+                                          BASS_STREAM_DECODE | BASS_SAMPLE_FLOAT | BASS_UNICODE);
+    if (!mp3StreamNext)
+        return false;
+
+    if (!BASS_Mixer_StreamAddChannel(mixer, mp3StreamNext, BASS_MIXER_CHAN_NORAMPIN)) {
+        BASS_StreamFree(mp3StreamNext);
+        mp3StreamNext = 0;
+        return false;
+    }
+
+    BASS_ChannelSetAttribute(mp3StreamNext, BASS_ATTRIB_VOL, 0.0f);
+
+    mp3CrossfadeTotalMs = qMax(500, int(durationSec * 1000));
+    mp3CrossfadeCurve = curve;
+    mp3CrossfadeElapsedMs = 0;
+
+    if (!mp3CrossfadeTimer) {
+        mp3CrossfadeTimer = new QTimer(this);
+        mp3CrossfadeTimer->setInterval(30);
+        connect(mp3CrossfadeTimer, &QTimer::timeout, this, [this]() {
+            mp3CrossfadeElapsedMs += 30;
+            const double t = qBound(0.0, double(mp3CrossfadeElapsedMs) / double(mp3CrossfadeTotalMs), 1.0);
+            const float master = effectiveVolume() / 100.0f;
+            float gainA = 0.0f;
+            float gainB = 0.0f;
+
+            if (mp3CrossfadeCurve == 0) {
+                const double pi_2 = 3.14159265358979323846 / 2.0;
+                gainA = float(std::cos(t * pi_2)) * master;
+                gainB = float(std::sin(t * pi_2)) * master;
+            } else {
+                gainA = float(1.0 - t) * master;
+                gainB = float(t) * master;
+            }
+
+            if (mp3Stream)
+                BASS_ChannelSetAttribute(mp3Stream, BASS_ATTRIB_VOL, gainA);
+            if (mp3StreamNext)
+                BASS_ChannelSetAttribute(mp3StreamNext, BASS_ATTRIB_VOL, gainB);
+
+            if (t >= 1.0) {
+                mp3CrossfadeTimer->stop();
+                if (mp3Stream) {
+                    BASS_Mixer_ChannelRemove(mp3Stream);
+                    BASS_StreamFree(mp3Stream);
+                }
+                mp3Stream = mp3StreamNext;
+                mp3StreamNext = 0;
+                setMp3Volume();
+
+                const qint64 ms = qint64(BASS_ChannelBytes2Seconds(mp3Stream, BASS_ChannelGetLength(mp3Stream, BASS_POS_BYTE)) * 1000);
+                ui->sliderPosition->setMaximum(int(ms));
+                onPlayerDurationMSChanged(ms);
+            }
+        });
+    }
+
+    mp3CrossfadeTimer->start();
+    return true;
 }
 
 void MainWindow::setMp3Volume()
@@ -3822,7 +3913,14 @@ void MainWindow::openMedleySettings()
             const int baseBpm = player->currentBpm() - player->bpmSpeed();
             player->setBpmSpeed(targetBpm - baseBpm);
             playingSong.setBpmSpeed(player->bpmSpeed());
-            player->midiSequencer()->applyAutoMedleyBounds(lyrWidget->curData(), playingSong.cutStartBar(), playingSong.cutEndBar(), lyrWidget->lastActiveLyricTick());
+            player->midiSequencer()->applyAutoMedleyBounds(lyrWidget->curData(),
+                                                           playingSong.cutStartBar(),
+                                                           playingSong.cutEndBar(),
+                                                           lyrWidget->lastActiveLyricTick(),
+                                                           player->medleySkipIntro(),
+                                                           player->medleyAutoCutOutro(),
+                                                           player->medleyWaitBars(),
+                                                           player->medleyQuantizeBar());
         }
         if (!player->isPlayerStopped() && (playlist.size() > (playingIndex + 1)))
             loadNextMedley(playlist[playingIndex + 1]);
@@ -3840,7 +3938,7 @@ void MainWindow::openMedleySettings()
 
 void MainWindow::loadNextMedley(Song *song)
 {
-    if (!song || (song->songType() != "NCN" && song->songType() != "EMK" && song->songType() != "HNK" && song->songType() != "KAR")) {
+    if (!song || (song->songType() != "NCN" && song->songType() != "EMK" && song->songType() != "HNK" && song->songType() != "KAR" && song->songType() != "SIB")) {
         player->unloadNextMedley();
         return;
     }

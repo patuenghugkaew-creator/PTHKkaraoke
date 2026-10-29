@@ -156,7 +156,14 @@ void MedleyLoader::run()
     }
 
     if (_player->midiSequencerTemp() != nullptr) {
-        _player->midiSequencerTemp()->applyAutoMedleyBounds(_lyrWidget->curTempData(), _song->cutStartBar(), _song->cutEndBar(), _lyrWidget->lastActiveTempLyricTick());
+        _player->midiSequencerTemp()->applyAutoMedleyBounds(_lyrWidget->curTempData(),
+                                                           _song->cutStartBar(),
+                                                           _song->cutEndBar(),
+                                                           _lyrWidget->lastActiveTempLyricTick(),
+                                                           _player->medleySkipIntro(),
+                                                           _player->medleyAutoCutOutro(),
+                                                           _player->medleyWaitBars(),
+                                                           _player->medleyQuantizeBar());
     }
     if (_lyrWidget2 != nullptr) {
         _lyrWidget2->setLyricsTemp(_lyrWidget->lyrTempData(), _lyrWidget->curTempData());

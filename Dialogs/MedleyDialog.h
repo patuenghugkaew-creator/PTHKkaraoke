@@ -15,19 +15,29 @@ class MedleyDialog : public QDialog
 
 public:
     explicit MedleyDialog(QWidget *parent = nullptr, MidiPlayer *player = nullptr);
-    ~MedleyDialog();
+    ~MedleyDialog() override;
 
 protected:
-    void keyPressEvent(QKeyEvent *e);
+    void keyPressEvent(QKeyEvent *e) override;
 
 private slots:
+    void on_comboPreset_currentIndexChanged(int index);
+    void on_tabWidget_currentChanged(int index);
+    void on_btnReset_clicked();
     void on_btnOk_clicked();
     void on_btnCancel_clicked();
 
+    void onParamChanged();
+
 private:
     Ui::MedleyDialog *ui;
+    MidiPlayer *_player = nullptr;
+    bool _isUpdatingUi = false;
 
-    MidiPlayer *_player;
+    void loadSettings();
+    void saveSettings();
+    void updatePreview();
+    void applyPreset(int index);
 };
 
 #endif // MEDLEYDIALOG_H

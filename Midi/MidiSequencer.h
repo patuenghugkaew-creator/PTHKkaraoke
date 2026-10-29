@@ -48,12 +48,22 @@ public:
     int currentBar();
     int startTick() const { return _startTick; }
     int endTick() const { return _endTick; }
-    void applyAutoMedleyBounds(const QVector<long> &lyricCursors = QVector<long>(), int manualStartBar = 0, int manualEndBar = 0, long lastSungLyricTick = -1);
+    void applyAutoMedleyBounds(const QVector<long> &lyricCursors = QVector<long>(),
+                               int manualStartBar = 0,
+                               int manualEndBar = 0,
+                               long lastSungLyricTick = -1,
+                               bool skipIntro = true,
+                               bool autoCutOutro = true,
+                               int waitBars = 1,
+                               bool quantizeBar = true);
 
     bool isMedleyTransition() const { return _isMedleyTransition; }
     int medleyTransitionBars() const { return _medleyTransitionBars; }
     int medleyFillPattern() const { return _medleyFillPattern; }
-    void setMedleyTransition(bool enable, int bars = 1, int pattern = 0, int bpm = 120);
+    int medleyFillVolume() const { return _medleyFillVolume; }
+    int medleyTempoMode() const { return _medleyTempoMode; }
+    bool medleyPreserveEffectsTail() const { return _medleyPreserveEffectsTail; }
+    void setMedleyTransition(bool enable, int bars = 1, int pattern = 0, int bpm = 120, int fillVolume = 100, int tempoMode = 0, bool preserveEffects = true);
 
 public slots:
 
@@ -97,6 +107,9 @@ private:
     int  _medleyTransitionBars = 1;
     int  _medleyFillPattern = 0;
     int  _medleyTargetBpm = 120;
+    int  _medleyFillVolume = 100;
+    int  _medleyTempoMode = 0;
+    bool _medleyPreserveEffectsTail = true;
 
     QWaitCondition _waitCondition;
     QMutex _mutex;

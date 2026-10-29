@@ -91,6 +91,7 @@ public:
 
     // MP3 songs played through the synth's main mixer (BASS)
     bool startMp3Stream(const QString &path);
+    bool startMp3Crossfade(const QString &nextPath, double durationSec = 3.0, int curve = 0);
     void stopMp3Stream();
     void setMp3Volume();
     qint64 mp3PositionMs();
@@ -232,7 +233,12 @@ private:
     bool videoActive = false;   // a video or MP3 song is loaded (playing or paused)
     bool mediaIsAudio = false;  // ... and it is an MP3 song (lyrics from its .lrc)
     DWORD mp3Stream = 0;        // BASS decode stream of the MP3 song in the main mixer, 0 = none
+    DWORD mp3StreamNext = 0;    // Next MP3 stream for dual-deck crossfade
     QTimer *mp3Timer;
+    QTimer *mp3CrossfadeTimer = nullptr;
+    qint64 mp3CrossfadeElapsedMs = 0;
+    int    mp3CrossfadeTotalMs = 3000;
+    int    mp3CrossfadeCurve = 0;
 
     bool vocalScore = false;
     int melodyNote = -1;        // sounding note of the vocal melody (channel 9), -1 = none

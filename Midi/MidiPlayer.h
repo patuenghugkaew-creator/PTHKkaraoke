@@ -115,6 +115,51 @@ public:
     int medleyFillPattern() const { return _medleyFillPattern; }
     void setMedleyFillPattern(int pattern) { _medleyFillPattern = pattern; }
 
+    int medleyFillVolume() const { return _medleyFillVolume; }
+    void setMedleyFillVolume(int vol) { _medleyFillVolume = vol; }
+
+    int medleyTempoMode() const { return _medleyTempoMode; }
+    void setMedleyTempoMode(int mode) { _medleyTempoMode = mode; }
+
+    bool medleyAutoCutOutro() const { return _medleyAutoCutOutro; }
+    void setMedleyAutoCutOutro(bool enable) { _medleyAutoCutOutro = enable; }
+
+    int medleyWaitBars() const { return _medleyWaitBars; }
+    void setMedleyWaitBars(int bars) { _medleyWaitBars = bars; }
+
+    bool medleyQuantizeBar() const { return _medleyQuantizeBar; }
+    void setMedleyQuantizeBar(bool enable) { _medleyQuantizeBar = enable; }
+
+    bool medleySkipIntro() const { return _medleySkipIntro; }
+    void setMedleySkipIntro(bool enable) { _medleySkipIntro = enable; }
+
+    bool medleyPreserveEffectsTail() const { return _medleyPreserveEffectsTail; }
+    void setMedleyPreserveEffectsTail(bool enable) { _medleyPreserveEffectsTail = enable; }
+
+    int medleyPreBufferSec() const { return _medleyPreBufferSec; }
+    void setMedleyPreBufferSec(int sec) { _medleyPreBufferSec = sec; }
+
+    double medleyAudioCrossfadeSec() const { return _medleyAudioCrossfadeSec; }
+    void setMedleyAudioCrossfadeSec(double sec) { _medleyAudioCrossfadeSec = sec; }
+
+    int medleyAudioCurve() const { return _medleyAudioCurve; }
+    void setMedleyAudioCurve(int curve) { _medleyAudioCurve = curve; }
+
+    int medleyAudioThresholdDb() const { return _medleyAudioThresholdDb; }
+    void setMedleyAudioThresholdDb(int db) { _medleyAudioThresholdDb = db; }
+
+    bool medleyAudioAutoCue() const { return _medleyAudioAutoCue; }
+    void setMedleyAudioAutoCue(bool enable) { _medleyAudioAutoCue = enable; }
+
+    bool medleyAudioNormalize() const { return _medleyAudioNormalize; }
+    void setMedleyAudioNormalize(bool enable) { _medleyAudioNormalize = enable; }
+
+    int medleyPreset() const { return _medleyPreset; }
+    void setMedleyPreset(int preset) { _medleyPreset = preset; }
+
+    void loadMedleySettings();
+    void saveMedleySettings();
+
     bool loadNextMedley(const QString &file, int cutStartBar, int cutEndBar, int midiSpeed, int transpose);
     void unloadNextMedley();
 
@@ -164,6 +209,20 @@ private:
     int                 _medleyBPM = 120;
     int                 _medleyTransitionBars = 1;
     int                 _medleyFillPattern = 0;
+    int                 _medleyFillVolume = 100;
+    int                 _medleyTempoMode = 0;
+    bool                _medleyAutoCutOutro = true;
+    int                 _medleyWaitBars = 1;
+    bool                _medleyQuantizeBar = true;
+    bool                _medleySkipIntro = true;
+    bool                _medleyPreserveEffectsTail = true;
+    int                 _medleyPreBufferSec = 20;
+    double              _medleyAudioCrossfadeSec = 3.0;
+    int                 _medleyAudioCurve = 0;
+    int                 _medleyAudioThresholdDb = -32;
+    bool                _medleyAudioAutoCue = true;
+    bool                _medleyAudioNormalize = false;
+    int                 _medleyPreset = 0;
     bool                _useMedley = false;
     bool                _useSolo = false;
 

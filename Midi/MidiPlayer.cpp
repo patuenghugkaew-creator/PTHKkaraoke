@@ -1,3 +1,4 @@
+#include "Config.h"
 #include "MidiPlayer.h"
 #include <QSettings>
 #include "Midi/FaderTaper.h"
@@ -17,10 +18,7 @@ MidiPlayer::MidiPlayer(QObject *parent) : QObject(parent)
 
     _midiSynth  = new MidiSynthesizer();
 
-    QSettings s("PTHK", "Karaoke");
-    _medleyBPM = s.value("MedleyBPM", 120).toInt();
-    _medleyTransitionBars = s.value("MedleyTransitionBars", 1).toInt();
-    _medleyFillPattern = s.value("MedleyFillPattern", 0).toInt();
+    loadMedleySettings();
 
     if (midiDevices().size() > 0)
     {
@@ -709,6 +707,57 @@ void MidiPlayer::setMedleyBPM(int bpm)
     _medleyBPM = bpm;
 }
 
+void MidiPlayer::loadMedleySettings()
+{
+    QSettings s(Config::CONFIG_APP_FILE_PATH, QSettings::IniFormat);
+    s.beginGroup("Medley");
+    _useMedley = s.value("Enable", false).toBool();
+    _medleyPreset = s.value("Preset", 0).toInt();
+    _medleyBPM = s.value("BPM", 120).toInt();
+    _medleyTempoMode = s.value("TempoMode", 0).toInt();
+    _medleyTransitionBars = s.value("TransitionBars", 1).toInt();
+    _medleyFillPattern = s.value("FillPattern", 0).toInt();
+    _medleyFillVolume = s.value("FillVolume", 100).toInt();
+    _medleyAutoCutOutro = s.value("AutoCutOutro", true).toBool();
+    _medleyWaitBars = s.value("WaitBars", 1).toInt();
+    _medleyQuantizeBar = s.value("QuantizeBar", true).toBool();
+    _medleySkipIntro = s.value("SkipIntro", true).toBool();
+    _medleyPreserveEffectsTail = s.value("PreserveEffectsTail", true).toBool();
+    _medleyPreBufferSec = s.value("PreBufferSec", 20).toInt();
+    _medleyAudioCrossfadeSec = s.value("AudioCrossfadeSec", 3.0).toDouble();
+    _medleyAudioCurve = s.value("AudioCurve", 0).toInt();
+    _medleyAudioThresholdDb = s.value("AudioThresholdDb", -32).toInt();
+    _medleyAudioAutoCue = s.value("AudioAutoCue", true).toBool();
+    _medleyAudioNormalize = s.value("AudioNormalize", false).toBool();
+    s.endGroup();
+}
+
+void MidiPlayer::saveMedleySettings()
+{
+    QSettings s(Config::CONFIG_APP_FILE_PATH, QSettings::IniFormat);
+    s.beginGroup("Medley");
+    s.setValue("Enable", _useMedley);
+    s.setValue("Preset", _medleyPreset);
+    s.setValue("BPM", _medleyBPM);
+    s.setValue("TempoMode", _medleyTempoMode);
+    s.setValue("TransitionBars", _medleyTransitionBars);
+    s.setValue("FillPattern", _medleyFillPattern);
+    s.setValue("FillVolume", _medleyFillVolume);
+    s.setValue("AutoCutOutro", _medleyAutoCutOutro);
+    s.setValue("WaitBars", _medleyWaitBars);
+    s.setValue("QuantizeBar", _medleyQuantizeBar);
+    s.setValue("SkipIntro", _medleySkipIntro);
+    s.setValue("PreserveEffectsTail", _medleyPreserveEffectsTail);
+    s.setValue("PreBufferSec", _medleyPreBufferSec);
+    s.setValue("AudioCrossfadeSec", _medleyAudioCrossfadeSec);
+    s.setValue("AudioCurve", _medleyAudioCurve);
+    s.setValue("AudioThresholdDb", _medleyAudioThresholdDb);
+    s.setValue("AudioAutoCue", _medleyAudioAutoCue);
+    s.setValue("AudioNormalize", _medleyAudioNormalize);
+    s.endGroup();
+}
+
+
 bool MidiPlayer::loadNextMedley(const QString &file, int cutStartBar, int cutEndBar, int midiSpeed, int transpose)
 {
     if (!_useMedley)
@@ -729,7 +778,7 @@ bool MidiPlayer::loadNextMedley(const QString &file, int cutStartBar, int cutEnd
 
     _midiSeqTemp->setCutStartBar(cutStartBar);
     _midiSeqTemp->setCutEndBar(cutEndBar);
-    _midiSeqTemp->setMedleyTransition(true, _medleyTransitionBars, _medleyFillPattern, targetBpm);
+    _midiSeqTemp->setMedleyTransition(true, _medleyTransitionBars, _medleyFillPattern, targetBpm, _medleyFillVolume, _medleyTempoMode, _medleyPreserveEffectsTail);
 
     return true;
 }
