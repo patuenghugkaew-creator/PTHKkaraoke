@@ -711,7 +711,7 @@ MainWindow::MainWindow(QWidget *parent) :
                 return;
             }
 #endif
-            if (!player->isPlayerStopped()) {
+            if (player->midiSequencer() && player->midiSequencer()->midiFile() && !player->midiSequencer()->midiFile()->events().isEmpty()) {
                 lyrWidget->setSeekPositionCursor(val);
                 if (secondLyr != nullptr)
                     secondLyr->setSeekPositionCursor(val);
@@ -3843,14 +3843,14 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             if (me->button() == Qt::LeftButton) {
                 const int w = ui->sliderPosition->width();
                 if (w > 0) {
-                    const double ratio = qBound(0.0, double(me->pos().x()) / double(w), 1.0);
+                    const int margin = 8;
+                    const int avail = qMax(1, w - 2 * margin);
+                    const double ratio = qBound(0.0, double(me->pos().x() - margin) / double(avail), 1.0);
                     const int minVal = ui->sliderPosition->minimum();
                     const int maxVal = ui->sliderPosition->maximum();
                     const int val = int(minVal + ratio * (maxVal - minVal));
+                    ui->sliderPosition->grabMouse();
                     ui->sliderPosition->setValue(val);
-                    // setSliderDown(true) emits sliderPressed() -> onSliderPositionPressed().
-                    // Do NOT call it again here: a second call reads the already-paused
-                    // state, sets playAfterSeek=false and the song stays paused after seek.
                     ui->sliderPosition->setSliderDown(true);
                     emit ui->sliderPosition->sliderMoved(val);
                     return true;
@@ -3861,7 +3861,9 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             if (me->buttons() & Qt::LeftButton) {
                 const int w = ui->sliderPosition->width();
                 if (w > 0) {
-                    const double ratio = qBound(0.0, double(me->pos().x()) / double(w), 1.0);
+                    const int margin = 8;
+                    const int avail = qMax(1, w - 2 * margin);
+                    const double ratio = qBound(0.0, double(me->pos().x() - margin) / double(avail), 1.0);
                     const int minVal = ui->sliderPosition->minimum();
                     const int maxVal = ui->sliderPosition->maximum();
                     const int val = int(minVal + ratio * (maxVal - minVal));
@@ -3873,12 +3875,17 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         } else if (event->type() == QEvent::MouseButtonRelease) {
             QMouseEvent *me = static_cast<QMouseEvent *>(event);
             if (me->button() == Qt::LeftButton) {
-                // setSliderDown(false) emits sliderReleased() -> onSliderPositionReleased().
-                // Calling it twice would seek twice and break resume.
+                if (ui->sliderPosition->mouseGrabber() == ui->sliderPosition)
+                    ui->sliderPosition->releaseMouse();
                 if (ui->sliderPosition->isSliderDown())
                     ui->sliderPosition->setSliderDown(false);
                 return true;
             }
+        } else if (event->type() == QEvent::FocusOut || event->type() == QEvent::Hide) {
+            if (ui->sliderPosition->mouseGrabber() == ui->sliderPosition)
+                ui->sliderPosition->releaseMouse();
+            if (ui->sliderPosition->isSliderDown())
+                ui->sliderPosition->setSliderDown(false);
         }
     }
     // Player shortcuts typed while the mixer is the active window go to the player.
@@ -5078,7 +5085,7 @@ void MainWindow::onSliderPositionReleased()
     }
 #endif
 
-    if (player->isPlayerStopped()) {
+    if (player->isPlayerStopped() && playingSong.id().isEmpty() && !player->midiFile()) {
         ui->sliderPosition->setValue(0);
         return;
     }

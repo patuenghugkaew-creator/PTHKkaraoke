@@ -622,9 +622,14 @@ void MidiSequencer::run()
     _stopped = false;
     _finished = false;
 
-    _startPlayTime = _midi->timeFromTick(_startTick, _midiSpeed) * 1000;
-    _positionMs = _startPlayTime;
-    _positionTick = _startTick;
+    if (_isMedleyTransition || _positionTick < _startTick || _playedIndex == 0) {
+        _positionTick = _startTick;
+        _startPlayTime = _midi->timeFromTick(_startTick, _midiSpeed) * 1000;
+        _positionMs = _startPlayTime;
+    } else {
+        _startPlayTime = _midi->timeFromTick(_positionTick, _midiSpeed) * 1000;
+        _positionMs = _startPlayTime;
+    }
 
     _mutex.unlock();
 
@@ -661,9 +666,14 @@ void MidiSequencer::run()
     bool seqEnded = false;
 
     _mutex.lock();
-    _startPlayTime = _midi->timeFromTick(_startTick, _midiSpeed) * 1000;
-    _positionMs = _startPlayTime;
-    _positionTick = _startTick;
+    if (wasMedleyTransition) {
+        _startPlayTime = _midi->timeFromTick(_startTick, _midiSpeed) * 1000;
+        _positionMs = _startPlayTime;
+        _positionTick = _startTick;
+    } else {
+        _startPlayTime = _midi->timeFromTick(_positionTick, _midiSpeed) * 1000;
+        _positionMs = _startPlayTime;
+    }
     _eTimer->restart();
     _mutex.unlock();
 
