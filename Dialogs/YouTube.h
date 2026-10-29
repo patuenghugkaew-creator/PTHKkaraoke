@@ -159,6 +159,8 @@ public:
     void stopVideo();
     void seek(qint64 ms, bool allowSeekAhead = true);
     void setVolume(int volume);
+    void setSubtitlesVisible(bool visible);
+    bool isSubtitlesVisible() const { return subtitlesVisible; }
     bool isPaused() const { return paused; }
     // the clip of the last playVideo() has started (until then the view may still show the previous one)
     bool isStarted() const { return active && started; }
@@ -180,6 +182,7 @@ private:
     qint64 duration = 0;
     int waitedMs = 0;
     bool pageReady = false;
+    bool subtitlesVisible = false;
 };
 #endif
 

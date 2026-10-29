@@ -795,6 +795,21 @@ MainWindow::MainWindow(QWidget *parent) :
             btnSecondScreen->setCheckable(true);
             connect(btnSecondScreen, &QPushButton::clicked, this, [this]() { showSecondMonitor(); });
 
+            btnSubtitles = addBarButton(tr("ซับไตเติล"), tr("เปิด / ปิด ซับไตเติล YouTube (CC)"));
+            btnSubtitles->setCheckable(true);
+            const bool showCc = settings->value("YtShowSubtitles", false).toBool();
+            btnSubtitles->setChecked(showCc);
+            connect(btnSubtitles, &QPushButton::toggled, this, [this](bool on) {
+                settings->setValue("YtShowSubtitles", on);
+#ifdef PTHK_WEBENGINE
+                if (ytPlayer)
+                    ytPlayer->setSubtitlesVisible(on);
+#endif
+                ui->detail->setDetail(tr("ซับไตเติล (CC) "), on ? tr("เปิด") : tr("ปิด"));
+                ui->detail->show();
+                detailTimer->start(3000);
+            });
+
             QPushButton *full = addBarButton(tr("เต็มจอ"), tr("เต็มจอ / หน้าต่างปกติ"));
             connect(full, &QPushButton::clicked, this, [this]() { showFullScreenOrNormal(); });
         }
@@ -2614,6 +2629,10 @@ void MainWindow::playYouTube()
 
     ytActive = true;
     ytSilenceCount = 0;
+#ifdef PTHK_WEBENGINE
+    if (ytPlayer && btnSubtitles)
+        ytPlayer->setSubtitlesVisible(btnSubtitles->isChecked());
+#endif
     lyrWidget->hide();
     lyrWidget->reset();
     if (secondLyr != nullptr) {

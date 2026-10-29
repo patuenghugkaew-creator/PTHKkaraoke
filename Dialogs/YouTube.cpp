@@ -1023,6 +1023,37 @@ YouTubePlayer::YouTubePlayer(QWidget *parent) : QWebEngineView(parent)
     ));
     prof->scripts()->insert(swDisableScript);
 
+    QWebEngineScript ccStyleScript;
+    ccStyleScript.setName(QStringLiteral("YouTubeCaptionStyleHandler"));
+    ccStyleScript.setInjectionPoint(QWebEngineScript::DocumentReady);
+    ccStyleScript.setWorldId(QWebEngineScript::MainWorld);
+    ccStyleScript.setRunsOnSubFrames(true);
+    ccStyleScript.setSourceCode(QStringLiteral(
+        "(function() {"
+        "  var style = document.createElement('style');"
+        "  style.id = 'pthk_caption_style';"
+        "  style.textContent = '.ytp-caption-window-container, .ytp-caption-window-bottom, div[class*=\"ytp-caption-window\"] { display: none !important; }';"
+        "  function apply() {"
+        "    if (document.head && !document.getElementById('pthk_caption_style')) {"
+        "      document.head.appendChild(style);"
+        "    }"
+        "  }"
+        "  apply();"
+        "  document.addEventListener('DOMContentLoaded', apply);"
+        "  window.addEventListener('message', function(e) {"
+        "    if (e.data && e.data.type === 'PTHK_TOGGLE_CAPTIONS') {"
+        "      var el = document.getElementById('pthk_caption_style');"
+        "      if (e.data.visible) {"
+        "        if (el) el.remove();"
+        "      } else {"
+        "        if (!el && document.head) document.head.appendChild(style);"
+        "      }"
+        "    }"
+        "  });"
+        "})();"
+    ));
+    prof->scripts()->insert(ccStyleScript);
+
     QWebEnginePage *customPage = new QWebEnginePage(prof, this);
     setPage(customPage);
 
@@ -1050,6 +1081,8 @@ void YouTubePlayer::playVideo(const QString &videoId, int volume)
 
     const int clampedVol = qBound(0, volume, 100);
     const QString vq = QSettings().value("YtVideoQuality", "hd720").toString();
+    const bool showCc = QSettings().value("YtShowSubtitles", false).toBool();
+    subtitlesVisible = showCc;
 
     // If IFrame is already loaded and ready, tell JS to switch video directly via loadVideoById!
     if (pageReady) {
@@ -1057,10 +1090,16 @@ void YouTubePlayer::playVideo(const QString &videoId, int volume)
             "if (window.pthkPlayerReady && window.P && typeof window.P.loadVideoById === 'function') {"
             "  E = 0; P.setVolume(%1);"
             "  P.loadVideoById({videoId: '%2', suggestedQuality: '%3'});"
+            "  var ifr = document.querySelector('iframe');"
+            "  if (ifr && ifr.contentWindow) {"
+            "    ifr.contentWindow.postMessage({type: 'PTHK_TOGGLE_CAPTIONS', visible: %4}, '*');"
+            "  }"
+            "  if (%4) { try { P.loadModule('captions'); } catch(e){} }"
+            "  else { try { P.unloadModule('captions'); P.unloadModule('cc'); } catch(e){} }"
             "} else {"
             "  window.pendingVideo = {id: '%2', vol: %1, q: '%3'};"
             "}"
-        ).arg(clampedVol).arg(videoId).arg(vq);
+        ).arg(clampedVol).arg(videoId).arg(vq).arg(showCc ? "true" : "false");
         page()->runJavaScript(js);
         pollTimer.start();
         return;
@@ -1070,10 +1109,10 @@ void YouTubePlayer::playVideo(const QString &videoId, int volume)
         "<!DOCTYPE html><html><head><meta charset='utf-8'><style>"
         "html,body{margin:0;height:100%;background:#000;overflow:hidden}#p{width:100%;height:100%}"
         "</style></head><body><div id='p'></div><script>"
-        "var P=null,E=0,VQ='%4',pthkPlayerReady=false,pendingVideo=null;"
+        "var P=null,E=0,VQ='%4',pthkPlayerReady=false,pendingVideo=null,showCc=%5;"
         "function onYouTubeIframeAPIReady(){P=new YT.Player('p',{"
         "width:'100%',height:'100%',videoId:'%1',"
-        "playerVars:{autoplay:1,controls:0,rel:0,modestbranding:1,iv_load_policy:3,playsinline:1,fs:0,disablekb:1,origin:'%3'},"
+        "playerVars:{autoplay:1,controls:0,rel:0,modestbranding:1,iv_load_policy:3,playsinline:1,fs:0,disablekb:1,cc_load_policy:%6,origin:'%3'},"
         "events:{"
         "onReady:function(e){"
         "  pthkPlayerReady=true;"
@@ -1087,6 +1126,16 @@ void YouTubePlayer::playVideo(const QString &videoId, int volume)
         "    if(VQ&&e.target.setPlaybackQuality)e.target.setPlaybackQuality(VQ);"
         "    e.target.playVideo();"
         "  }"
+        "  if(!showCc){"
+        "    try{e.target.unloadModule('captions');e.target.unloadModule('cc');}catch(x){}"
+        "    try{e.target.setOption('captions','track',{});}catch(x){}"
+        "  }else{"
+        "    try{e.target.loadModule('captions');}catch(x){}"
+        "  }"
+        "  var ifr=document.querySelector('iframe');"
+        "  if(ifr&&ifr.contentWindow){"
+        "    ifr.contentWindow.postMessage({type:'PTHK_TOGGLE_CAPTIONS',visible:showCc},'*');"
+        "  }"
         "},"
         "onStateChange:function(e){if(e.data===1&&VQ&&e.target.setPlaybackQuality)e.target.setPlaybackQuality(VQ);},"
         "onError:function(e){E=e.data;}"
@@ -1094,7 +1143,7 @@ void YouTubePlayer::playVideo(const QString &videoId, int volume)
         "function pthkState(){if(!P||!P.getPlayerState)return JSON.stringify({s:-2,e:E});"
         "return JSON.stringify({s:P.getPlayerState(),t:P.getCurrentTime(),d:P.getDuration(),e:E});}"
         "</script><script src='https://www.youtube.com/iframe_api'></script></body></html>")
-        .arg(videoId).arg(clampedVol).arg(kPlayerOrigin).arg(vq);
+        .arg(videoId).arg(clampedVol).arg(kPlayerOrigin).arg(vq).arg(showCc ? "true" : "false").arg(showCc ? "1" : "0");
     setHtml(html, QUrl(QString(kPlayerOrigin) + "/"));
     pageReady = true;
     pollTimer.start();
@@ -1168,6 +1217,27 @@ void YouTubePlayer::setVolume(int volume)
 {
     page()->runJavaScript(QString("P&&P.setVolume&&P.setVolume(%1)").arg(qBound(0, volume, 100)));
 }
+
+void YouTubePlayer::setSubtitlesVisible(bool visible)
+{
+    subtitlesVisible = visible;
+    const QString js = QString(
+        "var ifr = document.querySelector('iframe');"
+        "if (ifr && ifr.contentWindow) {"
+        "  ifr.contentWindow.postMessage({type: 'PTHK_TOGGLE_CAPTIONS', visible: %1}, '*');"
+        "}"
+        "if (window.P) {"
+        "  if (%1) {"
+        "    try { P.loadModule('captions'); } catch(e){}"
+        "  } else {"
+        "    try { P.unloadModule('captions'); P.unloadModule('cc'); } catch(e){}"
+        "    try { P.setOption('captions', 'track', {}); } catch(e){}"
+        "  }"
+        "}"
+    ).arg(visible ? "true" : "false");
+    page()->runJavaScript(js);
+}
+
 
 void YouTubePlayer::stopVideo()
 {

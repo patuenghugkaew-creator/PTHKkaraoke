@@ -290,6 +290,7 @@ private:
     QPushButton *btnMuteVocal;
     QPushButton *btnMedley = nullptr;
     QPushButton *btnSecondScreen = nullptr;
+    QPushButton *btnSubtitles = nullptr;
     SongDatabase *db;
     QTimer *timer1, *timer2, *positionTimer, *lyricsTimer;
     QTimer *detailTimer;
