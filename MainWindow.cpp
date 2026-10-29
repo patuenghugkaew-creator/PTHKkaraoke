@@ -2549,6 +2549,11 @@ void MainWindow::playYouTube()
                         videoWidget->setFrame(show);
                         if (secondLyr != nullptr && secondMonitor)
                             secondMonitor->setVideoFrame(show);
+                    } else {
+                        // While the delayed buffer is priming, continue rendering live frames smoothly (never freeze)
+                        videoWidget->setPixmap(pm);
+                        if (secondLyr != nullptr && secondMonitor)
+                            secondMonitor->setVideoPixmap(pm);
                     }
                 } else {
                     if (!delayedFrames.empty())

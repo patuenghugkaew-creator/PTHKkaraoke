@@ -60,7 +60,7 @@ public:
     }
 
 private:
-    static constexpr int N = 2048;          // ~43 ms at 48 kHz
+    static constexpr int N = 1024;          // ~21 ms at 48 kHz (low latency, fast FFT)
     static constexpr int H = N / 4;         // 75 % overlap
     static constexpr double kPi = 3.14159265358979323846;
 

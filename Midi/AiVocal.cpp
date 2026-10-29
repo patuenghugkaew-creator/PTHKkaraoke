@@ -213,7 +213,7 @@ void AiVocalEngine::selectModel(const QString &key)
             return;
     }
     if (loaderThread.joinable())
-        loaderThread.join();            // one load at a time; the last pick wins
+        loaderThread.detach();          // detach background loader so GUI thread never hangs
     loaderThread = std::thread([this, key]() { loadModel(key); });
 }
 
