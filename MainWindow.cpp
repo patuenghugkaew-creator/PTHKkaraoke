@@ -2622,6 +2622,13 @@ void MainWindow::playYouTube()
     }
     if (lyricsTimer && lyricsTimer->isActive())
         lyricsTimer->stop();
+#ifdef KM_HAVE_PROCLOOP
+    delayedFrames.clear();
+    if (frameClock.isValid())
+        frameClock.restart();
+    if (ytAudio && ytAudio->aiMode() && aiEngine)
+        aiEngine->reset();
+#endif
     ui->frameSearch->hide();
     ui->playlistWidget->hide();
     ui->chMix->hide();
@@ -3181,6 +3188,9 @@ void MainWindow::stop()
         videoWidget->clear();
         videoWidget->hide();
         bgWidget->setVideoPaused(false);
+#ifdef KM_HAVE_PROCLOOP
+        delayedFrames.clear();
+#endif
     }
 #endif
 

@@ -301,6 +301,8 @@ void AiVocalEngine::reset()
     fifoFrames = 0;
     playing = false;
     windowReset = true;             // the window belongs to the worker thread: it clears it itself
+    arrivals.clear();
+    delay = -1;
 }
 
 void AiVocalEngine::push(const float *data, int frames)
