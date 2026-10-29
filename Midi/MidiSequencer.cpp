@@ -346,7 +346,24 @@ void MidiSequencer::applyAutoMedleyBounds(const QVector<long> &lyricCursors,
         int startBar = 0;
         if (firstLyricTick > 0) {
             const int vocalBar = _midi->barFromTick(uint32_t(firstLyricTick));
-            startBar = qMax(0, vocalBar - qBound(0, introLeadInBars, 8));
+            const int leadIn = qBound(0, introLeadInBars, 8);
+            startBar = qMax(0, vocalBar - leadIn);
+            // Ensure startBar is not placed in an empty silent bar before vocals
+            if (leadIn > 0 && startBar < vocalBar) {
+                const uint32_t targetTick = _midi->tickFromBar(startBar);
+                const uint32_t vocalTick = _midi->tickFromBar(vocalBar);
+                bool hasNotes = false;
+                for (MidiEvent *e : _midi->events()) {
+                    if (e->tick() >= vocalTick) break;
+                    if (e->tick() >= targetTick && e->eventType() == MidiEventType::NoteOn && e->data2() > 0) {
+                        hasNotes = true;
+                        break;
+                    }
+                }
+                if (!hasNotes) {
+                    startBar = vocalBar;
+                }
+            }
         } else {
             // Instrumental fallback: skip leading silence to first band/drum groove
             int firstMusicTick = 0;
@@ -670,6 +687,7 @@ void MidiSequencer::run()
         _startPlayTime = _midi->timeFromTick(_startTick, _midiSpeed) * 1000;
         _positionMs = _startPlayTime;
         _positionTick = _startTick;
+        _playedIndex = eventIndexFromTick(_startTick);
     } else {
         _startPlayTime = _midi->timeFromTick(_positionTick, _midiSpeed) * 1000;
         _positionMs = _startPlayTime;

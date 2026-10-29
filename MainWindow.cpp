@@ -2056,6 +2056,11 @@ void MainWindow::checkEndAfterLyrics(qint64 pos, qint64 remainingMs)
         afterLyrics = true;
         if (player->isUseMedley()) {
             if (player->isPlayerPlaying() && (player->midiSequencerTemp() != nullptr || playlist.size() > (playingIndex + 1))) {
+                if (player->midiSequencerTemp() == nullptr && playlist.size() > (playingIndex + 1)) {
+                    loadNextMedley(playlist[playingIndex + 1]);
+                    if (medleyLoader != nullptr && medleyLoader->isRunning())
+                        medleyLoader->wait();
+                }
                 MidiSequencer *seq = player->midiSequencer();
                 const int waitBars = player->medleyWaitBars();
                 int targetBar = seq->currentBar() + waitBars + 1;

@@ -497,25 +497,30 @@ uint32_t MidiFile::tickFromBeat(float beat)
 
 uint32_t MidiFile::tickFromBar(int barNumber)
 {
-    if (barNumber <= 0) return 0; uint32_t result = 0, lastBar = 0, lastBeat = 0, lastBeatInBar = 4;
+    if (barNumber <= 0) return 0;
+    uint32_t accumulatedTicks = 0;
+    int lastBar = 0;
+    int lastBeat = 0;
+    int beatInBar = 4;
 
     for (const SignatureBeat &sigBeat : MidiHelper::calculateBeats(this)) {
-        uint32_t nBar = lastBar + ((sigBeat.nBeat - lastBeat) / sigBeat.nBeatInBar);
-        if (nBar >= barNumber) {
-            result = (barNumber - lastBar) * lastBeatInBar * fResolution;
-            lastBar = barNumber;
-            break;
-        } else {
-            lastBar = nBar;
-            lastBeat = sigBeat.nBeat;
-            lastBeatInBar = sigBeat.nBeatInBar;
+        if (sigBeat.nBeatInBar <= 0) continue;
+        int barsInSegment = (sigBeat.nBeat - lastBeat) / beatInBar;
+        if (lastBar + barsInSegment >= barNumber) {
+            accumulatedTicks += uint32_t(barNumber - lastBar) * beatInBar * fResolution;
+            return accumulatedTicks;
         }
+        accumulatedTicks += uint32_t(sigBeat.nBeat - lastBeat) * fResolution;
+        lastBar += barsInSegment;
+        lastBeat = sigBeat.nBeat;
+        beatInBar = sigBeat.nBeatInBar;
     }
 
-    if (barNumber > lastBar)
-        result = (barNumber - lastBar) * lastBeatInBar * fResolution;
+    if (barNumber > lastBar) {
+        accumulatedTicks += uint32_t(barNumber - lastBar) * beatInBar * fResolution;
+    }
 
-    return result;
+    return accumulatedTicks;
 }
 
 int MidiFile::barFromTick(uint32_t tick)
