@@ -1,5 +1,6 @@
 #include "MidiSequencer.h"
 #include <QRandomGenerator>
+#include <QMap>
 
 MidiSequencer::MidiSequencer(QObject *parent) : QThread(parent)
 {
@@ -330,6 +331,8 @@ void MidiSequencer::applyAutoMedleyBounds(const QVector<long> &lyricCursors,
     // 1. Auto-detect first active musical bar (Cue-In)
     // If skipIntro is enabled: jump directly to introLeadInBars (e.g. 1-2 bars) before the first lyric
     // so the singer starts singing right after the transition without waiting through a long intro!
+    // Also intelligently detects "เกริ่น" (Lam-Kern / Recitative Intro): if singing begins several bars
+    // before the main rhythm/groove starts, skip the rubato recitative and lock directly onto the main dance groove!
     if (manualStartBar > 0) {
         setCutStartBar(manualStartBar);
     } else if (!skipIntro) {
@@ -343,15 +346,88 @@ void MidiSequencer::applyAutoMedleyBounds(const QVector<long> &lyricCursors,
             }
         }
 
+        // Detect where the continuous drum groove (Kick & Snare) actually starts
+        int firstGrooveBar = -1;
+        QMap<int, int> barDrumHits; // bar -> count of kick/snare hits
+        for (MidiEvent *e : _midi->events()) {
+            if (e->eventType() == MidiEventType::NoteOn && e->data2() > 0 && e->channel() == 9) {
+                const int n = e->data1();
+                if (n == 35 || n == 36 || n == 38 || n == 40 || n == 37) {
+                    const int b = _midi->barFromTick(e->tick());
+                    barDrumHits[b]++;
+                }
+            }
+        }
+
+        for (auto it = barDrumHits.begin(); it != barDrumHits.end(); ++it) {
+            const int bar = it.key();
+            const int hits = it.value();
+            if (hits >= 2) {
+                if (barDrumHits.value(bar + 1, 0) >= 2 || barDrumHits.value(bar + 2, 0) >= 2) {
+                    firstGrooveBar = bar;
+                    break;
+                }
+            }
+        }
+
+        // Also check if there's a tempo jump (e.g., slow recitative intro -> fast dance groove)
+        int tempoJumpBar = -1;
+        if (_midi->tempoEvents().size() > 1) {
+            const int baseBpm = _midi->tempoEvents()[0]->bpm();
+            for (int i = 1; i < _midi->tempoEvents().size(); ++i) {
+                MidiEvent *te = _midi->tempoEvents()[i];
+                if (te->bpm() >= int(baseBpm * 1.25) && te->bpm() >= 90) {
+                    tempoJumpBar = _midi->barFromTick(te->tick());
+                    break;
+                }
+            }
+        }
+
+        int targetGrooveBar = firstGrooveBar;
+        if (tempoJumpBar > 0) {
+            if (targetGrooveBar < 0 || (tempoJumpBar > 0 && tempoJumpBar <= targetGrooveBar))
+                targetGrooveBar = tempoJumpBar;
+        }
+
         int startBar = 0;
+        const int leadIn = qBound(0, introLeadInBars, 8);
+
         if (firstLyricTick > 0) {
-            const int vocalBar = _midi->barFromTick(uint32_t(firstLyricTick));
-            const int leadIn = qBound(0, introLeadInBars, 8);
-            startBar = qMax(0, vocalBar - leadIn);
+            const int firstVocalBar = _midi->barFromTick(uint32_t(firstLyricTick));
+            bool isRecitative = false;
+
+            // If the first vocal starts 3+ bars before the main drum groove begins,
+            // this is a "เกริ่น" (Lam-Kern / rubato recitative intro)!
+            if (targetGrooveBar > firstVocalBar + 2) {
+                isRecitative = true;
+            }
+
+            if (isRecitative && targetGrooveBar >= 0) {
+                // Find the first vocal tick that occurs at or after the main groove begins
+                const uint32_t grooveStartTick = _midi->tickFromBar(targetGrooveBar);
+                long firstMainVocalTick = -1;
+                for (long c : lyricCursors) {
+                    if (c >= long(grooveStartTick)) {
+                        firstMainVocalTick = c;
+                        break;
+                    }
+                }
+
+                if (firstMainVocalTick > 0) {
+                    const int mainVocalBar = _midi->barFromTick(uint32_t(firstMainVocalTick));
+                    startBar = qMax(targetGrooveBar, mainVocalBar - leadIn);
+                } else {
+                    startBar = targetGrooveBar;
+                }
+            } else {
+                startBar = qMax(0, firstVocalBar - leadIn);
+            }
+
             // Ensure startBar is not placed in an empty silent bar before vocals
-            if (leadIn > 0 && startBar < vocalBar) {
+            const int effectiveVocalBar = isRecitative ? qMax(startBar, targetGrooveBar) : firstVocalBar;
+            if (leadIn > 0 && startBar < effectiveVocalBar) {
                 const uint32_t targetTick = _midi->tickFromBar(startBar);
-                const uint32_t vocalTick = _midi->tickFromBar(vocalBar);
+                const uint32_t vocalTick = _midi->tickFromBar(effectiveVocalBar);
                 bool hasNotes = false;
                 for (MidiEvent *e : _midi->events()) {
                     if (e->tick() >= vocalTick) break;
@@ -361,7 +437,7 @@ void MidiSequencer::applyAutoMedleyBounds(const QVector<long> &lyricCursors,
                     }
                 }
                 if (!hasNotes) {
-                    startBar = vocalBar;
+                    startBar = effectiveVocalBar;
                 }
             }
         } else {
