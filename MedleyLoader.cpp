@@ -95,10 +95,21 @@ void MedleyLoader::run()
         candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB" + _song->path();
         candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB/" + _song->path();
         candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIBKLDEMO" + _song->path();
+        const QChar fc = !_song->id().isEmpty() ? _song->id().at(0).toUpper() : QChar('S');
+        candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIBKLDEMO/" + QString(fc) + "/" + _song->id() + ".sibkldemo";
         candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIBKLDEMO/S/" + _song->id() + ".sibkldemo";
-        if (!_song->id().isEmpty()) {
-            const QChar fc = _song->id().at(0).toUpper();
-            candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB/" + QString(fc) + "/" + _song->id() + ".sib";
+        candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIBKLDEMO/" + _song->id() + ".sibkldemo";
+        candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB/" + QString(fc) + "/" + _song->id() + ".sib";
+        if (!_songDb->sibPath().isEmpty()) {
+            QDir sDir(_songDb->sibPath());
+            candidates << sDir.absoluteFilePath(_song->id() + ".sib");
+            candidates << sDir.absoluteFilePath(QString(fc) + "/" + _song->id() + ".sib");
+            if (sDir.cdUp()) {
+                candidates << sDir.absoluteFilePath("SIBKLDEMO/" + QString(fc) + "/" + _song->id() + ".sibkldemo");
+                candidates << sDir.absoluteFilePath("SIBKLDEMO/" + _song->id() + ".sibkldemo");
+                candidates << sDir.absoluteFilePath("SIB/" + QString(fc) + "/" + _song->id() + ".sib");
+                candidates << sDir.absoluteFilePath("SIB/" + _song->id() + ".sib");
+            }
         }
         for (const QString &cand : candidates) {
             if (QFile::exists(cand)) {

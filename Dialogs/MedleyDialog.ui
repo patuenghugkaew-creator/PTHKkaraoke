@@ -6,51 +6,193 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>660</width>
-    <height>560</height>
+    <width>700</width>
+    <height>580</height>
    </rect>
+  </property>
+  <property name="minimumSize">
+   <size>
+    <width>680</width>
+    <height>560</height>
+   </size>
   </property>
   <property name="windowTitle">
    <string>ตั้งค่าระบบเมดเล่ย์ (Medley Studio)</string>
   </property>
   <property name="styleSheet">
-   <string notr="true">QDialog { background-color: #0f172a; color: #f8fafc; font-size: 11pt; }
-QLabel { color: #e2e8f0; }
-QGroupBox { font-weight: bold; border: 1px solid #334155; border-radius: 6px; margin-top: 10px; padding-top: 10px; color: #38bdf8; }
-QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; left: 10px; padding: 0 4px; }
-QTabWidget::pane { border: 1px solid #334155; border-radius: 6px; background-color: #1e293b; }
-QTabBar::tab { background-color: #0f172a; color: #94a3b8; padding: 8px 16px; border-top-left-radius: 6px; border-top-right-radius: 6px; margin-right: 2px; }
-QTabBar::tab:selected { background-color: #1e293b; color: #38bdf8; font-weight: bold; }
-QSpinBox, QDoubleSpinBox, QComboBox { background-color: #0f172a; border: 1px solid #475569; border-radius: 4px; padding: 4px 8px; color: #f8fafc; }
-QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus { border: 1px solid #38bdf8; }
-QCheckBox { color: #e2e8f0; spacing: 8px; }
-QCheckBox::indicator { width: 18px; height: 18px; }
-QPushButton { background-color: #2563eb; color: #ffffff; border-radius: 5px; padding: 6px 16px; font-weight: bold; }
-QPushButton:hover { background-color: #1d4ed8; }
-QPushButton#btnReset { background-color: #334155; color: #cbd5e1; }
-QPushButton#btnReset:hover { background-color: #475569; }
-QPushButton#btnCancel { background-color: #475569; color: #f8fafc; }
-QPushButton#btnCancel:hover { background-color: #64748b; }
+   <string notr="true">QDialog {
+    background-color: #0d1117;
+    color: #e6edf3;
+    font-size: 11pt;
+}
+QLabel {
+    color: #e6edf3;
+}
+QTabWidget::pane {
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    background-color: #161b22;
+}
+QTabBar::tab {
+    background-color: #0d1117;
+    color: #8b949e;
+    padding: 9px 18px;
+    font-weight: bold;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    margin-right: 3px;
+    min-width: 150px;
+}
+QTabBar::tab:selected {
+    background-color: #161b22;
+    color: #58a6ff;
+    border: 1px solid #30363d;
+    border-bottom: none;
+}
+QTabBar::tab:hover:!selected {
+    background-color: #21262d;
+    color: #c9d1d9;
+}
+QComboBox {
+    background-color: #21262d;
+    color: #f0f6fc;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 5px 10px;
+    min-height: 26px;
+}
+QComboBox:focus, QComboBox:hover {
+    border: 1px solid #58a6ff;
+}
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    width: 26px;
+    border-left: 1px solid #30363d;
+}
+QComboBox QAbstractItemView {
+    background-color: #161b22;
+    color: #f0f6fc;
+    selection-background-color: #1f6feb;
+    selection-color: #ffffff;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 4px;
+    outline: none;
+}
+QComboBox QAbstractItemView::item {
+    min-height: 28px;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+QComboBox QAbstractItemView::item:hover {
+    background-color: #21262d;
+    color: #58a6ff;
+}
+QComboBox QAbstractItemView::item:selected {
+    background-color: #1f6feb;
+    color: #ffffff;
+}
+QSpinBox, QDoubleSpinBox {
+    background-color: #21262d;
+    color: #f0f6fc;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 4px 8px;
+    min-height: 26px;
+}
+QSpinBox:focus, QDoubleSpinBox:focus {
+    border: 1px solid #58a6ff;
+}
+QSlider::groove:horizontal {
+    height: 6px;
+    background: #30363d;
+    border-radius: 3px;
+}
+QSlider::sub-page:horizontal {
+    background: #1f6feb;
+    border-radius: 3px;
+}
+QSlider::handle:horizontal {
+    background: #58a6ff;
+    border: 2px solid #ffffff;
+    width: 16px;
+    margin-top: -5px;
+    margin-bottom: -5px;
+    border-radius: 8px;
+}
+QSlider::handle:horizontal:hover {
+    background: #79c0ff;
+}
+QCheckBox {
+    color: #e6edf3;
+    spacing: 8px;
+}
+QCheckBox::indicator {
+    width: 18px;
+    height: 18px;
+    border: 1px solid #484f58;
+    border-radius: 4px;
+    background-color: #21262d;
+}
+QCheckBox::indicator:hover {
+    border: 1px solid #58a6ff;
+}
+QCheckBox::indicator:checked {
+    background-color: #1f6feb;
+    border: 1px solid #58a6ff;
+}
+QPushButton {
+    background-color: #1f6feb;
+    color: #ffffff;
+    border-radius: 6px;
+    padding: 7px 18px;
+    font-weight: bold;
+    border: 1px solid #388bfd;
+}
+QPushButton:hover {
+    background-color: #388bfd;
+}
+QPushButton#btnReset {
+    background-color: #21262d;
+    color: #c9d1d9;
+    border: 1px solid #30363d;
+}
+QPushButton#btnReset:hover {
+    background-color: #30363d;
+    color: #f0f6fc;
+}
+QPushButton#btnCancel {
+    background-color: #30363d;
+    color: #f0f6fc;
+    border: 1px solid #484f58;
+}
+QPushButton#btnCancel:hover {
+    background-color: #484f58;
+}
 </string>
   </property>
   <layout class="QVBoxLayout" name="mainLayout">
    <property name="spacing">
-    <number>10</number>
+    <number>12</number>
    </property>
    <property name="leftMargin">
-    <number>12</number>
+    <number>14</number>
    </property>
    <property name="topMargin">
-    <number>12</number>
+    <number>14</number>
    </property>
    <property name="rightMargin">
-    <number>12</number>
+    <number>14</number>
    </property>
    <property name="bottomMargin">
-    <number>12</number>
+    <number>14</number>
    </property>
    <item>
     <layout class="QHBoxLayout" name="headerLayout">
+     <property name="spacing">
+      <number>10</number>
+     </property>
      <item>
       <widget class="QLabel" name="labelPreset">
        <property name="font">
@@ -73,12 +215,12 @@ QPushButton#btnCancel:hover { background-color: #64748b; }
        </property>
        <item>
         <property name="text">
-         <string>🎉 ปาร์ตี้ / วาไรตี้ (Party &amp; Variety) - ต่อเร็ว กระชับ สนุกสนาน</string>
+         <string>🎉 ปาร์ตี้ / วาไรตี้ (Party &amp;&amp; Variety) - ต่อเร็ว กระชับ สนุกสนาน</string>
         </property>
        </item>
        <item>
         <property name="text">
-         <string>🍷 ฟังสบาย / ร้านอาหาร (Restaurant &amp; Lounge) - เฟดนุ่มนวล</string>
+         <string>🍷 ฟังสบาย / ร้านอาหาร (Restaurant &amp;&amp; Lounge) - เฟดนุ่มนวล</string>
         </property>
        </item>
        <item>
@@ -100,7 +242,7 @@ QPushButton#btnCancel:hover { background-color: #64748b; }
      <property name="minimumSize">
       <size>
        <width>0</width>
-       <height>125</height>
+       <height>138</height>
       </size>
      </property>
     </widget>
@@ -112,7 +254,7 @@ QPushButton#btnCancel:hover { background-color: #64748b; }
      </property>
      <widget class="QWidget" name="tabCues">
       <attribute name="title">
-       <string>จุดตัด &amp; โครงสร้างห้องเพลง</string>
+       <string>จุดตัดและโครงสร้างห้องเพลง</string>
       </attribute>
       <layout class="QVBoxLayout" name="layoutTab1">
        <property name="spacing">
@@ -237,11 +379,11 @@ QPushButton#btnCancel:hover { background-color: #64748b; }
      </widget>
      <widget class="QWidget" name="tabMidi">
       <attribute name="title">
-       <string>จังหวะ &amp; การส่งกลอง MIDI</string>
+       <string>จังหวะและลูกส่งกลอง MIDI</string>
       </attribute>
       <layout class="QVBoxLayout" name="layoutTab2">
        <property name="spacing">
-        <number>10</number>
+        <number>11</number>
        </property>
        <property name="leftMargin">
         <number>16</number>
@@ -394,6 +536,9 @@ QPushButton#btnCancel:hover { background-color: #64748b; }
        </item>
        <item>
         <layout class="QHBoxLayout" name="rowFillVol">
+         <property name="spacing">
+          <number>10</number>
+         </property>
          <item>
           <widget class="QLabel" name="labelFillVol">
            <property name="text">
@@ -403,6 +548,12 @@ QPushButton#btnCancel:hover { background-color: #64748b; }
          </item>
          <item>
           <widget class="QSlider" name="sliderFillVol">
+           <property name="minimumSize">
+            <size>
+             <width>160</width>
+             <height>0</height>
+            </size>
+           </property>
            <property name="minimum">
             <number>50</number>
            </property>
@@ -419,6 +570,12 @@ QPushButton#btnCancel:hover { background-color: #64748b; }
          </item>
          <item>
           <widget class="QSpinBox" name="spinFillVol">
+           <property name="minimumSize">
+            <size>
+             <width>75</width>
+             <height>0</height>
+            </size>
+           </property>
            <property name="alignment">
             <set>Qt::AlignCenter</set>
            </property>
@@ -441,7 +598,7 @@ QPushButton#btnCancel:hover { background-color: #64748b; }
        <item>
         <widget class="QCheckBox" name="chkPreserveEffects">
          <property name="text">
-          <string>คงเสียงกังวาน Reverb &amp; Chorus หางเสียงไม่ถูกตัดขาด (Preserve Tail)</string>
+          <string>คงเสียงกังวาน Reverb และ Chorus หางเสียงไม่ตัดขาด (Preserve Tail)</string>
          </property>
          <property name="checked">
           <bool>true</bool>
@@ -452,7 +609,7 @@ QPushButton#btnCancel:hover { background-color: #64748b; }
      </widget>
      <widget class="QWidget" name="tabAudio">
       <attribute name="title">
-       <string>ครอสเฟด &amp; MP3 / Video</string>
+       <string>ครอสเฟด MP3 / Video</string>
       </attribute>
       <layout class="QVBoxLayout" name="layoutTab3">
        <property name="spacing">
@@ -602,7 +759,7 @@ QPushButton#btnCancel:hover { background-color: #64748b; }
        <property name="minimumSize">
         <size>
          <width>120</width>
-         <height>34</height>
+         <height>36</height>
         </size>
        </property>
        <property name="text">
@@ -628,7 +785,7 @@ QPushButton#btnCancel:hover { background-color: #64748b; }
        <property name="minimumSize">
         <size>
          <width>110</width>
-         <height>34</height>
+         <height>36</height>
         </size>
        </property>
        <property name="text">
@@ -644,7 +801,7 @@ QPushButton#btnCancel:hover { background-color: #64748b; }
        <property name="minimumSize">
         <size>
          <width>100</width>
-         <height>34</height>
+         <height>36</height>
         </size>
        </property>
        <property name="text">

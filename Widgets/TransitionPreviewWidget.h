@@ -16,7 +16,6 @@ public:
     explicit TransitionPreviewWidget(QWidget *parent = nullptr);
     ~TransitionPreviewWidget() override = default;
 
-    // Parameters controlling the preview
     void setMedleyParams(int waitBars,
                          bool quantizeBar,
                          bool skipIntro,

@@ -861,10 +861,10 @@ int SongDatabase::importSibDatabase(const QString &datPath, const QString &sibBa
             continue;
 
         QString relPath;
+        const QChar firstChar = id.isEmpty() ? QChar('0') : id.at(0).toUpper();
         if (songType == "SIBKLDEMO") {
-            relPath = QStringLiteral("/SIBKLDEMO/") + id + QStringLiteral(".sibkldemo");
+            relPath = QStringLiteral("/SIBKLDEMO/") + QString(firstChar) + QStringLiteral("/") + id + QStringLiteral(".sibkldemo");
         } else {
-            const QChar firstChar = id.isEmpty() ? QChar('0') : id.at(0).toUpper();
             relPath = QStringLiteral("/") + QString(firstChar) + QStringLiteral("/") + id + QStringLiteral(".sib");
         }
 

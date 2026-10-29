@@ -1071,10 +1071,21 @@ void MainWindow::play(int index, int position)
         candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB" + playingSong.path();
         candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB/" + playingSong.path();
         candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIBKLDEMO" + playingSong.path();
+        const QChar fc = !playingSong.id().isEmpty() ? playingSong.id().at(0).toUpper() : QChar('S');
+        candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIBKLDEMO/" + QString(fc) + "/" + playingSong.id() + ".sibkldemo";
         candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIBKLDEMO/S/" + playingSong.id() + ".sibkldemo";
-        if (!playingSong.id().isEmpty()) {
-            const QChar fc = playingSong.id().at(0).toUpper();
-            candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB/" + QString(fc) + "/" + playingSong.id() + ".sib";
+        candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIBKLDEMO/" + playingSong.id() + ".sibkldemo";
+        candidates << "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB/" + QString(fc) + "/" + playingSong.id() + ".sib";
+        if (!db->sibPath().isEmpty()) {
+            QDir sDir(db->sibPath());
+            candidates << sDir.absoluteFilePath(playingSong.id() + ".sib");
+            candidates << sDir.absoluteFilePath(QString(fc) + "/" + playingSong.id() + ".sib");
+            if (sDir.cdUp()) {
+                candidates << sDir.absoluteFilePath("SIBKLDEMO/" + QString(fc) + "/" + playingSong.id() + ".sibkldemo");
+                candidates << sDir.absoluteFilePath("SIBKLDEMO/" + playingSong.id() + ".sibkldemo");
+                candidates << sDir.absoluteFilePath("SIB/" + QString(fc) + "/" + playingSong.id() + ".sib");
+                candidates << sDir.absoluteFilePath("SIB/" + playingSong.id() + ".sib");
+            }
         }
 
         bool found = false;
@@ -3901,8 +3912,6 @@ void MainWindow::keyReleaseEvent(QKeyEvent *event)
 void MainWindow::openMedleySettings()
 {
     MedleyDialog dlg(this, player);
-    dlg.adjustSize();
-    dlg.setFixedSize(dlg.size());
     dlg.setModal(true);
     dlg.exec();
 
