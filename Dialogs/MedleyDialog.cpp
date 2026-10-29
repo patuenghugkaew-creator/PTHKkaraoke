@@ -79,7 +79,7 @@ void MedleyDialog::loadSettings()
     int bpm = settings.value("BPM", 120).toInt();
     int tempoMode = settings.value("TempoMode", 0).toInt();
     bool drumFill = settings.value("DrumFill", true).toBool();
-    int transitionBars = settings.value("TransitionBars", 1).toInt();
+    int transitionBars = qMax(1, settings.value("TransitionBars", 1).toInt());
     int fillPattern = settings.value("FillPattern", 0).toInt();
     int fillVolume = settings.value("FillVolume", 100).toInt();
     bool preserveEffects = settings.value("PreserveEffectsTail", true).toBool();
@@ -106,7 +106,10 @@ void MedleyDialog::loadSettings()
             bpm = _player->medleyBPM();
 
         tempoMode = _player->medleyTempoMode();
-        transitionBars = _player->medleyTransitionBars();
+        if (_player->medleyTransitionBars() > 0) {
+            transitionBars = _player->medleyTransitionBars();
+            drumFill = true;
+        }
         fillPattern = _player->medleyFillPattern();
         fillVolume = _player->medleyFillVolume();
         preserveEffects = _player->medleyPreserveEffectsTail();
@@ -129,7 +132,7 @@ void MedleyDialog::loadSettings()
     ui->spinBpm->setValue(qBound(40, bpm, 250));
     ui->comboTempoMode->setCurrentIndex(qBound(0, tempoMode, ui->comboTempoMode->count() - 1));
     ui->chkDrumFill->setChecked(drumFill);
-    ui->spinBars->setValue(qBound(0, transitionBars, 4));
+    ui->spinBars->setValue(qBound(1, transitionBars, 4));
     ui->comboPattern->setCurrentIndex(qBound(0, fillPattern, ui->comboPattern->count() - 1));
     ui->sliderFillVol->setValue(qBound(50, fillVolume, 130));
     ui->spinFillVol->setValue(qBound(50, fillVolume, 130));
@@ -139,7 +142,7 @@ void MedleyDialog::loadSettings()
     ui->spinWaitBars->setValue(qBound(0, waitBars, 8));
     ui->chkQuantizeBar->setChecked(quantizeBar);
     ui->chkSkipIntro->setChecked(skipIntro);
-    ui->spinIntroBars->setValue(introLeadInBars);
+    ui->spinIntroBars->setValue(qBound(1, introLeadInBars, 8));
     ui->spinIntroBars->setEnabled(skipIntro);
     ui->spinPreBuffer->setValue(qBound(10, preBufferSec, 60));
 
@@ -168,7 +171,8 @@ void MedleyDialog::saveSettings()
     const int bpm = ui->spinBpm->value();
     const int tempoMode = ui->comboTempoMode->currentIndex();
     const bool drumFill = ui->chkDrumFill->isChecked();
-    const int transitionBars = drumFill ? ui->spinBars->value() : 0;
+    const int spinBarsVal = ui->spinBars->value();
+    const int activeTransitionBars = drumFill ? spinBarsVal : 0;
     const int fillPattern = ui->comboPattern->currentIndex();
     const int fillVolume = ui->spinFillVol->value();
     const bool preserveEffects = ui->chkPreserveEffects->isChecked();
@@ -190,7 +194,7 @@ void MedleyDialog::saveSettings()
         _player->setMedleyPreset(preset);
         _player->setMedleyBPM(bpm);
         _player->setMedleyTempoMode(tempoMode);
-        _player->setMedleyTransitionBars(transitionBars);
+        _player->setMedleyTransitionBars(activeTransitionBars);
         _player->setMedleyFillPattern(fillPattern);
         _player->setMedleyFillVolume(fillVolume);
         _player->setMedleyPreserveEffectsTail(preserveEffects);
@@ -212,7 +216,7 @@ void MedleyDialog::saveSettings()
 
         if (_player->midiSequencerTemp() != nullptr) {
             _player->midiSequencerTemp()->setMedleyTransition(true,
-                                                             transitionBars,
+                                                             activeTransitionBars,
                                                              fillPattern,
                                                              bpm,
                                                              fillVolume,
@@ -228,7 +232,7 @@ void MedleyDialog::saveSettings()
     settings.setValue("BPM", bpm);
     settings.setValue("TempoMode", tempoMode);
     settings.setValue("DrumFill", drumFill);
-    settings.setValue("TransitionBars", transitionBars);
+    settings.setValue("TransitionBars", spinBarsVal);
     settings.setValue("FillPattern", fillPattern);
     settings.setValue("FillVolume", fillVolume);
     settings.setValue("PreserveEffectsTail", preserveEffects);
@@ -250,11 +254,11 @@ void MedleyDialog::saveSettings()
 
 void MedleyDialog::updatePreview()
 {
-    const int waitBars = ui->chkAutoCutOutro->isChecked() ? ui->spinWaitBars->value() : 0;
+    const bool autoCutOutro = ui->chkAutoCutOutro->isChecked();
+    const int waitBars = autoCutOutro ? ui->spinWaitBars->value() : 0;
     const bool quantizeBar = ui->chkQuantizeBar->isChecked();
     const bool skipIntro = ui->chkSkipIntro->isChecked();
-    const int introLeadInBars = ui->spinIntroBars->value();
-    const bool autoCutOutro = ui->chkAutoCutOutro->isChecked();
+    const int introBars = skipIntro ? ui->spinIntroBars->value() : 0;
     const int fillBars = ui->chkDrumFill->isChecked() ? ui->spinBars->value() : 0;
     const int fillPattern = ui->comboPattern->currentIndex();
     const int fillVolume = ui->spinFillVol->value();
@@ -264,7 +268,6 @@ void MedleyDialog::updatePreview()
     const int crossfadeCurve = ui->comboCrossfadeCurve->currentIndex();
     const int activeTab = ui->tabWidget->currentIndex();
 
-    const int introBars = ui->spinIntroBars->value();
     ui->previewWidget->setMedleyParams(waitBars,
                                       quantizeBar,
                                       skipIntro,
@@ -290,6 +293,7 @@ void MedleyDialog::applyPreset(int index)
         ui->spinWaitBars->setValue(1);
         ui->chkQuantizeBar->setChecked(true);
         ui->chkSkipIntro->setChecked(true);
+        ui->spinIntroBars->setValue(2);
         ui->spinPreBuffer->setValue(20);
 
         ui->comboTempoMode->setCurrentIndex(0); // Lock BPM
@@ -311,6 +315,7 @@ void MedleyDialog::applyPreset(int index)
         ui->spinWaitBars->setValue(2);
         ui->chkQuantizeBar->setChecked(true);
         ui->chkSkipIntro->setChecked(true);
+        ui->spinIntroBars->setValue(4);
         ui->spinPreBuffer->setValue(25);
 
         ui->comboTempoMode->setCurrentIndex(2); // Tempo Ramp / Morph
@@ -332,6 +337,7 @@ void MedleyDialog::applyPreset(int index)
         ui->spinWaitBars->setValue(1);
         ui->chkQuantizeBar->setChecked(true);
         ui->chkSkipIntro->setChecked(true);
+        ui->spinIntroBars->setValue(2);
         ui->spinPreBuffer->setValue(30);
 
         ui->comboTempoMode->setCurrentIndex(0); // Lock BPM
@@ -358,6 +364,7 @@ void MedleyDialog::applyPreset(int index)
     ui->sliderFillVol->setEnabled(ui->chkDrumFill->isChecked());
     ui->spinFillVol->setEnabled(ui->chkDrumFill->isChecked());
     ui->spinWaitBars->setEnabled(ui->chkAutoCutOutro->isChecked());
+    ui->spinIntroBars->setEnabled(ui->chkSkipIntro->isChecked());
 
     _isUpdatingUi = false;
     updatePreview();
