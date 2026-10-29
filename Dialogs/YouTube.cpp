@@ -1,5 +1,17 @@
 #include "YouTube.h"
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+static void setLowPriorityProcess(QProcess *p)
+{
+    p->setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments *args) {
+        args->flags |= BELOW_NORMAL_PRIORITY_CLASS | CREATE_NO_WINDOW;
+    });
+}
+#else
+static void setLowPriorityProcess(QProcess *) {}
+#endif
+
 #include <QApplication>
 #include <QCheckBox>
 #include <QClipboard>
@@ -596,6 +608,7 @@ YouTubeSearchDialog::YouTubeSearchDialog(QWidget *parent, const YtItem &seedItem
 
 YouTubeSearchDialog::~YouTubeSearchDialog()
 {
+    pendingThumbs.clear();
     // Search, suggestions and thumbnail downloads may still run (a song is usually picked before
     // all thumbnails arrive). Cut them off first: a "finished" handler running while this dialog
     // is torn down wrote into the already deleted list and crashed the program a little later.
@@ -737,6 +750,7 @@ void YouTubeSearchDialog::showHome()
         proc->kill();
     }
     homeMode = true;
+    pendingThumbs.clear();
     list->clear();
 
     QVector<YtHistory::Entry> h = YtHistory::all();
@@ -782,6 +796,7 @@ void YouTubeSearchDialog::showHome()
 QProcess *YouTubeSearchDialog::startYtdlp(const QStringList &args)
 {
     QProcess *p = new QProcess(this);
+    setLowPriorityProcess(p);
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     env.insert("PYTHONIOENCODING", "utf-8");
     env.insert("PYTHONUTF8", "1");
@@ -899,6 +914,7 @@ void YouTubeSearchDialog::search()
         proc->kill();
     }
     homeMode = false;
+    pendingThumbs.clear();
     list->clear();
     lbStatus->setText(tr("กำลังค้นหา \"%1\" ...").arg(q));
 
@@ -922,27 +938,50 @@ void YouTubeSearchDialog::search()
 void YouTubeSearchDialog::loadThumb(const QString &id)
 {
     const QString file = thumbDir + "/" + id + ".jpg";
-    auto apply = [this, id, file]() {
-        QPixmap pm(file);
-        if (pm.isNull())
-            return;
-        pm = pm.scaled(160, 90, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-        for (int i = 0; i < list->count(); i++)
-            if (list->item(i)->data(Qt::UserRole).toString() == id)
-                list->item(i)->setIcon(QIcon(pm));
-    };
     if (QFile::exists(file)) {
-        apply();
+        QPixmap pm(file);
+        if (!pm.isNull()) {
+            pm = pm.scaled(160, 90, Qt::KeepAspectRatio, Qt::FastTransformation);
+            for (int i = 0; i < list->count(); i++)
+                if (list->item(i)->data(Qt::UserRole).toString() == id)
+                    list->item(i)->setIcon(QIcon(pm));
+        }
         return;
     }
-    QProcess *p = new QProcess(this);
-    connect(p, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this, [p, apply](int code, QProcess::ExitStatus) {
-        p->deleteLater();
-        if (code == 0)
-            apply();
-    });
-    p->start("curl.exe", { "-s", "-L", "--fail", "-o", QDir::toNativeSeparators(file),
-                           "https://i.ytimg.com/vi/" + id + "/mqdefault.jpg" });
+    if (!pendingThumbs.contains(id)) {
+        pendingThumbs.append(id);
+        pumpThumbs();
+    }
+}
+
+void YouTubeSearchDialog::pumpThumbs()
+{
+    static const int kMaxConcurrentThumbs = 2;
+    while (activeThumbs < kMaxConcurrentThumbs && !pendingThumbs.isEmpty()) {
+        const QString id = pendingThumbs.takeFirst();
+        const QString file = thumbDir + "/" + id + ".jpg";
+        activeThumbs++;
+
+        QProcess *p = new QProcess(this);
+        setLowPriorityProcess(p);
+        connect(p, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+                this, [this, p, id, file](int code, QProcess::ExitStatus) {
+            p->deleteLater();
+            activeThumbs--;
+            if (code == 0 && QFile::exists(file)) {
+                QPixmap pm(file);
+                if (!pm.isNull()) {
+                    pm = pm.scaled(160, 90, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                    for (int i = 0; i < list->count(); i++)
+                        if (list->item(i)->data(Qt::UserRole).toString() == id)
+                            list->item(i)->setIcon(QIcon(pm));
+                }
+            }
+            pumpThumbs();
+        });
+        p->start("curl.exe", { "-s", "-L", "--fail", "-o", QDir::toNativeSeparators(file),
+                               "https://i.ytimg.com/vi/" + id + "/mqdefault.jpg" });
+    }
 }
 
 // ---- player ----------------------------------------------------------------
@@ -1009,22 +1048,55 @@ void YouTubePlayer::playVideo(const QString &videoId, int volume)
     duration = 0;
     waitedMs = 0;
 
+    const int clampedVol = qBound(0, volume, 100);
     const QString vq = QSettings().value("YtVideoQuality", "hd720").toString();
+
+    // If IFrame is already loaded and ready, tell JS to switch video directly via loadVideoById!
+    if (pageReady) {
+        const QString js = QString(
+            "if (window.pthkPlayerReady && window.P && typeof window.P.loadVideoById === 'function') {"
+            "  E = 0; P.setVolume(%1);"
+            "  P.loadVideoById({videoId: '%2', suggestedQuality: '%3'});"
+            "} else {"
+            "  window.pendingVideo = {id: '%2', vol: %1, q: '%3'};"
+            "}"
+        ).arg(clampedVol).arg(videoId).arg(vq);
+        page()->runJavaScript(js);
+        pollTimer.start();
+        return;
+    }
+
     const QString html = QString(
         "<!DOCTYPE html><html><head><meta charset='utf-8'><style>"
         "html,body{margin:0;height:100%;background:#000;overflow:hidden}#p{width:100%;height:100%}"
         "</style></head><body><div id='p'></div><script>"
-        "var P=null,E=0,VQ='%4';"
-        "function onYouTubeIframeAPIReady(){P=new YT.Player('p',{width:'100%',height:'100%',videoId:'%1',"
+        "var P=null,E=0,VQ='%4',pthkPlayerReady=false,pendingVideo=null;"
+        "function onYouTubeIframeAPIReady(){P=new YT.Player('p',{"
+        "width:'100%',height:'100%',videoId:'%1',"
         "playerVars:{autoplay:1,controls:0,rel:0,modestbranding:1,iv_load_policy:3,playsinline:1,fs:0,disablekb:1,origin:'%3'},"
-        "events:{onReady:function(e){e.target.setVolume(%2);if(VQ&&e.target.setPlaybackQuality)e.target.setPlaybackQuality(VQ);e.target.playVideo();},"
+        "events:{"
+        "onReady:function(e){"
+        "  pthkPlayerReady=true;"
+        "  if(pendingVideo){"
+        "    e.target.setVolume(pendingVideo.vol);"
+        "    if(pendingVideo.q&&e.target.setPlaybackQuality)e.target.setPlaybackQuality(pendingVideo.q);"
+        "    e.target.loadVideoById({videoId:pendingVideo.id,suggestedQuality:pendingVideo.q});"
+        "    pendingVideo=null;"
+        "  }else{"
+        "    e.target.setVolume(%2);"
+        "    if(VQ&&e.target.setPlaybackQuality)e.target.setPlaybackQuality(VQ);"
+        "    e.target.playVideo();"
+        "  }"
+        "},"
         "onStateChange:function(e){if(e.data===1&&VQ&&e.target.setPlaybackQuality)e.target.setPlaybackQuality(VQ);},"
-        "onError:function(e){E=e.data;}}});}"
+        "onError:function(e){E=e.data;}"
+        "}});}"
         "function pthkState(){if(!P||!P.getPlayerState)return JSON.stringify({s:-2,e:E});"
         "return JSON.stringify({s:P.getPlayerState(),t:P.getCurrentTime(),d:P.getDuration(),e:E});}"
         "</script><script src='https://www.youtube.com/iframe_api'></script></body></html>")
-        .arg(videoId).arg(qBound(0, volume, 100)).arg(kPlayerOrigin).arg(vq);
+        .arg(videoId).arg(clampedVol).arg(kPlayerOrigin).arg(vq);
     setHtml(html, QUrl(QString(kPlayerOrigin) + "/"));
+    pageReady = true;
     pollTimer.start();
 }
 
@@ -1101,8 +1173,11 @@ void YouTubePlayer::stopVideo()
 {
     active = false;
     paused = false;
+    started = false;
     pollTimer.stop();
-    setHtml("<html><body style='background:#000'></body></html>");
+    if (pageReady) {
+        page()->runJavaScript("if (window.P && typeof window.P.stopVideo === 'function') P.stopVideo();");
+    }
 }
 #endif
 

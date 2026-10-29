@@ -20,6 +20,9 @@
 #include <bass_fx.h>
 #include <mutex>
 #include <vector>
+#include <cmath>
+#include <atomic>
+#include <algorithm>
 
 class YtAudio
 {
@@ -30,11 +33,23 @@ public:
     ~YtAudio() { stop(); }
 
     // mixer: the synth's main mixer; pid: the process that plays the sound
+    // YouTube volume fade for Medley transitions (Crossfade)
+    void fadeVolume(float targetVol, int durationMs)
+    {
+        if (tempo)
+            BASS_ChannelSlideAttribute(tempo, BASS_ATTRIB_VOL, targetVol, DWORD(std::max(0, durationMs)));
+    }
+
+    // Smoothed RMS dB level for detecting silence at the end of YouTube clips (Auto-Cut Outro)
+    float currentLevelDb() const { return lastRmsDb.load(); }
+
     bool start(DWORD mixer, DWORD pid)
     {
         stop();
         ring.assign(kCapacity, 0.0f);
         readPos = writePos = filled = 0;
+        primed = false;
+        lastRmsDb.store(-90.0f);
 
         src = BASS_StreamCreate(RATE, 2, BASS_SAMPLE_FLOAT | BASS_STREAM_DECODE, &YtAudio::streamProc, this);
         if (!src)
@@ -113,9 +128,11 @@ public:
     double delaySeconds() const { return useAi && running() && ai->isPlaying() ? ai->delaySeconds() : 0.0; }
 
 private:
-    static constexpr float kQuiet = 0.00003f;           // about -90 dB at the speakers
-    static const size_t kCapacity = RATE * 2;           // 1 s of stereo floats
-    static const size_t kMaxLatency = RATE * 2 / 8;     // keep at most 125 ms waiting
+    static constexpr float kQuiet = 0.00003f;               // about -90 dB at the speakers
+    static const size_t kCapacity = RATE * 4;               // 2 s of stereo floats (expanded buffer)
+    static const size_t kStartThreshold = RATE * 2 * 80 / 1000; // wait 80 ms pre-buffer before releasing audio
+    static const size_t kMaxLatency = RATE * 2 * 260 / 1000;    // up to 260 ms to comfortably absorb BASS_FX Tempo
+    static const size_t kKeepLatency = RATE * 2 * 130 / 1000;   // drift reduction target
 
     void applyCut()
     {
@@ -141,26 +158,45 @@ private:
     void push(const float *d, int n)
     {
         const float gain = 1.0f / kQuiet;
+        scratch.resize(size_t(n));
+
+        double sumSq = 0.0;
+        for (int i = 0; i < n; i++) {
+            // Soft clamp to prevent clipping when new audio session starts before keepQuiet() activates
+            float v = d[i] * gain;
+            if (v > 1.0f) v = 1.0f;
+            else if (v < -1.0f) v = -1.0f;
+            scratch[size_t(i)] = v;
+            sumSq += double(v) * double(v);
+        }
+
+        if (n > 0) {
+            const double rms = std::sqrt(sumSq / double(n));
+            const float db = (rms > 1e-5) ? float(20.0 * std::log10(rms)) : -90.0f;
+            // Smooth dB value for Auto-Cut Outro detection
+            lastRmsDb.store(lastRmsDb.load() * 0.8f + db * 0.2f);
+        }
+
         if (useAi) {
-            scratch.resize(size_t(n));
-            for (int i = 0; i < n; i++)
-                scratch[size_t(i)] = d[i] * gain;
             ai->push(scratch.data(), n / 2);
             if (ai->isPlaying())
                 return;
         }
+
         std::lock_guard<std::mutex> lock(m);
         for (int i = 0; i < n; i++) {
-            ring[writePos] = d[i] * gain;
+            ring[writePos] = scratch[size_t(i)];
             writePos = (writePos + 1) % kCapacity;
             if (filled < kCapacity)
                 filled++;
             else
                 readPos = (readPos + 1) % kCapacity;
         }
-        while (filled > kMaxLatency) {      // the mixer fell behind: drop the oldest, stay in time with the picture
-            readPos = (readPos + 2) % kCapacity;
-            filled -= 2;
+
+        if (filled > kMaxLatency) {
+            const size_t skip = (filled - kKeepLatency) & ~size_t(1); // skip even stereo samples
+            readPos = (readPos + skip) % kCapacity;
+            filled -= skip;
         }
     }
 
@@ -178,12 +214,22 @@ private:
             }
             self->remover.setEnabled(self->cut);
         }
+
         std::lock_guard<std::mutex> lock(self->m);
+        if (!self->primed) {
+            if (self->filled >= kStartThreshold)
+                self->primed = true;
+        }
+
         size_t i = 0;
-        for (; i < want && self->filled > 0; i++) {
-            out[i] = self->ring[self->readPos];
-            self->readPos = (self->readPos + 1) % kCapacity;
-            self->filled--;
+        if (self->primed) {
+            for (; i < want && self->filled > 0; i++) {
+                out[i] = self->ring[self->readPos];
+                self->readPos = (self->readPos + 1) % kCapacity;
+                self->filled--;
+            }
+            if (i < want)
+                self->primed = false; // Ran dry: pause to re-accumulate 80 ms to prevent pops/clicks
         }
         for (; i < want; i++)
             out[i] = 0.0f;
@@ -208,6 +254,8 @@ private:
     std::atomic<bool> useAi{false};
     bool cut = false;
     float cutVocals = 0.0f, cutMusic = 1.0f;
+    bool primed = false;
+    std::atomic<float> lastRmsDb{-90.0f};
 };
 
 #endif // KM_HAVE_PROCLOOP

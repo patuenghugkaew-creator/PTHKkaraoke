@@ -122,6 +122,7 @@ private:
     void addHeader(const QString &text);
     QListWidgetItem *addSong(const YtItem &it, const QString &extra = QString());
     void loadThumb(const QString &id);
+    void pumpThumbs();
     QProcess *startYtdlp(const QStringList &args);
 
     QLineEdit *edSearch;
@@ -136,6 +137,8 @@ private:
     YtItem seed;
     QVector<YtItem> suggestions;        // the "next songs" of the home page
     bool homeMode = false;
+    QStringList pendingThumbs;
+    int activeThumbs = 0;
 };
 
 #ifdef PTHK_WEBENGINE
@@ -175,6 +178,7 @@ private:
     bool started = false;
     qint64 duration = 0;
     int waitedMs = 0;
+    bool pageReady = false;
 };
 #endif
 
