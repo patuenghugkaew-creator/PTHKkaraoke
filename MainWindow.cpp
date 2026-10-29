@@ -2037,14 +2037,16 @@ void MainWindow::endSongSmoothly()
 // pos: lyric position (MIDI ticks, or ms for MP3 + LRC); remainingMs: time to the end of the song
 void MainWindow::checkEndAfterLyrics(qint64 pos, qint64 remainingMs)
 {
-    if (!endAfterLyrics || endingSong)
+    const bool medleyAutoCut = player->isUseMedley() && player->medleyAutoCutOutro();
+    if ((!endAfterLyrics && !medleyAutoCut) || endingSong)
         return;
     if (lastLyricPos == -2) {
-        const QVector<long> c = lyrWidget->curData();
-        long last = -1;
-        for (long v : c)
-            last = qMax(last, v);
         lastLyricPos = lyrWidget->lastActiveLyricTick();
+        if (lastLyricPos <= 0) {
+            const QVector<long> c = lyrWidget->curData();
+            for (long v : c)
+                if (v > lastLyricPos) lastLyricPos = v;
+        }
     }
     if (lastLyricPos < 0)
         return;
@@ -2055,9 +2057,10 @@ void MainWindow::checkEndAfterLyrics(qint64 pos, qint64 remainingMs)
     if (!afterLyrics) {
         afterLyrics = true;
         if (player->isUseMedley()) {
-            if (player->isPlayerPlaying() && (player->midiSequencerTemp() != nullptr || playlist.size() > (playingIndex + 1))) {
-                if (player->midiSequencerTemp() == nullptr && playlist.size() > (playingIndex + 1)) {
-                    loadNextMedley(playlist[playingIndex + 1]);
+            const int nextMedleyIdx = (remove_playlist ? 0 : playingIndex + 1);
+            if (player->isPlayerPlaying() && (player->midiSequencerTemp() != nullptr || playlist.size() > nextMedleyIdx)) {
+                if (player->midiSequencerTemp() == nullptr && playlist.size() > nextMedleyIdx) {
+                    loadNextMedley(playlist[nextMedleyIdx]);
                     if (medleyLoader != nullptr && medleyLoader->isRunning())
                         medleyLoader->wait();
                 }
@@ -5276,6 +5279,13 @@ void MainWindow::onMedleyCountIn(int beat, int beatsPerBar, int bar, int totalBa
 
 void MainWindow::onPlayerThreadFinished()
 {
+    if (player->isUseMedley() && medleyLoader != nullptr && medleyLoader->isRunning()) {
+        medleyLoader->wait();
+        if (player->midiSequencerTemp() != nullptr) {
+            player->onSeqFinished();
+            return;
+        }
+    }
     if (player->isPlayerFinished()) {
         playNext();
     }

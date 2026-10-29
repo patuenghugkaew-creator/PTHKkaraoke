@@ -168,6 +168,7 @@ public:
 
 public slots:
     void sendEvent(MidiEvent e);
+    void onSeqFinished();
 
 signals:
     void loaded();
@@ -179,7 +180,6 @@ signals:
     void medleyCountIn(int beat, int beatsPerBar, int bar, int totalBars);
 
 private slots:
-    void onSeqFinished();
     void onSeqBpmChanged(int bpm);
 
 private:

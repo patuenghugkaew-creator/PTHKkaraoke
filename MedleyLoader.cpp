@@ -60,7 +60,7 @@ void MedleyLoader::run()
 
         PTHKCore::EmkSong emk = PTHKCore::readEmk(emkPath);
         if (emk.valid && !emk.midData.isEmpty()) {
-            QFile mid(TEMP_MIDI_DIR_PATH);
+            QFile mid(TEMP_MEDLEY_MIDI_DIR_PATH);
             if (mid.exists())
                 mid.remove();
 
@@ -68,7 +68,7 @@ void MedleyLoader::run()
             mid.write(emk.midData);
             mid.close();
 
-            _player->loadNextMedley(TEMP_MIDI_DIR_PATH, _song->cutStartBar(), _song->cutEndBar(), _song->bpmSpeed(), _song->transpose());
+            _player->loadNextMedley(TEMP_MEDLEY_MIDI_DIR_PATH, _song->cutStartBar(), _song->cutEndBar(), _song->bpmSpeed(), _song->transpose());
 
             mid.remove();
 
@@ -120,7 +120,7 @@ void MedleyLoader::run()
 
         PTHKCore::SibSong sib = PTHKCore::readSib(sibPath);
         if (sib.valid && !sib.midData.isEmpty()) {
-            QFile mid(TEMP_MIDI_DIR_PATH);
+            QFile mid(TEMP_MEDLEY_MIDI_DIR_PATH);
             if (mid.exists())
                 mid.remove();
 
@@ -128,7 +128,7 @@ void MedleyLoader::run()
             mid.write(sib.midData);
             mid.close();
 
-            _player->loadNextMedley(TEMP_MIDI_DIR_PATH, _song->cutStartBar(), _song->cutEndBar(), _song->bpmSpeed(), _song->transpose());
+            _player->loadNextMedley(TEMP_MEDLEY_MIDI_DIR_PATH, _song->cutStartBar(), _song->cutEndBar(), _song->bpmSpeed(), _song->transpose());
 
             mid.remove();
 
@@ -140,7 +140,7 @@ void MedleyLoader::run()
     {
         QString hnkPath = _songDb->hnkPath() + _song->path();
 
-        QFile mid(TEMP_MIDI_DIR_PATH);
+        QFile mid(TEMP_MEDLEY_MIDI_DIR_PATH);
         if (mid.exists())
             mid.remove();
 
@@ -148,7 +148,7 @@ void MedleyLoader::run()
         mid.write(HNKFile::midData(hnkPath));
         mid.close();
 
-        _player->loadNextMedley(TEMP_MIDI_DIR_PATH, _song->cutStartBar(), _song->cutEndBar(), _song->bpmSpeed(), _song->transpose());
+        _player->loadNextMedley(TEMP_MEDLEY_MIDI_DIR_PATH, _song->cutStartBar(), _song->cutEndBar(), _song->bpmSpeed(), _song->transpose());
 
         mid.remove();
 

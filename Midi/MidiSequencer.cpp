@@ -397,47 +397,15 @@ void MidiSequencer::applyAutoMedleyBounds(const QVector<long> &lyricCursors,
         setStartTick(_midi->tickFromBar(startBar));
     }
 
-    // 2. Auto-detect exact outro bar boundary (Cue-Out)
+    // 2. Outro bar boundary (Cue-Out)
     if (manualEndBar > 0) {
         setCutEndBar(manualEndBar);
-    } else if (!autoCutOutro) {
-        setCutEndBar(totalBars);
     } else {
-        long lastLyricTick = lastSungLyricTick;
-        if (lastLyricTick <= 0) {
-            for (long c : lyricCursors) {
-                if (c > lastLyricTick)
-                    lastLyricTick = c;
-            }
-        }
-        int lastGrooveTick = -1;
-        for (int i = _midi->events().size() - 1; i >= 0; i--) {
-            MidiEvent *e = _midi->events()[i];
-            if (e->eventType() == MidiEventType::NoteOn && e->data2() > 0 && e->channel() == 9) {
-                const int n = e->data1();
-                if (n == 35 || n == 36 || n == 38 || n == 40) {
-                    lastGrooveTick = int(e->tick());
-                    break;
-                }
-            }
-        }
-        int endBar = totalBars;
-        if (lastLyricTick > 0) {
-            const int lyrBar = _midi->barFromTick(uint32_t(lastLyricTick));
-            // Complete current sung bar (lyrBar + 1), then add waitBars
-            endBar = lyrBar + 1 + qMax(0, waitBars);
-            if (lastGrooveTick > 0) {
-                const int grooveBar = _midi->barFromTick(uint32_t(lastGrooveTick));
-                if (grooveBar >= lyrBar && endBar > grooveBar)
-                    endBar = grooveBar;
-            }
-        } else if (lastGrooveTick > 0) {
-            endBar = _midi->barFromTick(uint32_t(lastGrooveTick));
-        }
-        endBar = qBound(2, endBar, qMax(2, totalBars));
-        const int calcEndTick = int(_midi->tickFromBar(endBar));
-        if (calcEndTick > _startTick + res * 4)
-            setEndTick(calcEndTick);
+        // In automated Medley playback, dynamic outro cutting is handled by MainWindow::checkEndAfterLyrics
+        // as soon as the singer actually reaches and completes the final lyric.
+        // Never set a premature static _endTick here at the start of playback or load time,
+        // which cuts songs off in the middle of singing!
+        setCutEndBar(totalBars);
     }
 }
 
@@ -474,6 +442,28 @@ void MidiSequencer::playMedleyTransitionFill()
     QVector<DrumHit> hits;
 
     const double volScale = _medleyFillVolume / 100.0;
+
+    // Ensure Channel 9 (Drums) is audible, unmuted, and centered for the drum fill
+    MidiEvent volEvt;
+    volEvt.setEventType(MidiEventType::Controller);
+    volEvt.setChannel(9);
+    volEvt.setData1(7); // Main Volume
+    volEvt.setData2(127);
+    emit playingEvent(volEvt);
+
+    MidiEvent expEvt;
+    expEvt.setEventType(MidiEventType::Controller);
+    expEvt.setChannel(9);
+    expEvt.setData1(11); // Expression
+    expEvt.setData2(127);
+    emit playingEvent(expEvt);
+
+    MidiEvent panEvt;
+    panEvt.setEventType(MidiEventType::Controller);
+    panEvt.setChannel(9);
+    panEvt.setData1(10); // Pan center
+    panEvt.setData2(64);
+    emit playingEvent(panEvt);
 
     // 1. Lead-in bars (if totalBars > 1): play a steady drum groove bridge
     for (int bar = 0; bar < totalBars - 1; ++bar) {
@@ -660,6 +650,12 @@ void MidiSequencer::run()
                 case MidiEventType::NoteOn:
                     break;
                 default:
+                    // In a medley transition, do NOT allow lead-in events to silence or mute Channel 9 drums
+                    if (_isMedleyTransition && e->channel() == 9 && e->eventType() == MidiEventType::Controller) {
+                        const int ctrl = e->data1();
+                        if (ctrl == 7 || ctrl == 11 || ctrl == 120 || ctrl == 123)
+                            break;
+                    }
                     emit playingEvent(*e);
                 }
             else if (e->metaEventType() == MidiMetaType::SetTempo) {

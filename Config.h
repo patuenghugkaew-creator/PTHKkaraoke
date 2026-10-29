@@ -13,6 +13,7 @@
 
 #define TEMP_DIR_PATH           QDir::tempPath() + "/PTHKKaraoke"
 #define TEMP_MIDI_DIR_PATH      TEMP_DIR_PATH + "/temp.mid"
+#define TEMP_MEDLEY_MIDI_DIR_PATH TEMP_DIR_PATH + "/temp_medley.mid"
 
 #define ALL_DATA_DIR_PATH       QDir::homePath() + "/.PTHKKaraoke"
 
