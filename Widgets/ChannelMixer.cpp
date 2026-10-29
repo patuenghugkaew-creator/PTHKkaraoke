@@ -184,6 +184,7 @@ void ChannelMixer::setMuteVoice(bool mute)
     ui->chbMuteVoice->setChecked(mute);
     player->setMute(8, mute);
     chs[8]->setMuteButton(mute);
+    emit muteVoiceChanged(mute);
 }
 
 void ChannelMixer::showDeTail(int ch)

@@ -45,6 +45,7 @@ public slots:
 
 signals:
     void lockChanged(bool lock);
+    void muteVoiceChanged(bool mute);
     void mouseLeaved();
 
 protected:

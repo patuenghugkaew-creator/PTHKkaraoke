@@ -1,6 +1,8 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
+class VocalRemover;
+
 #include <QMainWindow>
 #include <QTimer>
 #include <QKeyEvent>
@@ -95,6 +97,15 @@ public:
     void stopMp3Stream();
     void setMp3Volume();
     qint64 mp3PositionMs();
+
+    // Video songs (e.g. downloaded YouTube clips) audio through BASS main mixer for Vocal Cut & Pitch
+    bool startVideoAudioStream(const QString &path);
+    void stopVideoAudioStream();
+    void setVideoAudioVolume();
+    void applyVideoVocalCut();
+    void changeVideoKey(int step);
+    qint64 videoAudioPositionMs();
+    static void CALLBACK videoVocalDspCallback(HDSP handle, DWORD channel, void *buffer, DWORD length, void *user);
 
     // Karaoke recording (music + microphone, F12) and vocal score
     void showHelpDialog();     // F1: shortcut keys and how to use the player
@@ -239,6 +250,11 @@ private:
     qint64 mp3CrossfadeElapsedMs = 0;
     int    mp3CrossfadeTotalMs = 3000;
     int    mp3CrossfadeCurve = 0;
+
+    DWORD videoAudioStream = 0;
+    DWORD videoAudioTempo = 0;
+    VocalRemover *videoVocalRemover = nullptr;
+    int   videoPitch = 0;
 
     bool vocalScore = false;
     int melodyNote = -1;        // sounding note of the vocal melody (channel 9), -1 = none

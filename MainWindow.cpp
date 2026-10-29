@@ -1,3 +1,4 @@
+#include "Midi/VocalRemover.h"
 #include <QMouseEvent>
 #include "MainWindow.h"
 #include "ui_MainWindow.h"
@@ -488,6 +489,22 @@ MainWindow::MainWindow(QWidget *parent) :
         connect(videoPlayer, &QMediaPlayer::positionChanged, this, [this](qint64 p) {
             if (!videoActive)
                 return;
+            if (videoAudioTempo) {
+                DWORD flags = BASS_Mixer_ChannelFlags(videoAudioTempo, 0, 0);
+                if (flags & BASS_MIXER_CHAN_PAUSE) {
+                    if (videoPlayer->state() == QMediaPlayer::PlayingState) {
+                        BASS_Mixer_ChannelSetPosition(videoAudioTempo,
+                            BASS_ChannelSeconds2Bytes(videoAudioTempo, p / 1000.0), BASS_POS_BYTE);
+                        BASS_Mixer_ChannelFlags(videoAudioTempo, 0, BASS_MIXER_CHAN_PAUSE);
+                    }
+                } else if (p > 500) {
+                    const qint64 aPos = videoAudioPositionMs();
+                    if (std::abs(p - aPos) > 250) {
+                        BASS_Mixer_ChannelSetPosition(videoAudioTempo,
+                            BASS_ChannelSeconds2Bytes(videoAudioTempo, p / 1000.0), BASS_POS_BYTE);
+                    }
+                }
+            }
             if (!ui->sliderPosition->isSliderDown())
                 ui->sliderPosition->setValue(int(p));
             onPlayerPositionMSChanged(p);
@@ -699,6 +716,8 @@ MainWindow::MainWindow(QWidget *parent) :
                 if (!throttle) {
                     dragTimer.start();
                     videoPlayer->setPosition(val);
+                    if (videoAudioTempo)
+                        BASS_Mixer_ChannelSetPosition(videoAudioTempo, BASS_ChannelSeconds2Bytes(videoAudioTempo, val / 1000.0), BASS_POS_BYTE);
                 }
                 return;
             }
@@ -779,9 +798,20 @@ MainWindow::MainWindow(QWidget *parent) :
 #ifdef KM_HAVE_PROCLOOP
                 applyYtVocalCut();
 #endif
+                applyVideoVocalCut();
                 ui->detail->setDetail(tr("เสียงร้อง "), on ? tr("ปิด") : tr("เปิด"));
                 ui->detail->show();
                 detailTimer->start(3000);
+            });
+            connect(ui->chMix, &ChannelMixer::muteVoiceChanged, this, [this](bool on) {
+                if (btnMuteVocal && btnMuteVocal->isChecked() != on) {
+                    QSignalBlocker block(btnMuteVocal);
+                    btnMuteVocal->setChecked(on);
+                }
+#ifdef KM_HAVE_PROCLOOP
+                applyYtVocalCut();
+#endif
+                applyVideoVocalCut();
             });
 
             QPushButton *btnMixer = addBarButton(tr("มิกเซอร์"), tr("เปิด / ปิด มิกเซอร์ปรับแต่งเสียงหลัก"));
@@ -837,6 +867,8 @@ MainWindow::MainWindow(QWidget *parent) :
 MainWindow::~MainWindow()
 {
     stop();
+    delete videoVocalRemover;
+    videoVocalRemover = nullptr;
 
 
     delete synthMix;
@@ -1739,7 +1771,8 @@ void MainWindow::applyVolume()
         player->setVolume(base);
     }
     player->setFadeGain(float(fadeGain));
-    videoPlayer->setVolume(v);
+    videoPlayer->setVolume(videoAudioTempo ? 0 : v);
+    setVideoAudioVolume();
 #ifdef PTHK_WEBENGINE
     if (ytPlayer)
         ytPlayer->setVolume(ytAudioLive() ? 100 : v);
@@ -3020,10 +3053,24 @@ void MainWindow::playVideo(const QString &path, bool isVideo)
             secondMonitor->setVideoVisible(true);
     }
 
-    // MP3 goes through the synth's main mixer (master EQ / effects / volume like the MIDI songs);
-    // Qt's player is only the fallback when the synth is not running
-    if (!mediaIsAudio || !startMp3Stream(path)) {
-        videoPlayer->setVolume(effectiveVolume());
+    if (mediaIsAudio) {
+        if (!startMp3Stream(path)) {
+            videoPlayer->setMuted(false);
+            videoPlayer->setVolume(effectiveVolume());
+            videoPlayer->setMedia(QUrl::fromLocalFile(path));
+            videoPlayer->play();
+        }
+    } else {
+        // Video songs (e.g. downloaded YouTube MP4s): route audio through BASS main mixer
+        // to enable Vocal Cut (VocalRemover DSP), pitch/key transpose, and master EQ!
+        const bool bassAudio = startVideoAudioStream(path);
+        if (bassAudio) {
+            videoPlayer->setMuted(true);
+            videoPlayer->setVolume(0);
+        } else {
+            videoPlayer->setMuted(false);
+            videoPlayer->setVolume(effectiveVolume());
+        }
         videoPlayer->setMedia(QUrl::fromLocalFile(path));
         videoPlayer->play();
     }
@@ -3170,6 +3217,8 @@ void MainWindow::pause()
     }
     if (videoActive) {
         videoPlayer->pause();
+        if (videoAudioTempo)
+            BASS_Mixer_ChannelFlags(videoAudioTempo, BASS_MIXER_CHAN_PAUSE, BASS_MIXER_CHAN_PAUSE);
         return;
     }
 #ifdef PTHK_WEBENGINE
@@ -3202,6 +3251,8 @@ void MainWindow::resume()
     }
     if (videoActive) {
         videoPlayer->play();
+        if (videoAudioTempo)
+            BASS_Mixer_ChannelFlags(videoAudioTempo, 0, BASS_MIXER_CHAN_PAUSE);
         return;
     }
 #ifdef PTHK_WEBENGINE
@@ -3231,6 +3282,7 @@ void MainWindow::stop()
         videoActive = false;
         mediaIsAudio = false;
         stopMp3Stream();
+        stopVideoAudioStream();
         videoPlayer->stop();
         videoPlayer->setMedia(QMediaContent());
         videoWidget->clear();
@@ -3658,6 +3710,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
 #ifdef KM_HAVE_PROCLOOP
         applyYtVocalCut();
 #endif
+        applyVideoVocalCut();
         ui->detail->show();
         detailTimer->start(3000);
         if (this->width() < 1160 && ui->chMix->isVisible()) {
@@ -3672,6 +3725,10 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         }
         if (ytActive) {
             changeYtKey(+1);
+            break;
+        }
+        if (videoActive && videoAudioTempo) {
+            changeVideoKey(+1);
             break;
         }
         playingSong.setTranspose(player->transpose() + 1);
@@ -3706,6 +3763,10 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         }
         if (ytActive) {
             changeYtKey(-1);
+            break;
+        }
+        if (videoActive && videoAudioTempo) {
+            changeVideoKey(-1);
             break;
         }
         playingSong.setTranspose(player->transpose() - 1);
@@ -5165,6 +5226,8 @@ void MainWindow::onSliderPositionPressed()
     if (videoActive) {
         playAfterSeek = videoPlayer->state() == QMediaPlayer::PlayingState;
         videoPlayer->pause();
+        if (videoAudioTempo)
+            BASS_Mixer_ChannelFlags(videoAudioTempo, BASS_MIXER_CHAN_PAUSE, BASS_MIXER_CHAN_PAUSE);
         return;
     }
 #ifdef PTHK_WEBENGINE
@@ -5190,11 +5253,17 @@ void MainWindow::onSliderPositionReleased()
         return;
     }
     if (videoActive) {      // video / MP3 slider is in milliseconds
-        videoPlayer->setPosition(ui->sliderPosition->value());
+        const qint64 seekVal = ui->sliderPosition->value();
+        videoPlayer->setPosition(seekVal);
+        if (videoAudioTempo)
+            BASS_Mixer_ChannelSetPosition(videoAudioTempo, BASS_ChannelSeconds2Bytes(videoAudioTempo, seekVal / 1000.0), BASS_POS_BYTE);
         if (mediaIsAudio)
-            lyrWidget->setSeekPositionCursor(ui->sliderPosition->value());
-        if (playAfterSeek)
+            lyrWidget->setSeekPositionCursor(seekVal);
+        if (playAfterSeek) {
             videoPlayer->play();
+            if (videoAudioTempo)
+                BASS_Mixer_ChannelFlags(videoAudioTempo, 0, BASS_MIXER_CHAN_PAUSE);
+        }
         return;
     }
 #ifdef PTHK_WEBENGINE
@@ -5581,4 +5650,110 @@ void MainWindow::loadPlaylist()
         QMessageBox::critical(this, tr("เปิดรายการเล่นล้มเหลว"),
                               tr("ไม่สามารถเปิดรายการเล่นได้\nโปรดลองอีกครั้ง"));
     }
+}
+
+// Video audio routed through BASS main mixer: enables Vocal Cut (center cancellation DSP),
+// Pitch transpose, Master volume, and Equalizer on local / downloaded YouTube video songs.
+bool MainWindow::startVideoAudioStream(const QString &path)
+{
+    stopVideoAudioStream();
+    videoPitch = 0;
+
+    MidiSynthesizer *synth = player ? player->midiSynthesizer() : nullptr;
+    const DWORD mixer = (synth && synth->isOpened()) ? synth->mainMixerHandle() : 0;
+    if (!mixer)
+        return false;
+
+    videoAudioStream = BASS_StreamCreateFile(FALSE, path.utf16(), 0, 0,
+                                             BASS_STREAM_DECODE | BASS_SAMPLE_FLOAT | BASS_UNICODE);
+    if (!videoAudioStream)
+        return false;
+
+    videoAudioTempo = BASS_FX_TempoCreate(videoAudioStream, BASS_STREAM_DECODE | BASS_SAMPLE_FLOAT | BASS_FX_FREESOURCE);
+    if (!videoAudioTempo) {
+        BASS_StreamFree(videoAudioStream);
+        videoAudioStream = 0;
+        return false;
+    }
+
+    BASS_CHANNELINFO info;
+    BASS_ChannelGetInfo(videoAudioStream, &info);
+    const int freq = info.freq ? int(info.freq) : 44100;
+
+    delete videoVocalRemover;
+    videoVocalRemover = nullptr;
+    if (info.chans == 2) {
+        videoVocalRemover = new VocalRemover(freq);
+        BASS_ChannelSetDSP(videoAudioTempo, &MainWindow::videoVocalDspCallback, this, 0);
+    }
+
+    if (!BASS_Mixer_StreamAddChannel(mixer, videoAudioTempo, BASS_MIXER_CHAN_NORAMPIN | BASS_MIXER_CHAN_PAUSE)) {
+        BASS_StreamFree(videoAudioTempo);
+        videoAudioTempo = videoAudioStream = 0;
+        delete videoVocalRemover;
+        videoVocalRemover = nullptr;
+        return false;
+    }
+
+    setVideoAudioVolume();
+    applyVideoVocalCut();
+    return true;
+}
+
+void MainWindow::stopVideoAudioStream()
+{
+    if (videoAudioTempo) {
+        MidiSynthesizer *synth = player ? player->midiSynthesizer() : nullptr;
+        const DWORD mixer = (synth && synth->isOpened()) ? synth->mainMixerHandle() : 0;
+        if (mixer)
+            BASS_Mixer_ChannelRemove(videoAudioTempo);
+        BASS_StreamFree(videoAudioTempo);
+        videoAudioTempo = 0;
+        videoAudioStream = 0;
+    }
+    delete videoVocalRemover;
+    videoVocalRemover = nullptr;
+}
+
+void MainWindow::videoVocalDspCallback(HDSP, DWORD, void *buffer, DWORD length, void *user)
+{
+    MainWindow *self = static_cast<MainWindow *>(user);
+    if (self && self->videoVocalRemover) {
+        self->videoVocalRemover->process(static_cast<float *>(buffer), length / (2 * sizeof(float)));
+    }
+}
+
+void MainWindow::applyVideoVocalCut()
+{
+    if (videoVocalRemover) {
+        const bool cut = ui->chMix->isMuteVoice();
+        videoVocalRemover->setEnabled(cut);
+    }
+}
+
+void MainWindow::setVideoAudioVolume()
+{
+    if (videoAudioTempo) {
+        const float v = float(fadeGain) * (float(effectiveVolume()) / 100.0f);
+        BASS_ChannelSetAttribute(videoAudioTempo, BASS_ATTRIB_VOL, v);
+    }
+}
+
+void MainWindow::changeVideoKey(int step)
+{
+    if (videoAudioTempo) {
+        videoPitch = qBound(-12, videoPitch + step, 12);
+        BASS_ChannelSetAttribute(videoAudioTempo, BASS_ATTRIB_TEMPO_PITCH, float(videoPitch));
+        ui->detail->setDetail(tr("คีย์เพลง "), videoPitch > 0 ? "+" + QString::number(videoPitch) : QString::number(videoPitch));
+        ui->detail->show();
+        detailTimer->start(3000);
+    }
+}
+
+qint64 MainWindow::videoAudioPositionMs()
+{
+    if (!videoAudioTempo)
+        return 0;
+    QWORD pos = BASS_Mixer_ChannelGetPosition(videoAudioTempo, BASS_POS_BYTE);
+    return qint64(BASS_ChannelBytes2Seconds(videoAudioTempo, pos) * 1000);
 }
