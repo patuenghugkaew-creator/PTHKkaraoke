@@ -248,6 +248,7 @@ private:
     QLabel *scoreLabel;
     DmxLights *dmxLights;
     bool ytActive = false;      // a YouTube song is playing (online, in ytPlayer)
+    int ytSilenceCount = 0;
 #ifdef PTHK_WEBENGINE
     YouTubePlayer *ytPlayer = nullptr;
     QTimer *ytMirrorTimer = nullptr;

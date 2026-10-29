@@ -51,10 +51,16 @@ void LyricsWidget::reset()
         tLine1 = lyrics.at(0);
         setTextLine1(tLine1);
         linesIndex = 1;
+    } else {
+        tLine1 = "";
+        setTextLine1("");
     }
     if (lyrics.count() > 1) {
         tLine2 = lyrics.at(1);
         setTextLine2(tLine2);
+    } else {
+        tLine2 = "";
+        setTextLine2("");
     }
 
     isLine1 = true;

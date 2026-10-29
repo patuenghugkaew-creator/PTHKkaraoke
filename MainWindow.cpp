@@ -1725,6 +1725,12 @@ void MainWindow::applyVolume()
     if (ytPlayer)
         ytPlayer->setVolume(ytAudioLive() ? 100 : v);
 #endif
+#ifdef KM_HAVE_PROCLOOP
+    if (ytAudio && ytAudio->running()) {
+        const float ytVol = float(fadeGain) * (float(v) / 100.0f);
+        ytAudio->fadeVolume(ytVol, 0);
+    }
+#endif
     setMp3Volume();
 }
 
@@ -2545,6 +2551,32 @@ void MainWindow::playYouTube()
                 ui->sliderPosition->setValue(int(p));
             onPlayerPositionMSChanged(p);
             updateYtAudio();
+
+            // Medley Auto-Cut Outro for YouTube:
+            if (player->isUseMedley() && player->medleyAudioAutoCue() && !endingSong) {
+                const qint64 totalD = ytPlayer->durationMs();
+                const qint64 remainingMs = (totalD > 0) ? (totalD - p) : 999999;
+                if (remainingMs <= 30000 && remainingMs > 1500) {
+#ifdef KM_HAVE_PROCLOOP
+                    if (ytAudio && ytAudio->running()) {
+                        const float curDb = ytAudio->currentLevelDb();
+                        const float threshDb = float(player->medleyAudioThresholdDb());
+                        if (curDb <= threshDb) {
+                            ytSilenceCount++;
+                            // 250ms interval * 6 = 1.5 seconds of sustained silence
+                            if (ytSilenceCount >= 6) {
+                                ytSilenceCount = 0;
+                                endSongSmoothly();
+                            }
+                        } else {
+                            ytSilenceCount = 0;
+                        }
+                    }
+#endif
+                } else {
+                    ytSilenceCount = 0;
+                }
+            }
         });
         connect(ytPlayer, &YouTubePlayer::ended, this, [this]() {
             if (!ytActive)
@@ -2581,9 +2613,15 @@ void MainWindow::playYouTube()
     }
 
     ytActive = true;
+    ytSilenceCount = 0;
     lyrWidget->hide();
-    if (secondLyr != nullptr)
+    lyrWidget->reset();
+    if (secondLyr != nullptr) {
         secondLyr->hide();
+        secondLyr->reset();
+    }
+    if (lyricsTimer && lyricsTimer->isActive())
+        lyricsTimer->stop();
     ui->frameSearch->hide();
     ui->playlistWidget->hide();
     ui->chMix->hide();

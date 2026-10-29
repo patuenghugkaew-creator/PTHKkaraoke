@@ -162,6 +162,7 @@ public:
     bool isPaused() const { return paused; }
     // the clip of the last playVideo() has started (until then the view may still show the previous one)
     bool isStarted() const { return active && started; }
+    qint64 durationMs() const { return duration; }
 
 signals:
     void durationChanged(qint64 ms);
