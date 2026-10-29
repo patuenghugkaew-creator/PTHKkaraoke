@@ -31,6 +31,9 @@ int MidiSequencer::currentBeat()
 
 int MidiSequencer::positionTick()
 {
+    if (_isMedleyTransition || !_eTimer || !_eTimer->isValid()) {
+        return _positionTick;
+    }
     if (_playing) {
         return _midi->tickFromTimeMs(_eTimer->elapsed()  + _startPlayTime, _midiSpeed);
     } else {
@@ -45,6 +48,9 @@ int MidiSequencer::durationTick()
 
 long MidiSequencer::positionMs()
 {
+    if (_isMedleyTransition || !_eTimer || !_eTimer->isValid()) {
+        return _positionMs;
+    }
     return _playing ? _midi->timeFromTick(positionTick()) * 1000 : _positionMs;
 }
 
@@ -616,6 +622,10 @@ void MidiSequencer::run()
     _stopped = false;
     _finished = false;
 
+    _startPlayTime = _midi->timeFromTick(_startTick, _midiSpeed) * 1000;
+    _positionMs = _startPlayTime;
+    _positionTick = _startTick;
+
     _mutex.unlock();
 
     if (_positionTick <= _startTick) {
@@ -650,12 +660,14 @@ void MidiSequencer::run()
 
     bool seqEnded = false;
 
+    _mutex.lock();
+    _startPlayTime = _midi->timeFromTick(_startTick, _midiSpeed) * 1000;
+    _positionMs = _startPlayTime;
+    _positionTick = _startTick;
     _eTimer->restart();
+    _mutex.unlock();
 
     if (wasMedleyTransition) {
-        _startPlayTime = _midi->timeFromTick(_startTick, _midiSpeed) * 1000;
-        _positionMs = _startPlayTime;
-        _positionTick = _startTick;
         // Downbeat Crash + Kick right on Beat 1 of the new medley song!
         const double volScale = _medleyFillVolume / 100.0;
         MidiEvent crashEvt;

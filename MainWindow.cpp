@@ -5153,6 +5153,8 @@ void MainWindow::switchMedleyLyrics()
     lyrWidget->switchToLyricsTemp();
     lyrWidget->setSeekPositionCursor(player->positionTick());
     lyrWidget->show();
+    if (!lyricsTimer->isActive())
+        lyricsTimer->start();
 }
 
 void MainWindow::switchMedleyLyrics2()
@@ -5180,10 +5182,25 @@ void MainWindow::onNextMedleyStarted()
         }
     }
 
+    // 1. Cancel any active fade-out and stale finish callbacks from previous song
+    if (fadeTimer && fadeTimer->isActive())
+        fadeTimer->stop();
+    fadeDone = nullptr;
+    fadeGain = 1.0;
+    endingSong = false;
+    applyVolume();
+
+    // 2. Reset lyric completion tracking for the new song
+    lastLyricPos = -2;
+    afterLyrics = false;
+
+    // 3. Reset UI & timers
     positionTimer->stop();
 
     onPlayerDurationTickChanged(player->durationTick());
     onPlayerDurationMSChanged(player->durationMs());
+    ui->sliderPosition->setValue(0);
+    onPlayerPositionMSChanged(player->positionMs());
 
     #ifdef _WIN32
     taskbarButton->progress()->setValue(0);
@@ -5195,6 +5212,14 @@ void MainWindow::onNextMedleyStarted()
     ui->rhmWidget->setBeat(MidiHelper::calculateBeats(player->midiFile()), player->beatCount());
 
     positionTimer->start();
+
+    if (!lyricsTimer->isActive())
+        lyricsTimer->start();
+
+    resetScore();
+    scoreTimer->start();
+    dmxLights->setPlaying(true);
+    db->addHistory(&playingSong);
 
     ui->frameSearch->hide();
     ui->playlistWidget->hide();
@@ -5210,6 +5235,9 @@ void MainWindow::onNextMedleyStarted()
 
 void MainWindow::onNextMedleyAfterStarted()
 {
+    if (!lyricsTimer->isActive())
+        lyricsTimer->start();
+
     const int nextIdx = (remove_playlist ? 0 : playingIndex + 1);
     if (nextIdx >= 0 && nextIdx < playlist.size()) {
         loadNextMedley(playlist[nextIdx]);

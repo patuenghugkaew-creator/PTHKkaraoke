@@ -235,13 +235,13 @@ void LyricsWidget::setSeekPositionCursor(int tick)
     reset();
 
     int round = 0;
-    while (cursors[round] < tick) {
+    while (round < cursors.count() && cursors[round] < tick) {
         round++;
-        if (round == cursors.count())
-            break;
     }
 
     for (int i=0; i<round; i++) {
+        if (cursor_index >= cursors.count())
+            break;
 
         if (at_end_line) {
             at_end_line = false;
