@@ -1256,7 +1256,8 @@ void MainWindow::play(int index, int position)
                                                        player->medleySkipIntro(),
                                                        player->medleyAutoCutOutro(),
                                                        player->medleyWaitBars(),
-                                                       player->medleyQuantizeBar());
+                                                       player->medleyQuantizeBar(),
+                                                       player->medleyIntroLeadInBars());
     }
     if (player->isUseMedley()) {
         if (false) player->midiSequencer()->setCutStartBar(playingSong.cutStartBar());
@@ -3473,7 +3474,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         const int baseBpm = player->currentBpm() - player->bpmSpeed();
         player->setBpmSpeed(targetBpm - baseBpm);
         playingSong.setBpmSpeed(player->bpmSpeed());
-        player->midiSequencer()->applyAutoMedleyBounds(lyrWidget->curData(), playingSong.cutStartBar(), playingSong.cutEndBar(), lyrWidget->lastActiveLyricTick());
+        player->midiSequencer()->applyAutoMedleyBounds(lyrWidget->curData(), playingSong.cutStartBar(), playingSong.cutEndBar(), lyrWidget->lastActiveLyricTick(), player->medleySkipIntro(), player->medleyAutoCutOutro(), player->medleyWaitBars(), player->medleyQuantizeBar(), player->medleyIntroLeadInBars());
     }
     if (player->isUseMedley()) {
             QMessageBox box(this);
@@ -3929,7 +3930,8 @@ void MainWindow::openMedleySettings()
                                                            player->medleySkipIntro(),
                                                            player->medleyAutoCutOutro(),
                                                            player->medleyWaitBars(),
-                                                           player->medleyQuantizeBar());
+                                                           player->medleyQuantizeBar(),
+                                                           player->medleyIntroLeadInBars());
         }
         if (!player->isPlayerStopped() && (playlist.size() > (playingIndex + 1)))
             loadNextMedley(playlist[playingIndex + 1]);
@@ -3973,7 +3975,7 @@ void MainWindow::addToPlaylist(Song *song)
         const int baseBpm = player->currentBpm() - player->bpmSpeed();
         player->setBpmSpeed(targetBpm - baseBpm);
         playingSong.setBpmSpeed(player->bpmSpeed());
-        player->midiSequencer()->applyAutoMedleyBounds(lyrWidget->curData(), playingSong.cutStartBar(), playingSong.cutEndBar(), lyrWidget->lastActiveLyricTick());
+        player->midiSequencer()->applyAutoMedleyBounds(lyrWidget->curData(), playingSong.cutStartBar(), playingSong.cutEndBar(), lyrWidget->lastActiveLyricTick(), player->medleySkipIntro(), player->medleyAutoCutOutro(), player->medleyWaitBars(), player->medleyQuantizeBar(), player->medleyIntroLeadInBars());
     }
     if (player->isUseMedley()) {
         int medleySpeed = songToAdd->tempo() > 0 ? (player->medleyBPM() - songToAdd->tempo()) : 0;

@@ -133,6 +133,9 @@ public:
     bool medleySkipIntro() const { return _medleySkipIntro; }
     void setMedleySkipIntro(bool enable) { _medleySkipIntro = enable; }
 
+    int medleyIntroLeadInBars() const { return _medleyIntroLeadInBars; }
+    void setMedleyIntroLeadInBars(int bars) { _medleyIntroLeadInBars = qBound(0, bars, 8); }
+
     bool medleyPreserveEffectsTail() const { return _medleyPreserveEffectsTail; }
     void setMedleyPreserveEffectsTail(bool enable) { _medleyPreserveEffectsTail = enable; }
 
@@ -215,6 +218,7 @@ private:
     int                 _medleyWaitBars = 1;
     bool                _medleyQuantizeBar = true;
     bool                _medleySkipIntro = true;
+    int                 _medleyIntroLeadInBars = 2;
     bool                _medleyPreserveEffectsTail = true;
     int                 _medleyPreBufferSec = 20;
     double              _medleyAudioCrossfadeSec = 3.0;

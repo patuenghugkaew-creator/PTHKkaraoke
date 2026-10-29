@@ -174,7 +174,8 @@ void MedleyLoader::run()
                                                            _player->medleySkipIntro(),
                                                            _player->medleyAutoCutOutro(),
                                                            _player->medleyWaitBars(),
-                                                           _player->medleyQuantizeBar());
+                                                           _player->medleyQuantizeBar(),
+                                                           _player->medleyIntroLeadInBars());
     }
     if (_lyrWidget2 != nullptr) {
         _lyrWidget2->setLyricsTemp(_lyrWidget->lyrTempData(), _lyrWidget->curTempData());

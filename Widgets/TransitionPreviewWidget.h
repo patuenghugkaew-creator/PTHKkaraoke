@@ -27,13 +27,15 @@ public:
                          int medleyBpm,
                          double crossfadeSec,
                          int crossfadeCurve,
-                         int activeTab);
+                         int activeTab,
+                         int introBars = 2);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
 
 private:
     int    _waitBars = 1;
+    int    _introBars = 2;
     bool   _quantizeBar = true;
     bool   _skipIntro = true;
     bool   _autoCutOutro = true;

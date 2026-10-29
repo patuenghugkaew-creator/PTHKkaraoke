@@ -55,7 +55,8 @@ public:
                                bool skipIntro = true,
                                bool autoCutOutro = true,
                                int waitBars = 1,
-                               bool quantizeBar = true);
+                               bool quantizeBar = true,
+                               int introLeadInBars = 2);
 
     bool isMedleyTransition() const { return _isMedleyTransition; }
     int medleyTransitionBars() const { return _medleyTransitionBars; }

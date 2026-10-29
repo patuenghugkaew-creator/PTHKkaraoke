@@ -312,7 +312,8 @@ void MidiSequencer::applyAutoMedleyBounds(const QVector<long> &lyricCursors,
                                          bool skipIntro,
                                          bool autoCutOutro,
                                          int waitBars,
-                                         bool quantizeBar)
+                                         bool quantizeBar,
+                                         int introLeadInBars)
 {
     if (_midi->events().isEmpty())
         return;
@@ -321,47 +322,55 @@ void MidiSequencer::applyAutoMedleyBounds(const QVector<long> &lyricCursors,
     const int totalBars = _midi->barCount();
 
     // 1. Auto-detect first active musical bar (Cue-In)
+    // If skipIntro is enabled: jump directly to introLeadInBars (e.g. 1-2 bars) before the first lyric
+    // so the singer starts singing right after the transition without waiting through a long intro!
     if (manualStartBar > 0) {
         setCutStartBar(manualStartBar);
     } else if (!skipIntro) {
         setCutStartBar(0);
     } else {
-        int firstBandTick = -1;
-        int firstGrooveDrumTick = -1;
-        for (MidiEvent *e : _midi->events()) {
-            if (e->eventType() == MidiEventType::NoteOn && e->data2() > 0) {
-                if (e->channel() != 9) {
-                    if (firstBandTick < 0)
-                        firstBandTick = int(e->tick());
-                } else {
-                    const int n = e->data1();
-                    // Kick (35,36) or Snare (38,40) or Toms (41,43,45,47,48,50) — skip count-in stick (37) / hi-hat (42)
-                    if (n == 35 || n == 36 || n == 38 || n == 40 || n == 41 || n == 43 || n == 45 || n == 47 || n == 48 || n == 50) {
-                        if (firstGrooveDrumTick < 0)
-                            firstGrooveDrumTick = int(e->tick());
-                    }
-                }
-                if (firstBandTick >= 0 && firstGrooveDrumTick >= 0)
-                    break;
-            }
-        }
-        int firstMusicTick = 0;
-        if (firstBandTick >= 0 && firstGrooveDrumTick >= 0)
-            firstMusicTick = qMax(firstBandTick, firstGrooveDrumTick);
-        else if (firstBandTick >= 0)
-            firstMusicTick = firstBandTick;
-        else if (firstGrooveDrumTick >= 0)
-            firstMusicTick = firstGrooveDrumTick;
-
         long firstLyricTick = -1;
         for (long c : lyricCursors) {
-            if (c > 0) { firstLyricTick = c; break; }
+            if (c > 0) {
+                firstLyricTick = c;
+                break;
+            }
         }
-        if (firstLyricTick > 0 && firstMusicTick > firstLyricTick)
-            firstMusicTick = int(firstLyricTick);
 
-        int startBar = _midi->barFromTick(uint32_t(qMax(0, firstMusicTick + (quantizeBar ? 0 : res / 4))));
-        startBar = qBound(0, startBar, 8);
+        int startBar = 0;
+        if (firstLyricTick > 0) {
+            const int vocalBar = _midi->barFromTick(uint32_t(firstLyricTick));
+            startBar = qMax(0, vocalBar - qBound(0, introLeadInBars, 8));
+        } else {
+            // Instrumental fallback: skip leading silence to first band/drum groove
+            int firstMusicTick = 0;
+            int firstBandTick = -1;
+            int firstGrooveDrumTick = -1;
+            for (MidiEvent *e : _midi->events()) {
+                if (e->eventType() == MidiEventType::NoteOn && e->data2() > 0) {
+                    if (e->channel() != 9) {
+                        if (firstBandTick < 0) firstBandTick = int(e->tick());
+                    } else {
+                        const int n = e->data1();
+                        if (n == 35 || n == 36 || n == 38 || n == 40) {
+                            if (firstGrooveDrumTick < 0) firstGrooveDrumTick = int(e->tick());
+                        }
+                    }
+                    if (firstBandTick >= 0 && firstGrooveDrumTick >= 0)
+                        break;
+                }
+            }
+            if (firstBandTick >= 0 && firstGrooveDrumTick >= 0)
+                firstMusicTick = qMax(firstBandTick, firstGrooveDrumTick);
+            else if (firstBandTick >= 0)
+                firstMusicTick = firstBandTick;
+            else if (firstGrooveDrumTick >= 0)
+                firstMusicTick = firstGrooveDrumTick;
+
+            startBar = _midi->barFromTick(uint32_t(qMax(0, firstMusicTick)));
+        }
+
+        startBar = qBound(0, startBar, qMax(0, totalBars - 4));
         setStartTick(_midi->tickFromBar(startBar));
     }
 
@@ -392,7 +401,8 @@ void MidiSequencer::applyAutoMedleyBounds(const QVector<long> &lyricCursors,
         int endBar = totalBars;
         if (lastLyricTick > 0) {
             const int lyrBar = _midi->barFromTick(uint32_t(lastLyricTick));
-            endBar = lyrBar + qMax(0, waitBars);
+            // Complete current sung bar (lyrBar + 1), then add waitBars
+            endBar = lyrBar + 1 + qMax(0, waitBars);
             if (lastGrooveTick > 0) {
                 const int grooveBar = _midi->barFromTick(uint32_t(lastGrooveTick));
                 if (grooveBar >= lyrBar && endBar > grooveBar)
