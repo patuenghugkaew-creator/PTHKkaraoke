@@ -32,6 +32,7 @@
 #include <cstdint>
 #include <cstddef>
 #include "Midi/MidiPlayer.h"
+#include "Utils.h"
 
 // defined further down (used while the streams are created)
 namespace { void attachTrimDsp(InstrumentType t, DWORD handle); }
@@ -2369,6 +2370,14 @@ DWORD MidiSynthesizer::setVSTiFile(int vstiIndex, const QString &file)
     if (file == mVstiFiles[vstiIndex])
         return vsti;
 
+#ifdef _WIN32
+    if (!file.isEmpty() && !Utils::is64BitDll(file)) {
+        mVstiFiles[vstiIndex] = "";
+        handles[t] = 0;
+        return 0;
+    }
+#endif
+
     mVstiFiles[vstiIndex] = file;
 
     if (!openned)
@@ -2411,6 +2420,7 @@ DWORD MidiSynthesizer::setVSTiFile(int vstiIndex, const QString &file)
     }
     else
     {
+        mVstiFiles[vstiIndex] = "";
         handles[t] = 0;
         return 0;
     }

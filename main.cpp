@@ -34,6 +34,7 @@
 #include "Theme.h"
 #include "Widgets/DialogSkin.h"
 
+
 #ifdef __linux__
 #include <QFontDatabase>
 #endif
@@ -252,7 +253,7 @@ void loadSoundfonts(QSplashScreen *splash, MidiSynthesizer *synth)
         int volume = settings.value("SoundfontVolume", 100).toInt();
 
         splash->showMessage("กำลังโหลด : " + QFileInfo(sfList.at(i)).fileName(), Qt::AlignBottom|Qt::AlignRight, QColor("#cfd3dc"));
-        qApp->processEvents();
+        splash->repaint();
 
         if (synth->addSoundfont(sfList.at(i)))
             synth->setSoundfontVolume(i, volume / 100.0f);
@@ -307,8 +308,12 @@ void loadVSTi(QSplashScreen *splash, MidiSynthesizer *synth)
         if (filePath == "")
             continue;
 
+#ifdef _WIN32
+        if (!Utils::is64BitDll(filePath))
+            continue;
+#endif
         splash->showMessage("กำลังโหลด : " + QFileInfo(filePath).fileName(), Qt::AlignBottom|Qt::AlignRight, QColor("#cfd3dc"));
-        qApp->processEvents();
+        splash->repaint();
 
         DWORD vsti = synth->setVSTiFile(i, filePath);
 
@@ -351,11 +356,14 @@ void makeVSTList(QSplashScreen *splash, MidiSynthesizer *synth)
             if (it.filePath().contains(".vst3/", Qt::CaseInsensitive))
                 continue;
 
+#ifdef _WIN32
+            if (!Utils::is64BitDll(it.filePath()))
+                continue;
+#endif
             splash->showMessage("กำลังตรวจสอบ : " + it.fileName(), Qt::AlignBottom|Qt::AlignRight, QColor("#cfd3dc"));
-            qApp->processEvents();
+            splash->repaint();
 
             QList<VSTNamePath> infos;
-
             if (!Utils::vstInfos(it.filePath(), &infos))
                 continue;
 

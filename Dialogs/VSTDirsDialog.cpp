@@ -271,6 +271,15 @@ bool VSTDirsDialog::setVSTiFile(int vstiIndex, QLineEdit *le, QLabel *lbName, QL
     if (synth->isOpened() && mainWindow->midiPlayer()->isPlayerPlaying())
         mainWindow->stop();
 
+#ifdef _WIN32
+    if (!Utils::is64BitDll(file))
+    {
+        QMessageBox::warning(this, tr("ไม่รองรับปลั๊กอิน 32-bit"),
+                             tr("ไฟล์ \"%1\" เป็นปลั๊กอินแบบ 32-bit\nโปรแกรม PTHK Karaoke ทำงานแบบ 64-bit ไม่สามารถโหลดปลั๊กอินนี้ได้\nโปรดเลือกไฟล์ที่เป็นเวอร์ชัน 64-bit (x64)").arg(QFileInfo(file).fileName()));
+        return false;
+    }
+#endif
+
     this->setEnabled(false);
     DWORD vsti = synth->setVSTiFile(vstiIndex, file);
     this->setEnabled(true);

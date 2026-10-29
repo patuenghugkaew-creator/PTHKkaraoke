@@ -324,8 +324,50 @@ void Utils::clearVstSkipList()
 void Utils::resetVstScanCounters() { g_vstSkipped = 0; }
 int Utils::vstSkippedCount() { return g_vstSkipped; }
 
+bool Utils::is64BitDll(const QString &filePath)
+{
+#ifndef _WIN32
+    Q_UNUSED(filePath);
+    return true;
+#else
+    if (filePath.isEmpty())
+        return false;
+
+    QString target = filePath;
+    QFileInfo fi(filePath);
+    if (fi.isDir()) {
+        QString candidate = filePath + "/Contents/x86_64-win/" + fi.fileName();
+        if (QFile::exists(candidate))
+            target = candidate;
+    }
+
+    QFile file(target);
+    if (!file.open(QIODevice::ReadOnly))
+        return false;
+
+    QByteArray dosHeader = file.read(64);
+    if (dosHeader.size() < 64 || dosHeader.at(0) != 'M' || dosHeader.at(1) != 'Z')
+        return false;
+
+    quint32 peOffset = *reinterpret_cast<const quint32 *>(dosHeader.constData() + 0x3C);
+    if (!file.seek(peOffset))
+        return false;
+
+    QByteArray peHeader = file.read(6);
+    if (peHeader.size() < 6 || peHeader.at(0) != 'P' || peHeader.at(1) != 'E' || peHeader.at(2) != '\0' || peHeader.at(3) != '\0')
+        return false;
+
+    quint16 machine = *reinterpret_cast<const quint16 *>(peHeader.constData() + 4);
+    return (machine == 0x8664 || machine == 0xAA64);
+#endif
+}
+
 bool Utils::vstInfo(const QString &vstPath, VSTNamePath *info)
 {
+#ifdef _WIN32
+    if (!is64BitDll(vstPath))
+        return false;
+#endif
     QByteArray raw;
     if (!runChecker(vstPath, &raw))
         return false;
@@ -344,6 +386,10 @@ bool Utils::vstInfo(const QString &vstPath, VSTNamePath *info)
 
 bool Utils::vstInfos(const QString &vstPath, QList<VSTNamePath> *infos)
 {
+#ifdef _WIN32
+    if (!is64BitDll(vstPath))
+        return false;
+#endif
     if (!vstPath.endsWith(".vst3", Qt::CaseInsensitive))
     {
         VSTNamePath info;
