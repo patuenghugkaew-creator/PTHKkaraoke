@@ -1282,8 +1282,9 @@ void MainWindow::play(int index, int position)
     positionTimer->start();
     lyricsTimer->start();
 
-    if (player->isUseMedley() && (playlist.size() > (playingIndex + 1))) {
-        loadNextMedley(playlist[playingIndex + 1]);
+    const int nextMedleyIdx = (remove_playlist ? 0 : playingIndex + 1);
+    if (player->isUseMedley() && (nextMedleyIdx >= 0 && nextMedleyIdx < playlist.size())) {
+        loadNextMedley(playlist[nextMedleyIdx]);
     }
 }
 
@@ -3933,8 +3934,9 @@ void MainWindow::openMedleySettings()
                                                            player->medleyQuantizeBar(),
                                                            player->medleyIntroLeadInBars());
         }
-        if (!player->isPlayerStopped() && (playlist.size() > (playingIndex + 1)))
-            loadNextMedley(playlist[playingIndex + 1]);
+        const int nextMedleyIdx = (remove_playlist ? 0 : playingIndex + 1);
+        if (!player->isPlayerStopped() && (nextMedleyIdx >= 0 && nextMedleyIdx < playlist.size()))
+            loadNextMedley(playlist[nextMedleyIdx]);
         const QString barsInfo = player->medleyTransitionBars() > 0
             ? tr("(%1 BPM, ลูกส่งรอ %2 ห้อง)").arg(player->medleyBPM()).arg(player->medleyTransitionBars())
             : tr("(%1 BPM, ต่อทันที)").arg(player->medleyBPM());
@@ -3985,7 +3987,8 @@ void MainWindow::addToPlaylist(Song *song)
     playlist.append(songToAdd);
     ui->playlistWidget->addSong(songToAdd);
 
-    if (player->isUseMedley() && !player->isPlayerStopped() && ((playlist.size() - 1 - playingIndex) == 1)) {
+    const int nextMedleyIdx = (remove_playlist ? 0 : playingIndex + 1);
+    if (player->isUseMedley() && !player->isPlayerStopped() && (playlist.size() == (nextMedleyIdx + 1))) {
         loadNextMedley(songToAdd);
     }
 }
@@ -5164,14 +5167,17 @@ void MainWindow::switchMedleyLyrics2()
 
 void MainWindow::onNextMedleyStarted()
 {
-    int index = playingIndex + 1;
+    const int index = (remove_playlist ? 0 : playingIndex + 1);
 
-    playingSong = *playlist[index];
-
-    if (remove_playlist && playlist.size() > 0) {
-        delete playlist.takeAt(index);
-        ui->playlistWidget->removeRow(index);
-        playingIndex = -1;
+    if (index >= 0 && index < playlist.size()) {
+        playingSong = *playlist[index];
+        if (remove_playlist) {
+            delete playlist.takeAt(index);
+            ui->playlistWidget->removeRow(index);
+            playingIndex = -1;
+        } else {
+            playingIndex = index;
+        }
     }
 
     positionTimer->stop();
@@ -5204,8 +5210,12 @@ void MainWindow::onNextMedleyStarted()
 
 void MainWindow::onNextMedleyAfterStarted()
 {
-    if (playlist.size() > 0)
-        loadNextMedley(playlist[playingIndex + 1]);
+    const int nextIdx = (remove_playlist ? 0 : playingIndex + 1);
+    if (nextIdx >= 0 && nextIdx < playlist.size()) {
+        loadNextMedley(playlist[nextIdx]);
+    } else {
+        player->unloadNextMedley();
+    }
 }
 
 void MainWindow::onMedleyCountIn(int beat, int beatsPerBar, int bar, int totalBars)
