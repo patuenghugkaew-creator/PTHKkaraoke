@@ -163,6 +163,7 @@ protected:
 private:
     void loadNextMedley(Song *song);
     void openMedleySettings();
+    void openAutoMedley();
     void openEasyMedley();
     void turnOffMedley();
     void addToPlaylist(Song *song);

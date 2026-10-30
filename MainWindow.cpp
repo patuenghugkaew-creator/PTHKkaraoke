@@ -88,6 +88,7 @@
 #include "Dialogs/DeleteSongDialog.h"
 #include "Dialogs/MedleyDialog.h"
 #include "Dialogs/EasyMedleyDialog.h"
+#include "Dialogs/AutoMedleyDialog.h"
 #include "Dialogs/SongListsDialog.h"
 #include "Dialogs/YouTube.h"
 #include "Midi/YtAudio.h"
@@ -789,7 +790,7 @@ MainWindow::MainWindow(QWidget *parent) :
             });
 
             QPushButton *btnMedleySettings = addBarButton(tr("ตั้งค่าเมดเลย์"), tr("ตั้งค่าเมดเลย์: BPM, จำนวนห้องลูกส่งรอ, ลายกลองส่ง"));
-            connect(btnMedleySettings, &QPushButton::clicked, this, [this]() { openMedleySettings(); });
+            connect(btnMedleySettings, &QPushButton::clicked, this, [this]() { openAutoMedley(); });
 
             btnMuteVocal = addBarButton(tr("ตัดเสียงร้อง"), tr("ปิด / เปิด เสียงร้องนำ (*)"));
             btnMuteVocal->setCheckable(true);
@@ -3477,7 +3478,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
             }
             case Qt::Key_BracketLeft:
             case Qt::Key_BraceLeft: {
-                openMedleySettings();
+                openAutoMedley();
                 return;
             }
             case Qt::Key_Up:
@@ -3677,7 +3678,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
             box.setDefaultButton(btnSettings);
             box.exec();
             if (box.clickedButton() == btnSettings) {
-                openMedleySettings();
+                openAutoMedley();
             } else if (box.clickedButton() == btnOff) {
                 player->setUseMedley(false);
                 player->unloadNextMedley();
@@ -3691,7 +3692,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
                     ui->lcdTime->hide();
             }
         } else {
-            openMedleySettings();
+            openAutoMedley();
         }
         if (btnMedley) { QSignalBlocker b(btnMedley); btnMedley->setChecked(player->isUseMedley()); }
         break;
@@ -4176,6 +4177,50 @@ void MainWindow::turnOffMedley()
     detailTimer->start(3000);
     if (this->width() < 1160 && ui->chMix->isVisible())
         ui->lcdTime->hide();
+}
+
+void MainWindow::openAutoMedley()
+{
+    AutoMedleyDialog dlg(this, player);
+    if (dlg.exec() == QDialog::Accepted) {
+        if (player->isUseMedley()) {
+            if (player->midiFile() && !player->midiFile()->events().isEmpty()) {
+                player->midiFile()->setSingleTempo(true);
+                const int targetBpm = player->medleyBPM() > 0 ? player->medleyBPM() : player->currentBpm();
+                const int baseBpm = player->currentBpm() - player->bpmSpeed();
+                player->setBpmSpeed(targetBpm - baseBpm);
+                playingSong.setBpmSpeed(player->bpmSpeed());
+                player->midiSequencer()->applyAutoMedleyBounds(lyrWidget->curData(),
+                                                               playingSong.cutStartBar(),
+                                                               playingSong.cutEndBar(),
+                                                               lyrWidget->lastActiveLyricTick(),
+                                                               player->medleySkipIntro(),
+                                                               player->medleyAutoCutOutro(),
+                                                               player->medleyWaitBars(),
+                                                               player->medleyQuantizeBar(),
+                                                               player->medleyIntroLeadInBars());
+            }
+            const int nextMedleyIdx = (remove_playlist ? 0 : playingIndex + 1);
+            if (!player->isPlayerStopped() && (nextMedleyIdx >= 0 && nextMedleyIdx < playlist.size()))
+                loadNextMedley(playlist[nextMedleyIdx]);
+
+            const QString bpmText = player->medleyBPM() > 0 ? QString::number(player->medleyBPM()) + " BPM" : tr("ตามต้นฉบับ");
+            const QString rhmName = QString::number(dlg.rhythmCode());
+            ui->detail->setDetail(tr("Auto Medley "), tr("%1 (%2)").arg(rhmName, bpmText));
+            ui->detail->show();
+            detailTimer->start(3000);
+            if (btnMedley) {
+                QSignalBlocker b(btnMedley);
+                btnMedley->setChecked(true);
+            }
+            if (this->width() < 1160 && ui->chMix->isVisible())
+                ui->lcdTime->hide();
+        }
+    } else if (dlg.isTurnOffRequested()) {
+        turnOffMedley();
+    } else if (dlg.isOpenStudioRequested()) {
+        openMedleySettings();
+    }
 }
 
 void MainWindow::openEasyMedley()
