@@ -301,9 +301,17 @@ void MidiSequencer::setCutStartBar(int bar)
 
 void MidiSequencer::setCutEndBar(int bar)
 {
-    int endbar = (_midi->barCount() + 1) - bar;
-    if (bar <= 0)
-        endbar--;
+    if (bar <= 0) {
+        setEndTick(0); // 0 = do not cut end (play to natural end of song)
+        return;
+    }
+
+    int totalBars = _midi->barCount();
+    int endbar = (totalBars + 1) - bar;
+    if (endbar < 1)
+        endbar = 1;
+    if (endbar > totalBars)
+        endbar = totalBars;
 
     setEndTick(_midi->tickFromBar(endbar));
 }
@@ -498,9 +506,8 @@ void MidiSequencer::applyAutoMedleyBounds(const QVector<long> &lyricCursors,
     } else {
         // In automated Medley playback, dynamic outro cutting is handled by MainWindow::checkEndAfterLyrics
         // as soon as the singer actually reaches and completes the final lyric.
-        // Never set a premature static _endTick here at the start of playback or load time,
-        // which cuts songs off in the middle of singing!
-        setCutEndBar(totalBars);
+        // Set endTick to 0 (no static cut) so song does not cut prematurely at bar 1!
+        setEndTick(0);
     }
 }
 

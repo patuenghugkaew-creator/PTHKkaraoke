@@ -2134,8 +2134,10 @@ void MainWindow::checkEndAfterLyrics(qint64 pos, qint64 remainingMs)
                 int currentBar = seq->midiFile()->barFromTick(uint32_t(seq->positionTick()));
                 int targetBar = currentBar + 1 + waitBars;
                 const int totalBars = seq->midiFile()->barCount();
-                if (totalBars > 0 && targetBar >= totalBars)
-                    targetBar = qMax(0, totalBars - 1);
+                if (totalBars > 0 && targetBar >= totalBars - 1) {
+                    // Song has very short outro or is already at natural end; let it finish cleanly
+                    return;
+                }
                 int nextBarTick = seq->midiFile()->tickFromBar(targetBar);
                 if (nextBarTick <= seq->positionTick() + seq->midiFile()->resorution() / 2)
                     nextBarTick = seq->midiFile()->tickFromBar(targetBar + 1);
