@@ -627,17 +627,10 @@ void MidiSequencer::playMedleyTransitionFill()
             nextTimeMs = nextBeatMs;
 
         double sleepMs = nextTimeMs - (timer.nsecsElapsed() / 1000000.0);
-        if (sleepMs > 2.0) {
+        if (sleepMs > 1.5) {
             _mutex.lock();
-            _waitCondition.wait(&_mutex, qBound(1, int(sleepMs - 1.0), 30));
+            _waitCondition.wait(&_mutex, qBound(1, int(sleepMs - 0.5), 100));
             _mutex.unlock();
-            while ((nextTimeMs - (timer.nsecsElapsed() / 1000000.0)) > 0.0) {
-                if (!_playing) break;
-            }
-        } else if (sleepMs > 0.0) {
-            while ((nextTimeMs - (timer.nsecsElapsed() / 1000000.0)) > 0.0) {
-                if (!_playing) break;
-            }
         }
     }
 }
@@ -847,94 +840,6 @@ void MidiSequencer::run()
                 notesOff.setChannel(ch);
                 emit playingEvent(notesOff);
             }
-
-            if (_nextSeq != nullptr) {
-                // CONTINUOUS SEAMLESS HAND-OFF: Transition inside the same running thread!
-                MidiSequencer *nextSeq = _nextSeq;
-                MidiFile *nextMidi = nextSeq->midiFile();
-
-                // 1. Pre-warm patches for next song in BASSMIDI
-                if (nextMidi) {
-                    for (int evIdx = 0; evIdx < nextMidi->events().size(); ++evIdx) {
-                        MidiEvent *ev = nextMidi->events()[evIdx];
-                        if (ev->tick() > nextSeq->startTick())
-                            break;
-                        if (ev->eventType() == MidiEventType::ProgramChange ||
-                            (ev->eventType() == MidiEventType::Controller &&
-                             (ev->data1() == 0 || ev->data1() == 32 || ev->data1() == 7 || ev->data1() == 10 || ev->data1() == 91 || ev->data1() == 93))) {
-                            emit playingEvent(*ev);
-                        }
-                    }
-                }
-
-                // 2. Play authentic SFF drum fill bridge
-                _medleyTransitionBars = nextSeq->medleyTransitionBars();
-                _medleyFillPattern = nextSeq->medleyFillPattern();
-                _medleyTargetBpm = nextSeq->currentBpm();
-                _medleyFillVolume = nextSeq->medleyFillVolume();
-                _medleyTempoMode = nextSeq->medleyTempoMode();
-                if (_medleyTransitionBars > 0) {
-                    playMedleyTransitionFill();
-                }
-
-                // 3. Beat 1 Kick / Crash anti-double trigger
-                const double volScale = _medleyFillVolume / 100.0;
-                bool hasCrash = false;
-                bool hasKick = false;
-                if (nextMidi) {
-                    for (int evIdx = 0; evIdx < nextMidi->events().size(); ++evIdx) {
-                        MidiEvent *ev = nextMidi->events()[evIdx];
-                        if (ev->tick() < nextSeq->startTick()) continue;
-                        if (ev->tick() > nextSeq->startTick() + 40) break;
-                        if (ev->channel() == 9 && ev->eventType() == MidiEventType::NoteOn && ev->data2() > 0) {
-                            if (ev->data1() == 49 || ev->data1() == 57) hasCrash = true;
-                            if (ev->data1() == 35 || ev->data1() == 36) hasKick = true;
-                        }
-                    }
-                }
-                if (!hasCrash) {
-                    MidiEvent crashEvt;
-                    crashEvt.setEventType(MidiEventType::NoteOn);
-                    crashEvt.setChannel(9);
-                    crashEvt.setData1(49);
-                    crashEvt.setData2(qBound(1, int(122 * volScale), 127));
-                    emit playingEvent(crashEvt);
-                }
-                if (!hasKick) {
-                    MidiEvent kickEvt;
-                    kickEvt.setEventType(MidiEventType::NoteOn);
-                    kickEvt.setChannel(9);
-                    kickEvt.setData1(36);
-                    kickEvt.setData2(qBound(1, int(118 * volScale), 127));
-                    emit playingEvent(kickEvt);
-                }
-
-                // 4. Take over next song without stopping the thread
-                _mutex.lock();
-                delete _midi;
-                _midi = nextSeq->takeMidiFile();
-                _startTick = nextSeq->startTick();
-                _endTick = nextSeq->endTick();
-                if (_endEvent != nullptr) {
-                    delete _endEvent;
-                    _endEvent = nullptr;
-                }
-                _midiBpm = nextSeq->currentBpm() - nextSeq->bpmSpeed();
-                _midiSpeed = nextSeq->bpmSpeed();
-                _playedIndex = eventIndexFromTick(_startTick);
-                _startPlayTime = _midi->timeFromTick(_startTick, _midiSpeed) * 1000;
-                _positionMs = _startPlayTime;
-                _positionTick = _startTick;
-                _isMedleyTransition = false;
-                _nextSeq = nullptr;
-                _eTimer->restart();
-                i = _playedIndex - 1; // next for-loop step evaluates _playedIndex
-                _mutex.unlock();
-
-                emit medleySongSwapped();
-                continue; // Keep the same thread running uninterrupted!
-            }
-
             seqEnded = true;
             break;
         }

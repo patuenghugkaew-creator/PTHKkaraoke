@@ -181,7 +181,6 @@ signals:
 
 private slots:
     void onSeqBpmChanged(int bpm);
-    void onSeqSongSwapped();
 
 private:
     void sendEventToDevices(MidiEvent evt);

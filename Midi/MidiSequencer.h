@@ -16,13 +16,7 @@ public:
     ~MidiSequencer();
 
     MidiFile* midiFile() { return _midi; }
-    MidiFile* takeMidiFile() { MidiFile *m = _midi; _midi = nullptr; return m; }
 
-    void setNextSequencer(MidiSequencer *nextSeq) {
-        QMutexLocker locker(&_mutex);
-        _nextSeq = nextSeq;
-    }
-    MidiSequencer* nextSequencer() const { return _nextSeq; }
 
     bool isSeqFinished() { return _finished; }
     bool isSeqPlaying() { return _playing; }
@@ -79,7 +73,6 @@ signals:
     void bpmChanged(int bpm);
     void playingEvent(MidiEvent e);
     void medleyCountIn(int beat, int beatsPerBar, int bar, int totalBars);
-    void medleySongSwapped();
 
 protected:
     void run();
@@ -119,7 +112,6 @@ private:
     int  _medleyFillVolume = 100;
     int  _medleyTempoMode = 0;
     bool _medleyPreserveEffectsTail = true;
-    MidiSequencer *_nextSeq = nullptr;
 
     QWaitCondition _waitCondition;
     QMutex _mutex;
