@@ -128,7 +128,14 @@ void TransitionPreviewWidget::drawMidiTransition(QPainter &p, const QRect &r)
     fSub.setBold(false);
     p.setFont(fSub);
     p.setPen(QColor(191, 219, 254));
-    QString aInfo = _autoCutOutro ? QString("จบคำร้อง + รอ %1 ห้อง").arg(_waitBars) : "เล่นเต็มเพลง";
+    QString aInfo;
+    if (!_autoCutOutro) {
+        aInfo = "เล่นจบเต็มเพลง";
+    } else if (_waitBars == 0) {
+        aInfo = "จบคำร้อง • ต่อทันที";
+    } else {
+        aInfo = QString("จบคำร้อง + รอ %1 ห้อง").arg(_waitBars);
+    }
     p.drawText(deckARect.adjusted(8, 72, -8, 0), Qt::AlignLeft | Qt::AlignTop, aInfo);
 
     // -------------------------------------------------------------
@@ -155,13 +162,17 @@ void TransitionPreviewWidget::drawMidiTransition(QPainter &p, const QRect &r)
 
     // Middle Drum Details
     if (hasBridge) {
-        QString patStr = "ลูกส่งมาตรฐาน";
+        QString patStr = "900 สามช่า";
         switch (_fillPattern) {
-        case 1: patStr = "ลูกส่งสามช่า"; break;
-        case 2: patStr = "เคาะจังหวะนำ"; break;
-        case 3: patStr = "ทอมไล่เสียง"; break;
-        case 4: patStr = "สุ่มตามจังหวะ"; break;
-        default: break;
+        case 0: patStr = "900 สามช่า"; break;
+        case 1: patStr = "901 ลำซิ่ง"; break;
+        case 2: patStr = "902 3ช่าลำซิ่ง"; break;
+        case 3: patStr = "903 ดิสโก้"; break;
+        case 4: patStr = "904 ลำซิ่ง 2"; break;
+        case 5: patStr = "008 โซล 1"; break;
+        case 6: patStr = "000 มาตรฐาน"; break;
+        case 7: patStr = "สุ่มตามเพลง"; break;
+        default: patStr = "ลูกส่งมาตรฐาน"; break;
         }
 
         QFont fPat = p.font();
@@ -208,8 +219,9 @@ void TransitionPreviewWidget::drawMidiTransition(QPainter &p, const QRect &r)
     p.setPen(QPen(QColor(6, 182, 212, 230), 2.0, Qt::DashLine));
     p.drawLine(syncX, y + 2, syncX, y + h - 2);
 
-    // Beat 1 Pill Badge (Placed at top of sync line)
-    const QRect tagRect(syncX - 18, y + 4, 36, 14);
+    // Beat 1 Pill Badge: placed cleanly inside the Bridge side right before the sync line
+    // Never overlaps Deck B!
+    const QRect tagRect(syncX - 38, y + 5, 34, 15);
     p.setBrush(QColor(6, 182, 212));
     p.setPen(Qt::NoPen);
     p.drawRoundedRect(tagRect, 3, 3);
@@ -230,10 +242,10 @@ void TransitionPreviewWidget::drawMidiTransition(QPainter &p, const QRect &r)
     p.setBrush(gradB);
     p.drawRoundedRect(deckBRect.adjusted(4, 0, 0, 0), 6, 6);
 
-    // Header B - indent to the right so BEAT 1 badge never overlaps text
+    // Header B
     p.setFont(fHeader);
     p.setPen(QColor(110, 231, 183)); // Soft emerald
-    p.drawText(deckBRect.adjusted(24, 5, -8, 0), Qt::AlignLeft | Qt::AlignTop, "เพลงถัดไป (Deck B)");
+    p.drawText(deckBRect.adjusted(12, 5, -8, 0), Qt::AlignLeft | Qt::AlignTop, "เพลงถัดไป (Deck B)");
 
     // Waveform bars inside Deck B (rising up from left to right)
     p.setPen(QPen(QColor(52, 211, 153, 190), 2.5, Qt::SolidLine, Qt::RoundCap));
@@ -248,15 +260,16 @@ void TransitionPreviewWidget::drawMidiTransition(QPainter &p, const QRect &r)
     // Sub-caption B
     p.setFont(fSub);
     p.setPen(QColor(167, 243, 208));
-    QString bInfo = "เล่นตั้งแต่หัวเพลง";
-    if (_skipIntro) {
-        if (_introBars == 0)
-            bInfo = "ข้ามอินโทร -> เข้าท่อนร้องทันที";
-        else
-            bInfo = QString("ข้ามอินโทร -> เข้าก่อนร้อง %1 ห้อง").arg(_introBars);
+    QString bInfo;
+    if (!_skipIntro) {
+        bInfo = "เล่นตั้งแต่หัวเพลง";
+    } else if (_introBars == 0) {
+        bInfo = "เข้าท่อนร้องทันที";
+    } else {
+        bInfo = QString("เข้าก่อนร้อง %1 ห้อง").arg(_introBars);
     }
     if (_quantizeBar) bInfo += " (Beat 1)";
-    p.drawText(deckBRect.adjusted(12, 72, -8, 0), Qt::AlignLeft | Qt::AlignTop, bInfo);
+    p.drawText(deckBRect.adjusted(10, 72, -6, 0), Qt::AlignLeft | Qt::AlignTop, bInfo);
 }
 
 void TransitionPreviewWidget::drawAudioCrossfade(QPainter &p, const QRect &r)
@@ -362,13 +375,13 @@ void TransitionPreviewWidget::drawStatusFooter(QPainter &p, const QRect &r)
     p.setFont(font);
     p.setPen(QColor(156, 163, 175));
 
-    QString syncStr = _quantizeBar ? "ล็อกห้องเพลง: เปิด" : "ล็อกห้องเพลง: ปิด";
+    QString syncStr = _quantizeBar ? "ล็อกห้อง: เปิด" : "ล็อกห้อง: ปิด";
     QString drumStr = (_fillBars > 0) ? QString("ลูกส่ง: %1 ห้อง (%2%)").arg(_fillBars).arg(_fillVolume) : "ลูกส่ง: ปิด";
-    QString tempoStr = (_tempoMode == 0) ? QString("ความเร็ว: ล็อก %1 BPM").arg(_medleyBpm)
-                     : (_tempoMode == 1) ? "ความเร็ว: สลับทันที" : "ความเร็ว: Ramp เชื่อมห้อง";
+    QString tempoStr = (_tempoMode == 0) ? (_medleyBpm > 0 ? QString("ความเร็ว: ล็อก %1 BPM").arg(_medleyBpm) : "ความเร็ว: ตามเพลง")
+                     : (_tempoMode == 1) ? "ความเร็ว: ตามต้นฉบับ" : "ความเร็ว: Ramp เชื่อมห้อง";
     QString fadeStr = QString("Audio เฟด: %1s").arg(_crossfadeSec, 0, 'f', 1);
 
-    QString summary = QString("[ %1 ]    |    [ %2 ]    |    [ %3 ]    |    [ %4 ]")
+    QString summary = QString("[ %1 ]   •   [ %2 ]   •   [ %3 ]   •   [ %4 ]")
                           .arg(syncStr)
                           .arg(drumStr)
                           .arg(tempoStr)

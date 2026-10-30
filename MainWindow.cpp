@@ -87,6 +87,7 @@
 #include "Dialogs/Reverb2Dialog.h"
 #include "Dialogs/DeleteSongDialog.h"
 #include "Dialogs/MedleyDialog.h"
+#include "Dialogs/EasyMedleyDialog.h"
 #include "Dialogs/SongListsDialog.h"
 #include "Dialogs/YouTube.h"
 #include "Midi/YtAudio.h"
@@ -3456,6 +3457,17 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
 
     if (event->modifiers() == Qt::ControlModifier) {
         switch (event->key()) {
+            case Qt::Key_BracketRight:
+            case Qt::Key_BraceRight:
+            case Qt::Key_F4: {
+                turnOffMedley();
+                return;
+            }
+            case Qt::Key_BracketLeft:
+            case Qt::Key_BraceLeft: {
+                openMedleySettings();
+                return;
+            }
             case Qt::Key_Up:
                 if (ui->frameSearch->isVisible())
                 {
@@ -3670,6 +3682,10 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
             openMedleySettings();
         }
         if (btnMedley) { QSignalBlocker b(btnMedley); btnMedley->setChecked(player->isUseMedley()); }
+        break;
+    }
+    case Qt::Key_F11: {
+        openEasyMedley();
         break;
     }
     case Qt::Key_F5: {
@@ -4129,6 +4145,64 @@ void MainWindow::openMedleySettings()
             ui->lcdTime->hide();
     }
     if (btnMedley) { QSignalBlocker b(btnMedley); btnMedley->setChecked(player->isUseMedley()); }
+}
+
+void MainWindow::turnOffMedley()
+{
+    if (!player) return;
+    player->setUseMedley(false);
+    player->unloadNextMedley();
+    if (!player->isPlayerStopped() && player->midiSequencer()) {
+        player->midiSequencer()->setEndTick(0);
+    }
+    if (btnMedley) {
+        QSignalBlocker b(btnMedley);
+        btnMedley->setChecked(false);
+    }
+    ui->detail->setDetail(tr("เมดเลย์ "), tr("ปิด (Off)"));
+    ui->detail->show();
+    detailTimer->start(3000);
+    if (this->width() < 1160 && ui->chMix->isVisible())
+        ui->lcdTime->hide();
+}
+
+void MainWindow::openEasyMedley()
+{
+    EasyMedleyDialog dlg(this, player);
+    if (dlg.exec() == QDialog::Accepted) {
+        if (player->isUseMedley()) {
+            if (player->midiFile() && !player->midiFile()->events().isEmpty()) {
+                player->midiFile()->setSingleTempo(true);
+                const int targetBpm = player->medleyBPM() > 0 ? player->medleyBPM() : player->currentBpm();
+                const int baseBpm = player->currentBpm() - player->bpmSpeed();
+                player->setBpmSpeed(targetBpm - baseBpm);
+                playingSong.setBpmSpeed(player->bpmSpeed());
+                player->midiSequencer()->applyAutoMedleyBounds(lyrWidget->curData(),
+                                                               playingSong.cutStartBar(),
+                                                               playingSong.cutEndBar(),
+                                                               lyrWidget->lastActiveLyricTick(),
+                                                               player->medleySkipIntro(),
+                                                               player->medleyAutoCutOutro(),
+                                                               player->medleyWaitBars(),
+                                                               player->medleyQuantizeBar(),
+                                                               player->medleyIntroLeadInBars());
+            }
+            const int nextMedleyIdx = (remove_playlist ? 0 : playingIndex + 1);
+            if (!player->isPlayerStopped() && (nextMedleyIdx >= 0 && nextMedleyIdx < playlist.size()))
+                loadNextMedley(playlist[nextMedleyIdx]);
+
+            const QString bpmText = player->medleyBPM() > 0 ? QString::number(player->medleyBPM()) + " BPM" : tr("ตามต้นฉบับ");
+            ui->detail->setDetail(tr("Easy Medley "), tr("เปิด (%1)").arg(bpmText));
+            ui->detail->show();
+            detailTimer->start(3000);
+            if (btnMedley) {
+                QSignalBlocker b(btnMedley);
+                btnMedley->setChecked(true);
+            }
+        }
+    } else if (dlg.isTurnOffRequested()) {
+        turnOffMedley();
+    }
 }
 
 void MainWindow::loadNextMedley(Song *song)

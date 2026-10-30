@@ -54,11 +54,52 @@ MedleyDialog::MedleyDialog(QWidget *parent, MidiPlayer *player) :
     connect(ui->chkAudioAutoCue, &QCheckBox::toggled, this, &MedleyDialog::onParamChanged);
     connect(ui->chkAudioNormalize, &QCheckBox::toggled, this, &MedleyDialog::onParamChanged);
 
+    // Quick Tempo Buttons
+    connect(ui->btnBpmAuto, &QPushButton::clicked, this, [this]() { ui->spinBpm->setValue(0); });
+    connect(ui->btnBpm130, &QPushButton::clicked, this, [this]() { ui->spinBpm->setValue(130); });
+    connect(ui->btnBpm140, &QPushButton::clicked, this, [this]() { ui->spinBpm->setValue(140); });
+    connect(ui->btnBpm145, &QPushButton::clicked, this, [this]() { ui->spinBpm->setValue(145); });
+    connect(ui->btnBpm150, &QPushButton::clicked, this, [this]() { ui->spinBpm->setValue(150); });
+    connect(ui->btnBpm155, &QPushButton::clicked, this, [this]() { ui->spinBpm->setValue(155); });
+    connect(ui->btnBpm160, &QPushButton::clicked, this, [this]() { ui->spinBpm->setValue(160); });
+
+    // Quick Drum Fill Bars Buttons
+    connect(ui->btnBars0, &QPushButton::clicked, this, [this]() { ui->spinBars->setValue(0); });
+    connect(ui->btnBars1, &QPushButton::clicked, this, [this]() { ui->spinBars->setValue(1); });
+    connect(ui->btnBars2, &QPushButton::clicked, this, [this]() { ui->spinBars->setValue(2); });
+
+    // Quick Drum Fill Volume Buttons
+    connect(ui->btnVol90, &QPushButton::clicked, this, [this]() { ui->spinFillVol->setValue(90); });
+    connect(ui->btnVol100, &QPushButton::clicked, this, [this]() { ui->spinFillVol->setValue(100); });
+    connect(ui->btnVol110, &QPushButton::clicked, this, [this]() { ui->spinFillVol->setValue(110); });
+    connect(ui->btnVol120, &QPushButton::clicked, this, [this]() { ui->spinFillVol->setValue(120); });
+
+    // Quick Wait Bars Buttons (Outro)
+    connect(ui->btnWait0, &QPushButton::clicked, this, [this]() { ui->spinWaitBars->setValue(0); });
+    connect(ui->btnWait1, &QPushButton::clicked, this, [this]() { ui->spinWaitBars->setValue(1); });
+    connect(ui->btnWait2, &QPushButton::clicked, this, [this]() { ui->spinWaitBars->setValue(2); });
+
+    // Quick Intro Lead-in Bars Buttons
+    connect(ui->btnIntro0, &QPushButton::clicked, this, [this]() { ui->spinIntroBars->setValue(0); });
+    connect(ui->btnIntro1, &QPushButton::clicked, this, [this]() { ui->spinIntroBars->setValue(1); });
+    connect(ui->btnIntro2, &QPushButton::clicked, this, [this]() { ui->spinIntroBars->setValue(2); });
+    connect(ui->btnIntro4, &QPushButton::clicked, this, [this]() { ui->spinIntroBars->setValue(4); });
+
+    // Quick Audio Fade Duration Buttons
+    connect(ui->btnFade15, &QPushButton::clicked, this, [this]() { ui->spinCrossfadeSec->setValue(1.5); });
+    connect(ui->btnFade25, &QPushButton::clicked, this, [this]() { ui->spinCrossfadeSec->setValue(2.5); });
+    connect(ui->btnFade30, &QPushButton::clicked, this, [this]() { ui->spinCrossfadeSec->setValue(3.0); });
+    connect(ui->btnFade40, &QPushButton::clicked, this, [this]() { ui->spinCrossfadeSec->setValue(4.0); });
+
     for (QComboBox *cb : findChildren<QComboBox*>()) {
         cb->setView(new QListView(cb));
     }
 
     loadSettings();
+
+    // Focus on spinBpm and select all so user can immediately type a number
+    ui->spinBpm->setFocus();
+    ui->spinBpm->selectAll();
 
     setWindowFlag(Qt::WindowContextHelpButtonHint, false);
 }
@@ -100,7 +141,7 @@ void MedleyDialog::loadSettings()
     settings.endGroup();
 
     if (_player) {
-        if (!_player->isPlayerStopped() && _player->currentBpm() >= 40 && _player->currentBpm() <= 240)
+        if (!_player->isPlayerStopped() && _player->currentBpm() >= 0 && _player->currentBpm() <= 240)
             bpm = _player->currentBpm();
         else if (_player->medleyBPM() >= 40)
             bpm = _player->medleyBPM();
@@ -129,7 +170,7 @@ void MedleyDialog::loadSettings()
         preset = _player->medleyPreset();
     }
 
-    ui->spinBpm->setValue(qBound(40, bpm, 250));
+    ui->spinBpm->setValue(qBound(0, bpm, 250));
     ui->comboTempoMode->setCurrentIndex(qBound(0, tempoMode, ui->comboTempoMode->count() - 1));
     ui->chkDrumFill->setChecked(drumFill);
     ui->spinBars->setValue(qBound(1, transitionBars, 4));
@@ -299,7 +340,7 @@ void MedleyDialog::applyPreset(int index)
         ui->comboTempoMode->setCurrentIndex(0); // Lock BPM
         ui->chkDrumFill->setChecked(true);
         ui->spinBars->setValue(1);
-        ui->comboPattern->setCurrentIndex(1);   // Sam-Cha
+        ui->comboPattern->setCurrentIndex(0);   // 900 Sam-Cha
         ui->sliderFillVol->setValue(110);
         ui->chkPreserveEffects->setChecked(true);
 
@@ -321,7 +362,7 @@ void MedleyDialog::applyPreset(int index)
         ui->comboTempoMode->setCurrentIndex(2); // Tempo Ramp / Morph
         ui->chkDrumFill->setChecked(true);
         ui->spinBars->setValue(2);
-        ui->comboPattern->setCurrentIndex(0);   // Standard Rock/Pop
+        ui->comboPattern->setCurrentIndex(5);   // 008 Soul 1
         ui->sliderFillVol->setValue(90);
         ui->chkPreserveEffects->setChecked(true);
 
@@ -343,7 +384,7 @@ void MedleyDialog::applyPreset(int index)
         ui->comboTempoMode->setCurrentIndex(0); // Lock BPM
         ui->chkDrumFill->setChecked(true);
         ui->spinBars->setValue(1);
-        ui->comboPattern->setCurrentIndex(0);   // Standard Rock
+        ui->comboPattern->setCurrentIndex(1);   // 901 Lum-Zing
         ui->sliderFillVol->setValue(115);
         ui->chkPreserveEffects->setChecked(true);
 

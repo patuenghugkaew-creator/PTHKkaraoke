@@ -27,6 +27,7 @@ SOURCES += main.cpp\
     Config.cpp \
     Theme.cpp \
     Dialogs/MedleyDialog.cpp \
+    Dialogs/EasyMedleyDialog.cpp \
     Widgets/TransitionPreviewWidget.cpp \
     Dialogs/SongListsDialog.cpp \
     Dialogs/YouTube.cpp \
@@ -113,6 +114,7 @@ SOURCES += main.cpp\
 HEADERS  += Widgets/PanKnob.h \
     MainWindow.h \
     Dialogs/MedleyDialog.h \
+    Dialogs/EasyMedleyDialog.h \
     Widgets/TransitionPreviewWidget.h \
     Dialogs/SongListsDialog.h \
     Dialogs/YouTube.h \

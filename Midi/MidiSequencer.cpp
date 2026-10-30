@@ -466,9 +466,9 @@ void MidiSequencer::setMedleyTransition(bool enable, int bars, int pattern, int 
 {
     _isMedleyTransition = enable;
     _medleyTransitionBars = qBound(0, bars, 8);
-    _medleyFillPattern = qBound(0, pattern, 4);
-    _medleyTargetBpm = qBound(30, bpm, 300);
-    _medleyFillVolume = qBound(50, fillVolume, 130);
+    _medleyFillPattern = qBound(0, pattern, 7);
+    _medleyTargetBpm = qBound(0, bpm, 300);
+    _medleyFillVolume = qBound(50, fillVolume, 150);
     _medleyTempoMode = qBound(0, tempoMode, 2);
     _medleyPreserveEffectsTail = preserveEffects;
 }
@@ -546,10 +546,21 @@ void MidiSequencer::playMedleyTransitionFill()
     }
 
     // Load authentic professional SFF drum fill pattern extracted from eXtreme Karaoke
-    int activeCat = _medleyFillPattern;
-    if (activeCat == 4) { // Variety / Random pick among styles
+    int activeCat = 1; // Default to 900 Sam-Cha
+    switch (_medleyFillPattern) {
+    case 0: activeCat = 1; break; // 900 Sam-Cha (สามช่า)
+    case 1: activeCat = 2; break; // 901 Lum-Zing (ลำซิ่ง)
+    case 2: activeCat = 3; break; // 902 3-Cha Lum-Zing (3ช่าลำซิ่ง)
+    case 3: activeCat = 0; break; // 903 Disco Universal (ดิสโก้)
+    case 4: activeCat = 2; break; // 904 Lum-Zing 2 (ลำซิ่ง 2)
+    case 5: activeCat = 0; break; // 008 Soul 1 (โซล 1)
+    case 6: activeCat = 0; break; // 000 Standard (ลูกส่งมาตรฐาน)
+    case 7: // Random / Dynamic
+    default: {
         static const int catOptions[] = { 1, 2, 3, 0 };
         activeCat = catOptions[QRandomGenerator::global()->bounded(4)];
+        break;
+    }
     }
 
     const DrumFillPattern *pat = getAuthenticDrumFill(activeCat);
