@@ -76,6 +76,7 @@ SOURCES += main.cpp\
     Dialogs/SynthMixerDialog.cpp \
     Dialogs/SecondMonitorDialog.cpp \
     Midi/MidiSequencer.cpp \
+    Midi/RhythmStyleManager.cpp \
     Midi/MidiPlayer.cpp \
     Dialogs/MapChannelDialog.cpp \
     Widgets/ChMxComboBox.cpp \
@@ -171,6 +172,7 @@ HEADERS  += Widgets/PanKnob.h \
     Dialogs/BusDialog.h \
     Dialogs/SecondMonitorDialog.h \
     Midi/MidiSequencer.h \
+    Midi/RhythmStyleManager.h \
     Midi/MidiPlayer.h \
     DrumPadsKey.h \
     version.h \

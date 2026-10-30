@@ -169,10 +169,9 @@ void TransitionPreviewWidget::drawMidiTransition(QPainter &p, const QRect &r)
         case 2: patStr = "902 3ช่าลำซิ่ง"; break;
         case 3: patStr = "903 ดิสโก้"; break;
         case 4: patStr = "904 ลำซิ่ง 2"; break;
-        case 5: patStr = "008 โซล 1"; break;
-        case 6: patStr = "000 มาตรฐาน"; break;
-        case 7: patStr = "สุ่มตามเพลง"; break;
-        default: patStr = "ลูกส่งมาตรฐาน"; break;
+        case 5: patStr = "100 มาตรฐาน"; break;
+        case 6: patStr = "สุ่มตามเพลง"; break;
+        default: patStr = "900 สามช่า"; break;
         }
 
         QFont fPat = p.font();
@@ -216,23 +215,8 @@ void TransitionPreviewWidget::drawMidiTransition(QPainter &p, const QRect &r)
     // Downbeat Sync Marker Line & Tag (Cyan neon right at bridge exit)
     // -------------------------------------------------------------
     int syncX = bridgeRect.right();
-    p.setPen(QPen(QColor(6, 182, 212, 230), 2.0, Qt::DashLine));
+    p.setPen(QPen(QColor(6, 182, 212, 200), 1.5, Qt::DashLine));
     p.drawLine(syncX, y + 2, syncX, y + h - 2);
-
-    // Beat 1 Pill Badge: placed cleanly inside Deck B's header (top right)
-    // Never collides with Bridge or border seams!
-    if (_quantizeBar) {
-        const QRect tagRect(deckBRect.right() - 54, y + 5, 46, 16);
-        p.setBrush(QColor(6, 182, 212));
-        p.setPen(Qt::NoPen);
-        p.drawRoundedRect(tagRect, 3, 3);
-        p.setPen(QColor(15, 23, 42));
-        QFont fTag = p.font();
-        fTag.setPointSize(7);
-        fTag.setBold(true);
-        p.setFont(fTag);
-        p.drawText(tagRect, Qt::AlignCenter, "BEAT 1");
-    }
 
     // -------------------------------------------------------------
     // 3. DECK B (Next Song Intro)
@@ -248,6 +232,21 @@ void TransitionPreviewWidget::drawMidiTransition(QPainter &p, const QRect &r)
     p.setFont(fHeader);
     p.setPen(QColor(110, 231, 183)); // Soft emerald
     p.drawText(deckBRect.adjusted(12, 5, -8, 0), Qt::AlignLeft | Qt::AlignTop, "เพลงถัดไป (Deck B)");
+
+    // Beat 1 Pill Badge: placed cleanly inside Deck B's header (top right)
+    // Drawn AFTER Deck B is painted, never collides with Bridge or border seams!
+    if (_quantizeBar) {
+        const QRect tagRect(deckBRect.right() - 58, y + 5, 50, 15);
+        p.setBrush(QColor(6, 182, 212, 45));
+        p.setPen(QPen(QColor(6, 182, 212), 1));
+        p.drawRoundedRect(tagRect, 3, 3);
+        p.setPen(QColor(34, 211, 238));
+        QFont fTag = p.font();
+        fTag.setPointSize(7);
+        fTag.setBold(true);
+        p.setFont(fTag);
+        p.drawText(tagRect, Qt::AlignCenter, "BEAT 1");
+    }
 
     // Waveform bars inside Deck B (rising up from left to right)
     p.setPen(QPen(QColor(52, 211, 153, 190), 2.5, Qt::SolidLine, Qt::RoundCap));

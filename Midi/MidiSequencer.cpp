@@ -1,5 +1,6 @@
 #include "MidiSequencer.h"
 #include "MedleyDrumFills.h"
+#include "RhythmStyleManager.h"
 #include <QRandomGenerator>
 #include <QMap>
 
@@ -536,16 +537,13 @@ void MidiSequencer::playMedleyTransitionFill()
     double beatMs = 60000.0 / baseBpm;
     double totalDurationMs = totalBeats * beatMs;
 
-    struct DrumHit {
-        double beatOffset;
-        int note;
-        int velocity;
-    };
-    QVector<DrumHit> hits;
-
     const double volScale = _medleyFillVolume / 100.0;
+    const int rhythmId = RhythmStyleManager::instance().patternIndexToRhythmId(_medleyFillPattern);
 
-    // Ensure Channel 9 (Drums) is audible, unmuted, and centered for the drum fill
+    QVector<RhythmBridgeEvent> bridgeEvents;
+    RhythmStyleManager::instance().buildTransitionBridge(rhythmId, totalBars, volScale, bridgeEvents);
+
+    // Ensure Channel 9 (Drums) is audible and unmuted
     MidiEvent volEvt;
     volEvt.setEventType(MidiEventType::Controller);
     volEvt.setChannel(9);
@@ -566,72 +564,6 @@ void MidiSequencer::playMedleyTransitionFill()
     panEvt.setData1(10); // Pan center
     panEvt.setData2(64);
     emit playingEvent(panEvt);
-
-    // 1. Lead-in bars (if totalBars > 1): play a steady drum groove bridge
-    for (int bar = 0; bar < totalBars - 1; ++bar) {
-        const double base = bar * beatsPerBar;
-        // Beat 1: Kick + Hi-hat (and Crash on very first bar)
-        hits.append({ base + 0.0, 36, int(110 * volScale) });
-        if (bar == 0)
-            hits.append({ base + 0.0, 49, int(100 * volScale) });
-        hits.append({ base + 0.0, 42, int(90 * volScale) });
-        // Beat 2: Snare + Hi-hat
-        hits.append({ base + 1.0, 38, int(105 * volScale) });
-        hits.append({ base + 1.0, 42, int(90 * volScale) });
-        // Beat 3: Kick + Hi-hat
-        hits.append({ base + 2.0, 36, int(105 * volScale) });
-        hits.append({ base + 2.0, 42, int(90 * volScale) });
-        // Beat 4: Snare + Hi-hat
-        hits.append({ base + 3.0, 38, int(105 * volScale) });
-        hits.append({ base + 3.0, 42, int(90 * volScale) });
-    }
-
-    // 2. Final bar: play selected fill pattern
-    const double fillBase = (totalBars - 1) * beatsPerBar;
-
-    int activePattern = _medleyFillPattern;
-    if (activePattern == 4) { // Random / Dynamic pattern
-        activePattern = QRandomGenerator::global()->bounded(4);
-    }
-
-    // Load authentic professional SFF drum fill pattern extracted from eXtreme Karaoke
-    int activeCat = 1; // Default to 900 Sam-Cha
-    switch (_medleyFillPattern) {
-    case 0: activeCat = 1; break; // 900 Sam-Cha (สามช่า)
-    case 1: activeCat = 2; break; // 901 Lum-Zing (ลำซิ่ง)
-    case 2: activeCat = 3; break; // 902 3-Cha Lum-Zing (3ช่าลำซิ่ง)
-    case 3: activeCat = 0; break; // 903 Disco Universal (ดิสโก้)
-    case 4: activeCat = 2; break; // 904 Lum-Zing 2 (ลำซิ่ง 2)
-    case 5: activeCat = 0; break; // 008 Soul 1 (โซล 1)
-    case 6: activeCat = 0; break; // 000 Standard (ลูกส่งมาตรฐาน)
-    case 7: // Random / Dynamic
-    default: {
-        static const int catOptions[] = { 1, 2, 3, 0 };
-        activeCat = catOptions[QRandomGenerator::global()->bounded(4)];
-        break;
-    }
-    }
-
-    const DrumFillPattern *pat = getAuthenticDrumFill(activeCat);
-    if (pat && pat->count > 0) {
-        for (int pIdx = 0; pIdx < pat->count; ++pIdx) {
-            const DrumFillNote &dn = pat->notes[pIdx];
-            // dn.tick is 0..479 normalized to 1 bar (4 beats)
-            double beatOffset = fillBase + (double(dn.tick) / 480.0) * beatsPerBar;
-            int scaledVel = qBound(1, int(dn.velocity * volScale), 127);
-            hits.append({ beatOffset, dn.note, scaledVel });
-        }
-    } else {
-        hits.append({ fillBase + 0.0, 36, int(112 * volScale) });
-        hits.append({ fillBase + 1.0, 38, int(108 * volScale) });
-        hits.append({ fillBase + 2.0, 48, int(110 * volScale) });
-        hits.append({ fillBase + 3.0, 45, int(115 * volScale) });
-        hits.append({ fillBase + 3.75, 49, int(125 * volScale) });
-    }
-
-    std::stable_sort(hits.begin(), hits.end(), [](const DrumHit &a, const DrumHit &b) {
-        return a.beatOffset < b.beatOffset;
-    });
 
     QElapsedTimer timer;
     timer.start();
@@ -666,19 +598,20 @@ void MidiSequencer::playMedleyTransitionFill()
             emit medleyCountIn(beatInBar, beatsPerBar, barIndex, totalBars);
         }
 
-        while (nextHitIdx < hits.size() && (hits[nextHitIdx].beatOffset * beatMs) <= elapsedMs) {
+        while (nextHitIdx < bridgeEvents.size() && (bridgeEvents[nextHitIdx].beatOffset * beatMs) <= elapsedMs) {
+            const RhythmBridgeEvent &re = bridgeEvents[nextHitIdx];
             MidiEvent evt;
-            evt.setEventType(MidiEventType::NoteOn);
-            evt.setChannel(9);
-            evt.setData1(hits[nextHitIdx].note);
-            evt.setData2(hits[nextHitIdx].velocity);
+            evt.setEventType(re.eventType);
+            evt.setChannel(re.channel);
+            evt.setData1(re.data1);
+            evt.setData2(re.data2);
             emit playingEvent(evt);
             nextHitIdx++;
         }
 
         double nextTimeMs = totalDurationMs;
-        if (nextHitIdx < hits.size()) {
-            double hitTimeMs = hits[nextHitIdx].beatOffset * beatMs;
+        if (nextHitIdx < bridgeEvents.size()) {
+            double hitTimeMs = bridgeEvents[nextHitIdx].beatOffset * beatMs;
             if (hitTimeMs < nextTimeMs)
                 nextTimeMs = hitTimeMs;
         }
@@ -693,6 +626,40 @@ void MidiSequencer::playMedleyTransitionFill()
             _mutex.unlock();
         }
     }
+
+    // Live Stage Transition Climax:
+    // 1. Send All-Notes-Off and Sustain-Off on accompaniment channels (0..8, 10..15)
+    for (int ch = 0; ch < 16; ++ch) {
+        if (ch == 9) continue;
+        MidiEvent ccSustain;
+        ccSustain.setEventType(MidiEventType::Controller);
+        ccSustain.setChannel(ch);
+        ccSustain.setData1(64); // Sustain Off
+        ccSustain.setData2(0);
+        emit playingEvent(ccSustain);
+
+        MidiEvent ccAllOff;
+        ccAllOff.setEventType(MidiEventType::Controller);
+        ccAllOff.setChannel(ch);
+        ccAllOff.setData1(123); // All Notes Off
+        ccAllOff.setData2(0);
+        emit playingEvent(ccAllOff);
+    }
+
+    // 2. Fire Beat 1 Kick (36) + Crash (49) on Channel 9 as Deck B begins
+    MidiEvent crashEvt;
+    crashEvt.setEventType(MidiEventType::NoteOn);
+    crashEvt.setChannel(9);
+    crashEvt.setData1(49);
+    crashEvt.setData2(qBound(1, int(122 * volScale), 127));
+    emit playingEvent(crashEvt);
+
+    MidiEvent kickEvt;
+    kickEvt.setEventType(MidiEventType::NoteOn);
+    kickEvt.setChannel(9);
+    kickEvt.setData1(36);
+    kickEvt.setData2(qBound(1, int(120 * volScale), 127));
+    emit playingEvent(kickEvt);
 }
 
 void MidiSequencer::run()
