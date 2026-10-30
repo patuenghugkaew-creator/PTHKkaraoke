@@ -219,18 +219,20 @@ void TransitionPreviewWidget::drawMidiTransition(QPainter &p, const QRect &r)
     p.setPen(QPen(QColor(6, 182, 212, 230), 2.0, Qt::DashLine));
     p.drawLine(syncX, y + 2, syncX, y + h - 2);
 
-    // Beat 1 Pill Badge: placed cleanly inside the Bridge side right before the sync line
-    // Never overlaps Deck B!
-    const QRect tagRect(syncX - 38, y + 5, 34, 15);
-    p.setBrush(QColor(6, 182, 212));
-    p.setPen(Qt::NoPen);
-    p.drawRoundedRect(tagRect, 3, 3);
-    p.setPen(QColor(15, 23, 42));
-    QFont fTag = p.font();
-    fTag.setPointSize(7);
-    fTag.setBold(true);
-    p.setFont(fTag);
-    p.drawText(tagRect, Qt::AlignCenter, "BEAT 1");
+    // Beat 1 Pill Badge: placed cleanly inside Deck B's header (top right)
+    // Never collides with Bridge or border seams!
+    if (_quantizeBar) {
+        const QRect tagRect(deckBRect.right() - 54, y + 5, 46, 16);
+        p.setBrush(QColor(6, 182, 212));
+        p.setPen(Qt::NoPen);
+        p.drawRoundedRect(tagRect, 3, 3);
+        p.setPen(QColor(15, 23, 42));
+        QFont fTag = p.font();
+        fTag.setPointSize(7);
+        fTag.setBold(true);
+        p.setFont(fTag);
+        p.drawText(tagRect, Qt::AlignCenter, "BEAT 1");
+    }
 
     // -------------------------------------------------------------
     // 3. DECK B (Next Song Intro)

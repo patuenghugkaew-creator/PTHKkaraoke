@@ -31,7 +31,8 @@ QVector<long> Utils::readCurFile(const QString &curFile, uint32_t resolution)
 {
     QVector<long> curs;
     QFile f(curFile);
-    f.open(QIODevice::ReadOnly);
+    if (!f.open(QIODevice::ReadOnly))
+        return curs;
 
     QDataStream in(&f);
     while (!in.atEnd()) {
@@ -39,6 +40,8 @@ QVector<long> Utils::readCurFile(const QString &curFile, uint32_t resolution)
         quint8 b2 = 0;
         in >> b1;
         in >> b2;
+        if (b1 == 0xFF && b2 == 0xFF)
+            continue; // Skip Nick Karaoke / eXtreme EOF marker (0xFFFF)
         long cs = (b1 + (b2 << 8)) * resolution / 24;
         curs.append(cs);
     }
@@ -55,6 +58,8 @@ QVector<long> Utils::readCurFile(const QByteArray &data, uint32_t resolution)
         quint8 b2 = 0;
         in >> b1;
         in >> b2;
+        if (b1 == 0xFF && b2 == 0xFF)
+            continue; // Skip Nick Karaoke / eXtreme EOF marker (0xFFFF)
         long cs = (b1 + (b2 << 8)) * resolution / 24;
         curs.append(cs);
     }

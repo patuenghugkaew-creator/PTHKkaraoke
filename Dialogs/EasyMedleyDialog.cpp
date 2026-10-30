@@ -15,7 +15,7 @@ EasyMedleyDialog::EasyMedleyDialog(QWidget *parent, MidiPlayer *player)
     : QDialog(parent), _player(player)
 {
     setWindowTitle(tr("Easy Medley Tempo (F11)"));
-    setFixedSize(460, 240);
+    setFixedSize(460, 300);
     setWindowFlag(Qt::WindowContextHelpButtonHint, false);
 
     setStyleSheet(
@@ -54,9 +54,14 @@ EasyMedleyDialog::EasyMedleyDialog(QWidget *parent, MidiPlayer *player)
     lblTitle->setStyleSheet("font-size: 11pt; font-weight: bold; color: #58a6ff;");
     mainLayout->addWidget(lblTitle);
 
-    auto *lblDesc = new QLabel(tr("พิมพ์ตัวเลขความเร็วที่ต้องการ (ใส่ 0 หรือเว้นว่าง = ใช้ความเร็วตามต้นฉบับเพลง)"), this);
+    auto *lblDesc = new QLabel(tr("พิมพ์ความเร็วรวมที่ต้องการ (ใส่ 0 = ใช้ความเร็วตามต้นฉบับเพลง)"), this);
     lblDesc->setStyleSheet("color: #8b949e; font-size: 9pt;");
     mainLayout->addWidget(lblDesc);
+
+    auto *lblPerSong = new QLabel(tr("ตั้งเป็น 0 แล้วเลือกเพลงในคิว กด Page Up / Page Down เพื่อตั้ง BPM แยกเพลง (ครั้งละ 1 BPM)"), this);
+    lblPerSong->setWordWrap(true);
+    lblPerSong->setStyleSheet("color: #8b949e; font-size: 9pt;");
+    mainLayout->addWidget(lblPerSong);
 
     // Center input row
     auto *inputRow = new QHBoxLayout();

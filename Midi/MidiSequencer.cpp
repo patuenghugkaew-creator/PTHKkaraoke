@@ -313,6 +313,48 @@ int MidiSequencer::currentBar()
     return _midi->barFromTick(positionTick());
 }
 
+uint32_t MidiSequencer::findVocalReleaseTick(long lastLyricTick) const
+{
+    if (_midi == nullptr || _midi->events().isEmpty() || lastLyricTick <= 0)
+        return uint32_t(qMax(0L, lastLyricTick));
+
+    const int res = qMax(1, _midi->resorution());
+    const int barTicks = res * 4;
+    // Vocal phrase must sustain at least to the end of the current bar + 1 downbeat
+    uint32_t minEndTick = _midi->tickFromBar(_midi->barFromTick(uint32_t(lastLyricTick)) + 1);
+    uint32_t maxReleaseTick = minEndTick;
+
+    // Scan for any melody/guide notes active or triggered around the final lyric on non-drum channels (ch != 9)
+    const long windowStart = qMax(0L, lastLyricTick - res);
+    const long windowEnd = lastLyricTick + res * 2;
+
+    for (int i = 0; i < _midi->events().size(); ++i) {
+        MidiEvent *e = _midi->events()[i];
+        if (e->tick() < uint32_t(windowStart))
+            continue;
+        if (e->tick() > uint32_t(windowEnd + barTicks * 2))
+            break;
+
+        if (e->channel() != 9 && e->eventType() == MidiEventType::NoteOn && e->data2() > 0 && e->tick() <= uint32_t(windowEnd)) {
+            const int note = e->data1();
+            const int ch = e->channel();
+            for (int j = i + 1; j < _midi->events().size(); ++j) {
+                MidiEvent *nextE = _midi->events()[j];
+                if (nextE->channel() == ch && nextE->data1() == note) {
+                    if (nextE->eventType() == MidiEventType::NoteOff || (nextE->eventType() == MidiEventType::NoteOn && nextE->data2() == 0)) {
+                        if (nextE->tick() > maxReleaseTick) {
+                            maxReleaseTick = nextE->tick();
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    return maxReleaseTick;
+}
+
 void MidiSequencer::applyAutoMedleyBounds(const QVector<long> &lyricCursors,
                                          int manualStartBar,
                                          int manualEndBar,

@@ -772,8 +772,13 @@ bool MidiPlayer::loadNextMedley(const QString &file, int cutStartBar, int cutEnd
 
     _midiSeqTemp->midiFile()->setSingleTempo(true);
 
-    int targetBpm = _medleyBPM > 0 ? _medleyBPM : currentBpm();
-    _midiSeqTemp->setBpmSpeed(targetBpm - _midiSeqTemp->currentBpm()); Q_UNUSED(midiSpeed);
+    const int sourceBpm = _midiSeqTemp->currentBpm();
+    // Easy Medley's 0 BPM mode keeps each queued song at its own tempo.
+    // midiSpeed is the per-song adjustment set from the playlist.
+    const int targetBpm = _medleyBPM > 0
+        ? _medleyBPM
+        : qBound(20, sourceBpm + midiSpeed, 250);
+    _midiSeqTemp->setBpmSpeed(targetBpm - sourceBpm);
     _midiTransposeTemp = transpose;
 
     _midiSeqTemp->setCutStartBar(cutStartBar);

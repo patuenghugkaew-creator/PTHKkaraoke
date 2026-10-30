@@ -2104,12 +2104,18 @@ void MainWindow::checkEndAfterLyrics(qint64 pos, qint64 remainingMs)
         if (lastLyricPos <= 0) {
             const QVector<long> c = lyrWidget->curData();
             for (long v : c)
-                if (v > lastLyricPos) lastLyricPos = v;
+                if (v > lastLyricPos && v < 1000000) lastLyricPos = v;
         }
     }
     if (lastLyricPos < 0)
         return;
-    if (pos < lastLyricPos) {           // still singing (or sought back)
+
+    long lyricCutTick = lastLyricPos;
+    if (player->isUseMedley() && player->midiSequencer() != nullptr) {
+        lyricCutTick = player->midiSequencer()->findVocalReleaseTick(lastLyricPos);
+    }
+
+    if (pos < lyricCutTick) {           // still singing (or sustaining final vocal note)
         afterLyrics = false;
         return;
     }
@@ -2125,7 +2131,11 @@ void MainWindow::checkEndAfterLyrics(qint64 pos, qint64 remainingMs)
                 }
                 MidiSequencer *seq = player->midiSequencer();
                 const int waitBars = player->medleyWaitBars();
-                int targetBar = seq->currentBar() + waitBars + 1;
+                int currentBar = seq->midiFile()->barFromTick(uint32_t(seq->positionTick()));
+                int targetBar = currentBar + 1 + waitBars;
+                const int totalBars = seq->midiFile()->barCount();
+                if (totalBars > 0 && targetBar >= totalBars)
+                    targetBar = qMax(0, totalBars - 1);
                 int nextBarTick = seq->midiFile()->tickFromBar(targetBar);
                 if (nextBarTick <= seq->positionTick() + seq->midiFile()->resorution() / 2)
                     nextBarTick = seq->midiFile()->tickFromBar(targetBar + 1);
@@ -4235,11 +4245,6 @@ void MainWindow::addToPlaylist(Song *song)
         playingSong.setBpmSpeed(player->bpmSpeed());
         player->midiSequencer()->applyAutoMedleyBounds(lyrWidget->curData(), playingSong.cutStartBar(), playingSong.cutEndBar(), lyrWidget->lastActiveLyricTick(), player->medleySkipIntro(), player->medleyAutoCutOutro(), player->medleyWaitBars(), player->medleyQuantizeBar(), player->medleyIntroLeadInBars());
     }
-    if (player->isUseMedley()) {
-        int medleySpeed = songToAdd->tempo() > 0 ? (player->medleyBPM() - songToAdd->tempo()) : 0;
-        songToAdd->setBpmSpeed(songToAdd->bpmSpeed() + medleySpeed);
-    }
-
     playlist.append(songToAdd);
     ui->playlistWidget->addSong(songToAdd);
 

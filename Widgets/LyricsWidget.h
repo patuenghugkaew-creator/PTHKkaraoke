@@ -50,34 +50,14 @@ public:
     }
     static long computeLastLyricTick(const QStringList &lyrs, const QVector<long> &curs)
     {
+        Q_UNUSED(lyrs);
         long maxCur = -1;
         for (long c : curs) {
-            if (c > maxCur)
+            // Find true final lyric timestamp, filtering out sentinels (> 1,000,000) or negative ticks
+            if (c > 0 && c < 1000000 && c > maxCur)
                 maxCur = c;
         }
-
-        int idx = 0;
-        long lastSung = -1;
-        for (const QString &rawLine : lyrs) {
-            const int len = rawLine.length();
-            if (!isMetaOnlyLine(rawLine)) {
-                for (int k = 0; k <= len && (idx + k) < curs.size(); k++) {
-                    const long c = curs[idx + k];
-                    if (c > lastSung)
-                        lastSung = c;
-                }
-            }
-            idx += len + 1;
-            if (idx >= curs.size())
-                break;
-        }
-
-        if (lastSung <= 0)
-            return maxCur;
-        if (maxCur > 0 && (maxCur - lastSung) > 15000)
-            return maxCur;
-
-        return lastSung;
+        return maxCur;
     }
 
     QFont   textFont()          { return font(); }

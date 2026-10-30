@@ -47,6 +47,7 @@ public:
     void setCutEndBar(int bar);
 
     int currentBar();
+    uint32_t findVocalReleaseTick(long lastLyricTick) const;
     int startTick() const { return _startTick; }
     int endTick() const { return _endTick; }
     void applyAutoMedleyBounds(const QVector<long> &lyricCursors = QVector<long>(),

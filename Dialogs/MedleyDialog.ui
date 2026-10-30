@@ -50,8 +50,8 @@ QTabWidget::pane {
 QTabBar::tab {
     background-color: #0d1117;
     color: #8b949e;
-    padding: 8px 20px;
-    font-size: 10pt;
+    padding: 6px 14px;
+    font-size: 9.5pt;
     font-weight: bold;
     border-top-left-radius: 6px;
     border-top-right-radius: 6px;
@@ -286,7 +286,7 @@ QPushButton[quickBtn="true"]:pressed {
      </property>
      <widget class="QWidget" name="tabMidi">
       <attribute name="title">
-       <string>🎵 จังหวะและความเร็ว</string>
+       <string>จังหวะ &amp; ความเร็ว (BPM)</string>
       </attribute>
       <layout class="QVBoxLayout" name="layoutTabMidi">
        <property name="spacing">
@@ -752,7 +752,7 @@ QPushButton[quickBtn="true"]:pressed {
      </widget>
      <widget class="QWidget" name="tabCues">
       <attribute name="title">
-       <string>✂️ ตัดต่อเพลงและอินโทร</string>
+       <string>ตัดต่อเพลง &amp; คิว (Cue)</string>
       </attribute>
       <layout class="QVBoxLayout" name="layoutTabCues">
        <property name="spacing">
@@ -1058,7 +1058,7 @@ QPushButton[quickBtn="true"]:pressed {
      </widget>
      <widget class="QWidget" name="tabAudio">
       <attribute name="title">
-       <string>🎚️ ระบบเสียงครอสเฟด</string>
+       <string>มิกซ์เสียง &amp; เฟด (Audio)</string>
       </attribute>
       <layout class="QVBoxLayout" name="layoutTab3">
        <property name="spacing">
