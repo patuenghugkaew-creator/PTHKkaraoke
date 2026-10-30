@@ -302,6 +302,8 @@ bool MidiPlayer::load(const QString &file, bool seekFileChunkID)
             this, SLOT(onSeqFinished()), Qt::DirectConnection);
     connect(_midiSeq, SIGNAL(medleyCountIn(int,int,int,int)),
             this, SIGNAL(medleyCountIn(int,int,int,int)), Qt::DirectConnection);
+    connect(_midiSeq, SIGNAL(medleySongSwapped()),
+            this, SLOT(onSeqSongSwapped()), Qt::QueuedConnection);
 
     if (!_midiSeq->load(file, seekFileChunkID))
         return false;
@@ -780,11 +782,18 @@ bool MidiPlayer::loadNextMedley(const QString &file, int cutStartBar, int cutEnd
     _midiSeqTemp->setCutEndBar(cutEndBar);
     _midiSeqTemp->setMedleyTransition(true, _medleyTransitionBars, _medleyFillPattern, targetBpm, _medleyFillVolume, _medleyTempoMode, _medleyPreserveEffectsTail);
 
+    if (_midiSeq != nullptr && _midiSeq->isSeqPlaying()) {
+        _midiSeq->setNextSequencer(_midiSeqTemp);
+    }
+
     return true;
 }
 
 void MidiPlayer::unloadNextMedley()
 {
+    if (_midiSeq != nullptr) {
+        _midiSeq->setNextSequencer(nullptr);
+    }
     if (_midiSeqTemp != nullptr) {
         delete _midiSeqTemp;
         _midiSeqTemp = nullptr;
@@ -849,6 +858,18 @@ void MidiPlayer::onSeqFinished()
 void MidiPlayer::onSeqBpmChanged(int bpm)
 {
     emit bpmChanged(bpm);
+}
+
+void MidiPlayer::onSeqSongSwapped()
+{
+    _midiTranspose = _midiTransposeTemp;
+    _midiTransposeTemp = 0;
+    if (_midiSeqTemp != nullptr) {
+        delete _midiSeqTemp;
+        _midiSeqTemp = nullptr;
+    }
+    emit nextMedleyStarted();
+    emit nextMedleyAfterStarted();
 }
 
 void MidiPlayer::sendEventToDevices(MidiEvent evt)

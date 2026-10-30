@@ -1,4 +1,5 @@
 #include "MidiSequencer.h"
+#include "MedleyDrumFills.h"
 #include <QRandomGenerator>
 #include <QMap>
 
@@ -544,60 +545,28 @@ void MidiSequencer::playMedleyTransitionFill()
         activePattern = QRandomGenerator::global()->bounded(4);
     }
 
-    switch (activePattern) {
-    case 1: // Thai Sam-Cha / Lukthung Fill
-        hits.append({ fillBase + 0.0, 36, int(115 * volScale) });
-        hits.append({ fillBase + 0.0, 46, int(105 * volScale) });
-        hits.append({ fillBase + 0.5, 44, int(95 * volScale) });
-        hits.append({ fillBase + 1.0, 38, int(120 * volScale) });
-        hits.append({ fillBase + 1.0, 36, int(110 * volScale) });
-        hits.append({ fillBase + 1.0, 56, int(100 * volScale) });
-        hits.append({ fillBase + 2.0, 47, int(108 * volScale) });
-        hits.append({ fillBase + 2.0, 36, int(100 * volScale) });
-        hits.append({ fillBase + 2.5, 45, int(112 * volScale) });
-        hits.append({ fillBase + 3.0, 38, int(92 * volScale) });
-        hits.append({ fillBase + 3.25, 38, int(104 * volScale) });
-        hits.append({ fillBase + 3.5, 38, int(115 * volScale) });
-        hits.append({ fillBase + 3.75, 38, int(126 * volScale) });
-        break;
+    // Load authentic professional SFF drum fill pattern extracted from eXtreme Karaoke
+    int activeCat = _medleyFillPattern;
+    if (activeCat == 4) { // Variety / Random pick among styles
+        static const int catOptions[] = { 1, 2, 3, 0 };
+        activeCat = catOptions[QRandomGenerator::global()->bounded(4)];
+    }
 
-    case 2: // Count-in Stick
-        hits.append({ fillBase + 0.0, 37, int(110 * volScale) });
-        hits.append({ fillBase + 0.0, 42, int(90 * volScale) });
-        hits.append({ fillBase + 1.0, 37, int(110 * volScale) });
-        hits.append({ fillBase + 1.0, 42, int(90 * volScale) });
-        hits.append({ fillBase + 2.0, 37, int(115 * volScale) });
-        hits.append({ fillBase + 2.0, 42, int(95 * volScale) });
-        hits.append({ fillBase + 3.0, 38, int(105 * volScale) });
-        hits.append({ fillBase + 3.5, 38, int(122 * volScale) });
-        hits.append({ fillBase + 3.5, 36, int(115 * volScale) });
-        break;
-
-    case 3: // Tom Roll Fill
+    const DrumFillPattern *pat = getAuthenticDrumFill(activeCat);
+    if (pat && pat->count > 0) {
+        for (int pIdx = 0; pIdx < pat->count; ++pIdx) {
+            const DrumFillNote &dn = pat->notes[pIdx];
+            // dn.tick is 0..479 normalized to 1 bar (4 beats)
+            double beatOffset = fillBase + (double(dn.tick) / 480.0) * beatsPerBar;
+            int scaledVel = qBound(1, int(dn.velocity * volScale), 127);
+            hits.append({ beatOffset, dn.note, scaledVel });
+        }
+    } else {
         hits.append({ fillBase + 0.0, 36, int(112 * volScale) });
-        hits.append({ fillBase + 0.0, 42, int(95 * volScale) });
-        hits.append({ fillBase + 1.0, 50, int(105 * volScale) });
-        hits.append({ fillBase + 1.5, 50, int(105 * volScale) });
-        hits.append({ fillBase + 2.0, 47, int(110 * volScale) });
-        hits.append({ fillBase + 2.5, 48, int(110 * volScale) });
-        hits.append({ fillBase + 3.0, 45, int(112 * volScale) });
-        hits.append({ fillBase + 3.5, 41, int(118 * volScale) });
-        hits.append({ fillBase + 3.75, 38, int(126 * volScale) });
-        break;
-
-    case 0: // Standard Rock/Pop Fill
-    default:
-        hits.append({ fillBase + 0.0, 36, int(112 * volScale) });
-        hits.append({ fillBase + 0.0, 42, int(95 * volScale) });
         hits.append({ fillBase + 1.0, 38, int(108 * volScale) });
-        hits.append({ fillBase + 1.0, 42, int(90 * volScale) });
-        hits.append({ fillBase + 2.0, 50, int(102 * volScale) });
-        hits.append({ fillBase + 2.5, 47, int(106 * volScale) });
-        hits.append({ fillBase + 3.0, 38, int(88 * volScale) });
-        hits.append({ fillBase + 3.25, 38, int(98 * volScale) });
-        hits.append({ fillBase + 3.5, 38, int(110 * volScale) });
-        hits.append({ fillBase + 3.75, 38, int(125 * volScale) });
-        break;
+        hits.append({ fillBase + 2.0, 48, int(110 * volScale) });
+        hits.append({ fillBase + 3.0, 45, int(115 * volScale) });
+        hits.append({ fillBase + 3.75, 49, int(125 * volScale) });
     }
 
     std::stable_sort(hits.begin(), hits.end(), [](const DrumHit &a, const DrumHit &b) {
@@ -878,6 +847,94 @@ void MidiSequencer::run()
                 notesOff.setChannel(ch);
                 emit playingEvent(notesOff);
             }
+
+            if (_nextSeq != nullptr) {
+                // CONTINUOUS SEAMLESS HAND-OFF: Transition inside the same running thread!
+                MidiSequencer *nextSeq = _nextSeq;
+                MidiFile *nextMidi = nextSeq->midiFile();
+
+                // 1. Pre-warm patches for next song in BASSMIDI
+                if (nextMidi) {
+                    for (int evIdx = 0; evIdx < nextMidi->events().size(); ++evIdx) {
+                        MidiEvent *ev = nextMidi->events()[evIdx];
+                        if (ev->tick() > nextSeq->startTick())
+                            break;
+                        if (ev->eventType() == MidiEventType::ProgramChange ||
+                            (ev->eventType() == MidiEventType::Controller &&
+                             (ev->data1() == 0 || ev->data1() == 32 || ev->data1() == 7 || ev->data1() == 10 || ev->data1() == 91 || ev->data1() == 93))) {
+                            emit playingEvent(*ev);
+                        }
+                    }
+                }
+
+                // 2. Play authentic SFF drum fill bridge
+                _medleyTransitionBars = nextSeq->medleyTransitionBars();
+                _medleyFillPattern = nextSeq->medleyFillPattern();
+                _medleyTargetBpm = nextSeq->currentBpm();
+                _medleyFillVolume = nextSeq->medleyFillVolume();
+                _medleyTempoMode = nextSeq->medleyTempoMode();
+                if (_medleyTransitionBars > 0) {
+                    playMedleyTransitionFill();
+                }
+
+                // 3. Beat 1 Kick / Crash anti-double trigger
+                const double volScale = _medleyFillVolume / 100.0;
+                bool hasCrash = false;
+                bool hasKick = false;
+                if (nextMidi) {
+                    for (int evIdx = 0; evIdx < nextMidi->events().size(); ++evIdx) {
+                        MidiEvent *ev = nextMidi->events()[evIdx];
+                        if (ev->tick() < nextSeq->startTick()) continue;
+                        if (ev->tick() > nextSeq->startTick() + 40) break;
+                        if (ev->channel() == 9 && ev->eventType() == MidiEventType::NoteOn && ev->data2() > 0) {
+                            if (ev->data1() == 49 || ev->data1() == 57) hasCrash = true;
+                            if (ev->data1() == 35 || ev->data1() == 36) hasKick = true;
+                        }
+                    }
+                }
+                if (!hasCrash) {
+                    MidiEvent crashEvt;
+                    crashEvt.setEventType(MidiEventType::NoteOn);
+                    crashEvt.setChannel(9);
+                    crashEvt.setData1(49);
+                    crashEvt.setData2(qBound(1, int(122 * volScale), 127));
+                    emit playingEvent(crashEvt);
+                }
+                if (!hasKick) {
+                    MidiEvent kickEvt;
+                    kickEvt.setEventType(MidiEventType::NoteOn);
+                    kickEvt.setChannel(9);
+                    kickEvt.setData1(36);
+                    kickEvt.setData2(qBound(1, int(118 * volScale), 127));
+                    emit playingEvent(kickEvt);
+                }
+
+                // 4. Take over next song without stopping the thread
+                _mutex.lock();
+                delete _midi;
+                _midi = nextSeq->takeMidiFile();
+                _startTick = nextSeq->startTick();
+                _endTick = nextSeq->endTick();
+                if (_endEvent != nullptr) {
+                    delete _endEvent;
+                    _endEvent = nullptr;
+                }
+                _midiBpm = nextSeq->currentBpm() - nextSeq->bpmSpeed();
+                _midiSpeed = nextSeq->bpmSpeed();
+                _playedIndex = eventIndexFromTick(_startTick);
+                _startPlayTime = _midi->timeFromTick(_startTick, _midiSpeed) * 1000;
+                _positionMs = _startPlayTime;
+                _positionTick = _startTick;
+                _isMedleyTransition = false;
+                _nextSeq = nullptr;
+                _eTimer->restart();
+                i = _playedIndex - 1; // next for-loop step evaluates _playedIndex
+                _mutex.unlock();
+
+                emit medleySongSwapped();
+                continue; // Keep the same thread running uninterrupted!
+            }
+
             seqEnded = true;
             break;
         }

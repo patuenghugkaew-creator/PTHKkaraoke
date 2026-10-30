@@ -2059,7 +2059,7 @@ void MainWindow::endSongSmoothly()
         if (player->midiSequencerTemp() != nullptr) {
             MidiSequencer *seq = player->midiSequencer();
             int nextBarTick = seq->midiFile()->tickFromBar(seq->currentBar() + 1);
-            if (nextBarTick <= seq->positionTick() + seq->midiFile()->resorution() / 2)
+            if (nextBarTick <= seq->positionTick() + seq->midiFile()->resorution() / 8)
                 nextBarTick = seq->midiFile()->tickFromBar(seq->currentBar() + 2);
             seq->setEndTick(nextBarTick);
             ui->detail->setDetail(tr("เมดเลย์ "), tr("ส่งกลองเข้าเพลงถัดไปท้ายห้องดนตรี"));
