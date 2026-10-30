@@ -397,47 +397,23 @@ void MidiSequencer::applyAutoMedleyBounds(const QVector<long> &lyricCursors,
             bool isRecitative = false;
 
             // If the first vocal starts 3+ bars before the main drum groove begins,
-            // this is a "เกริ่น" (Lam-Kern / rubato recitative intro)!
-            if (targetGrooveBar > firstVocalBar + 2) {
+            // or if there is a distinct tempo jump into the fast groove:
+            if ((targetGrooveBar > firstVocalBar + 2) || (tempoJumpBar > 0 && tempoJumpBar > firstVocalBar)) {
                 isRecitative = true;
             }
 
             if (isRecitative && targetGrooveBar >= 0) {
-                // Find the first vocal tick that occurs at or after the main groove begins
-                const uint32_t grooveStartTick = _midi->tickFromBar(targetGrooveBar);
-                long firstMainVocalTick = -1;
-                for (long c : lyricCursors) {
-                    if (c >= long(grooveStartTick)) {
-                        firstMainVocalTick = c;
-                        break;
-                    }
-                }
-
-                if (firstMainVocalTick > 0) {
-                    const int mainVocalBar = _midi->barFromTick(uint32_t(firstMainVocalTick));
-                    startBar = qMax(targetGrooveBar, mainVocalBar - leadIn);
-                } else {
-                    startBar = targetGrooveBar;
-                }
+                // "ตัดเกริ่น" (Auto Recitative Cut): skip the slow rubato intro and land right on Beat 1 of the main dance groove!
+                startBar = targetGrooveBar;
             } else {
-                startBar = qMax(0, firstVocalBar - leadIn);
-            }
-
-            // Ensure startBar is not placed in an empty silent bar before vocals
-            const int effectiveVocalBar = isRecitative ? qMax(startBar, targetGrooveBar) : firstVocalBar;
-            if (leadIn > 0 && startBar < effectiveVocalBar) {
-                const uint32_t targetTick = _midi->tickFromBar(startBar);
-                const uint32_t vocalTick = _midi->tickFromBar(effectiveVocalBar);
-                bool hasNotes = false;
-                for (MidiEvent *e : _midi->events()) {
-                    if (e->tick() >= vocalTick) break;
-                    if (e->tick() >= targetTick && e->eventType() == MidiEventType::NoteOn && e->data2() > 0) {
-                        hasNotes = true;
-                        break;
-                    }
-                }
-                if (!hasNotes) {
-                    startBar = effectiveVocalBar;
+                // Normal songs: keep the authentic signature intro motif!
+                // If intro is short/standard (<= 8 bars), start at Bar 0 (note 1 of the song).
+                // This ensures every instrument, motif, and riff enters cleanly without awkward 2-bar mid-phrase cuts!
+                if (firstVocalBar <= 8) {
+                    startBar = 0;
+                } else {
+                    // For unusually long intros (> 8 bars), align cleanly to a 4-bar phrase boundary (4 bars before vocal)
+                    startBar = qMax(0, ((firstVocalBar - 4) / 4) * 4);
                 }
             }
         } else {
@@ -686,8 +662,11 @@ void MidiSequencer::playMedleyTransitionFill()
             _mutex.lock();
             _waitCondition.wait(&_mutex, qBound(1, int(sleepMs - 1.0), 30));
             _mutex.unlock();
+            while ((nextTimeMs - (timer.nsecsElapsed() / 1000000.0)) > 0.0) {
+                if (!_playing) break;
+            }
         } else if (sleepMs > 0.0) {
-            while ((timer.nsecsElapsed() / 1000000.0) < nextTimeMs) {
+            while ((nextTimeMs - (timer.nsecsElapsed() / 1000000.0)) > 0.0) {
                 if (!_playing) break;
             }
         }
@@ -716,25 +695,62 @@ void MidiSequencer::run()
 
     _mutex.unlock();
 
-    if (_positionTick <= _startTick) {
+    const bool wasMedleyTransition = _isMedleyTransition;
+
+    // 1. PRE-WARM / PRE-SEND PHASE:
+    // If this is a medley transition, pre-send all setup events (ProgramChanges, BankSelect,
+    // Volumes, Pans, Reverbs, Chorus, and SetTempo) for ALL channels up to _startTick
+    // BEFORE playMedleyTransitionFill() begins.
+    // This gives BASSMIDI 1 to 2 whole seconds (the entire duration of the drum fill)
+    // to load soundfont samples and prepare channel voice tables in advance!
+    int preWarmIndex = 0;
+    int songDrumVol = -1;
+    int songDrumPan = -1;
+    if (wasMedleyTransition) {
+        for (int k = 0; k < _midi->events().count(); ++k) {
+            MidiEvent *e = _midi->events()[k];
+            if (e->tick() > _startTick)
+                break;
+            // Stop before any Note-On or Note-Off events at _startTick
+            if (e->tick() == _startTick && (e->eventType() == MidiEventType::NoteOn || e->eventType() == MidiEventType::NoteOff))
+                break;
+
+            preWarmIndex = k + 1;
+
+            if (e->eventType() == MidiEventType::ProgramChange) {
+                emit playingEvent(*e);
+            } else if (e->eventType() == MidiEventType::Controller) {
+                const int ctrl = e->data1();
+                if (e->channel() == 9) {
+                    if (ctrl == 7) songDrumVol = e->data2();
+                    if (ctrl == 10) songDrumPan = e->data2();
+                    // Do not silence or mute drums during the fill
+                    if (ctrl == 7 || ctrl == 11 || ctrl == 120 || ctrl == 123)
+                        continue;
+                }
+                emit playingEvent(*e);
+            } else if (e->eventType() == MidiEventType::PitchBend) {
+                emit playingEvent(*e);
+            } else if (e->eventType() == MidiEventType::Meta && e->metaEventType() == MidiMetaType::SetTempo) {
+                if (_midi->isSingleTempo() && (e != _midi->tempoEvents()[0]))
+                    continue;
+                _midiBpm = e->bpm();
+                emit bpmChanged(_midiBpm + _midiSpeed);
+            }
+        }
+    } else if (_positionTick <= _startTick) {
         for (MidiEvent *e : _midi->events()) {
             if (e->tick() >= _startTick)
                 break;
-            if (e->eventType() != MidiEventType::Meta)
+            if (e->eventType() != MidiEventType::Meta) {
                 switch (e->eventType()) {
                 case MidiEventType::NoteOff:
                 case MidiEventType::NoteOn:
                     break;
                 default:
-                    // In a medley transition, do NOT allow lead-in events to silence or mute Channel 9 drums
-                    if (_isMedleyTransition && e->channel() == 9 && e->eventType() == MidiEventType::Controller) {
-                        const int ctrl = e->data1();
-                        if (ctrl == 7 || ctrl == 11 || ctrl == 120 || ctrl == 123)
-                            break;
-                    }
                     emit playingEvent(*e);
                 }
-            else if (e->metaEventType() == MidiMetaType::SetTempo) {
+            } else if (e->metaEventType() == MidiMetaType::SetTempo) {
                 if (_midi->isSingleTempo() && (e != _midi->tempoEvents()[0]))
                     continue;
                 _midiBpm = e->bpm();
@@ -743,8 +759,8 @@ void MidiSequencer::run()
         }
     }
 
-    const bool wasMedleyTransition = _isMedleyTransition;
-    if (_isMedleyTransition && _medleyTransitionBars > 0) {
+    // 2. DRUM FILL PHASE:
+    if (wasMedleyTransition && _medleyTransitionBars > 0) {
         playMedleyTransitionFill();
     }
     _isMedleyTransition = false;
@@ -754,12 +770,14 @@ void MidiSequencer::run()
 
     bool seqEnded = false;
 
+    // 3. SEAMLESS HANDOFF PHASE:
+    // When the fill finishes, we are right on Beat 1 of the new song!
     _mutex.lock();
     if (wasMedleyTransition) {
         _startPlayTime = _midi->timeFromTick(_startTick, _midiSpeed) * 1000;
         _positionMs = _startPlayTime;
         _positionTick = _startTick;
-        _playedIndex = eventIndexFromTick(_startTick);
+        _playedIndex = qMax(preWarmIndex, eventIndexFromTick(_startTick));
     } else {
         _startPlayTime = _midi->timeFromTick(_positionTick, _midiSpeed) * 1000;
         _positionMs = _startPlayTime;
@@ -768,21 +786,56 @@ void MidiSequencer::run()
     _mutex.unlock();
 
     if (wasMedleyTransition) {
-        // Downbeat Crash + Kick right on Beat 1 of the new medley song!
-        const double volScale = _medleyFillVolume / 100.0;
-        MidiEvent crashEvt;
-        crashEvt.setEventType(MidiEventType::NoteOn);
-        crashEvt.setChannel(9);
-        crashEvt.setData1(49);
-        crashEvt.setData2(qBound(1, int(118 * volScale), 127));
-        emit playingEvent(crashEvt);
+        // Restore Song 2's native Channel 9 volume & pan if specified
+        if (songDrumVol >= 0) {
+            MidiEvent v;
+            v.setEventType(MidiEventType::Controller);
+            v.setChannel(9);
+            v.setData1(7);
+            v.setData2(songDrumVol);
+            emit playingEvent(v);
+        }
+        if (songDrumPan >= 0) {
+            MidiEvent p;
+            p.setEventType(MidiEventType::Controller);
+            p.setChannel(9);
+            p.setData1(10);
+            p.setData2(songDrumPan);
+            emit playingEvent(p);
+        }
 
-        MidiEvent kickEvt;
-        kickEvt.setEventType(MidiEventType::NoteOn);
-        kickEvt.setChannel(9);
-        kickEvt.setData1(36);
-        kickEvt.setData2(qBound(1, int(120 * volScale), 127));
-        emit playingEvent(kickEvt);
+        // Check if the new song already has Kick / Crash at _startTick
+        bool hasKick = false;
+        bool hasCrash = false;
+        const int searchEnd = qMin(_midi->events().count(), _playedIndex + 30);
+        for (int k = _playedIndex; k < searchEnd; ++k) {
+            MidiEvent *e = _midi->events()[k];
+            if (e->tick() > _startTick + (_midi->resorution() / 8))
+                break;
+            if (e->eventType() == MidiEventType::NoteOn && e->data2() > 0 && e->channel() == 9) {
+                const int n = e->data1();
+                if (n == 35 || n == 36) hasKick = true;
+                if (n == 49 || n == 57 || n == 51 || n == 52 || n == 55) hasCrash = true;
+            }
+        }
+
+        const double volScale = _medleyFillVolume / 100.0;
+        if (!hasCrash) {
+            MidiEvent crashEvt;
+            crashEvt.setEventType(MidiEventType::NoteOn);
+            crashEvt.setChannel(9);
+            crashEvt.setData1(49);
+            crashEvt.setData2(qBound(1, int(115 * volScale), 127));
+            emit playingEvent(crashEvt);
+        }
+        if (!hasKick) {
+            MidiEvent kickEvt;
+            kickEvt.setEventType(MidiEventType::NoteOn);
+            kickEvt.setChannel(9);
+            kickEvt.setData1(36);
+            kickEvt.setData2(qBound(1, int(118 * volScale), 127));
+            emit playingEvent(kickEvt);
+        }
     }
 
     for (int i = _playedIndex; i < _midi->events().count(); i++) {
@@ -795,7 +848,16 @@ void MidiSequencer::run()
                 _mutex.lock();
                 long endTime = (_midi->timeFromTick(uint32_t(_endEvent->tick()), _midiSpeed) * 1000);
                 long waitTime = endTime - _startPlayTime - _eTimer->elapsed();
-                if (waitTime > 0) _waitCondition.wait(&_mutex, waitTime);
+                if (waitTime > 2) {
+                    _waitCondition.wait(&_mutex, waitTime - 1);
+                    while ((_midi->timeFromTick(uint32_t(_endEvent->tick()), _midiSpeed) * 1000) - _startPlayTime - _eTimer->elapsed() > 0) {
+                        if (!_playing) break;
+                    }
+                } else if (waitTime > 0) {
+                    while ((_midi->timeFromTick(uint32_t(_endEvent->tick()), _midiSpeed) * 1000) - _startPlayTime - _eTimer->elapsed() > 0) {
+                        if (!_playing) break;
+                    }
+                }
                 _positionMs = endTime;
                 _positionTick = _endEvent->tick();
                 _mutex.unlock();
@@ -848,9 +910,15 @@ void MidiSequencer::run()
             long eventTime = (_midi->timeFromTick(tick, _midiSpeed)  * 1000);
             long waitTime = eventTime - _startPlayTime  - _eTimer->elapsed();
 
-            if (waitTime > 0) {
-                //msleep(waitTime);
-                _waitCondition.wait(&_mutex, waitTime);
+            if (waitTime > 2) {
+                _waitCondition.wait(&_mutex, waitTime - 1);
+                while ((_midi->timeFromTick(tick, _midiSpeed) * 1000) - _startPlayTime - _eTimer->elapsed() > 0) {
+                    if (!_playing) break;
+                }
+            } else if (waitTime > 0) {
+                while ((_midi->timeFromTick(tick, _midiSpeed) * 1000) - _startPlayTime - _eTimer->elapsed() > 0) {
+                    if (!_playing) break;
+                }
             }
 
             _positionMs = eventTime;

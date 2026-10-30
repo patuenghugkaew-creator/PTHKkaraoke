@@ -5349,10 +5349,9 @@ void MainWindow::onSliderVolumeValueChanged(int value)
 
 void MainWindow::switchMedleyLyrics()
 {
-    lyrWidget->hide();
     lyrWidget->switchToLyricsTemp();
     lyrWidget->setSeekPositionCursor(player->positionTick());
-    lyrWidget->show();
+    lyrWidget->update();
     if (!lyricsTimer->isActive())
         lyricsTimer->start();
 }
@@ -5360,10 +5359,9 @@ void MainWindow::switchMedleyLyrics()
 void MainWindow::switchMedleyLyrics2()
 {
     if (secondLyr != nullptr) {
-        secondLyr->hide();
         secondLyr->switchToLyricsTemp();
         secondLyr->setSeekPositionCursor(player->positionTick());
-        secondLyr->show();
+        secondLyr->update();
     }
 }
 

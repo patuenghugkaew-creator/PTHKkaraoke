@@ -14,6 +14,10 @@
 #include <QFileInfo>
 #ifndef __linux__
 #endif
+#ifdef _WIN32
+#include <windows.h>
+#include <mmsystem.h>
+#endif
 #include <QFontDatabase>
 #include <QSettings>
 #include <QDir>
@@ -51,6 +55,9 @@ void makeVSTList(QSplashScreen *splash, MidiSynthesizer *synth);
 
 int main(int argc, char *argv[])
 {
+#ifdef _WIN32
+    timeBeginPeriod(1);
+#endif
     // Qt 5 uses DirectShow by default on Windows, which cannot open MP4 / H.264 without extra
     // codecs; Media Foundation (built into Windows) plays the karaoke and background videos.
     #ifdef _WIN32
@@ -187,7 +194,11 @@ int main(int argc, char *argv[])
     delete splash;
     delete pixmap;
 
-    return a.exec();
+    const int ret = a.exec();
+#ifdef _WIN32
+    timeEndPeriod(1);
+#endif
+    return ret;
 }
 
 

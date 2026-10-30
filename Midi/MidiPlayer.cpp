@@ -346,7 +346,7 @@ void MidiPlayer::play()
         sendEvent(ev);
         emit sendedEvent(ev);
     }
-    _midiSeq->start();
+    _midiSeq->start(QThread::TimeCriticalPriority);
 }
 
 void MidiPlayer::stop(bool resetPos)
@@ -836,7 +836,7 @@ void MidiPlayer::onSeqFinished()
 
             // Do NOT call compactSoundfont() during medley transition to prevent audio stutter!
             emit nextMedleyStarted();
-            _midiSeq->start();
+            _midiSeq->start(QThread::TimeCriticalPriority);
             emit nextMedleyAfterStarted();
         } else if (_midiSeq->isSeqFinished() && (_midiSeqTemp == nullptr)) {
             emit finished();
