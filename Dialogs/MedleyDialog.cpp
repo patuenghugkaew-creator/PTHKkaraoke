@@ -16,18 +16,26 @@ MedleyDialog::MedleyDialog(QWidget *parent, MidiPlayer *player) :
 {
     ui->setupUi(this);
 
-    // Sync volume slider and spinbox
+    // Sync volume slider, spinbox and visual percentage label
+    auto updateVolLabel = [this](int val) {
+        ui->lblVolValue->setText(QString("%1 %").arg(val));
+    };
     connect(ui->sliderFillVol, &QSlider::valueChanged, ui->spinFillVol, &QSpinBox::setValue);
+    connect(ui->sliderFillVol, &QSlider::valueChanged, this, updateVolLabel);
     connect(ui->spinFillVol, QOverload<int>::of(&QSpinBox::valueChanged), ui->sliderFillVol, &QSlider::setValue);
+    connect(ui->spinFillVol, QOverload<int>::of(&QSpinBox::valueChanged), this, updateVolLabel);
 
     // Connect all parameter changes to update preview & mark Custom preset
     connect(ui->spinBpm, QOverload<int>::of(&QSpinBox::valueChanged), this, &MedleyDialog::onParamChanged);
     connect(ui->comboTempoMode, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MedleyDialog::onParamChanged);
     connect(ui->chkDrumFill, &QCheckBox::toggled, this, [this](bool checked) {
-        ui->spinBars->setEnabled(checked);
+        ui->btnBars0->setEnabled(checked);
+        ui->btnBars1->setEnabled(checked);
+        ui->btnBars2->setEnabled(checked);
+        ui->btnBars4->setEnabled(checked);
         ui->comboPattern->setEnabled(checked);
         ui->sliderFillVol->setEnabled(checked);
-        ui->spinFillVol->setEnabled(checked);
+        ui->lblVolValue->setEnabled(checked);
         onParamChanged();
     });
     connect(ui->spinBars, QOverload<int>::of(&QSpinBox::valueChanged), this, &MedleyDialog::onParamChanged);
@@ -36,13 +44,19 @@ MedleyDialog::MedleyDialog(QWidget *parent, MidiPlayer *player) :
     connect(ui->chkPreserveEffects, &QCheckBox::toggled, this, &MedleyDialog::onParamChanged);
 
     connect(ui->chkAutoCutOutro, &QCheckBox::toggled, this, [this](bool checked) {
-        ui->spinWaitBars->setEnabled(checked);
+        ui->btnWait0->setEnabled(checked);
+        ui->btnWait1->setEnabled(checked);
+        ui->btnWait2->setEnabled(checked);
+        ui->btnWait4->setEnabled(checked);
         onParamChanged();
     });
     connect(ui->spinWaitBars, QOverload<int>::of(&QSpinBox::valueChanged), this, &MedleyDialog::onParamChanged);
     connect(ui->chkQuantizeBar, &QCheckBox::toggled, this, &MedleyDialog::onParamChanged);
     connect(ui->chkSkipIntro, &QCheckBox::toggled, this, [this](bool checked) {
-        ui->spinIntroBars->setEnabled(checked);
+        ui->btnIntro0->setEnabled(checked);
+        ui->btnIntro1->setEnabled(checked);
+        ui->btnIntro2->setEnabled(checked);
+        ui->btnIntro4->setEnabled(checked);
         onParamChanged();
     });
     connect(ui->spinIntroBars, QOverload<int>::of(&QSpinBox::valueChanged), this, &MedleyDialog::onParamChanged);
@@ -54,32 +68,46 @@ MedleyDialog::MedleyDialog(QWidget *parent, MidiPlayer *player) :
     connect(ui->chkAudioAutoCue, &QCheckBox::toggled, this, &MedleyDialog::onParamChanged);
     connect(ui->chkAudioNormalize, &QCheckBox::toggled, this, &MedleyDialog::onParamChanged);
 
-    // Quick Tempo Buttons
+    // Clean BPM Quick Chips
     connect(ui->btnBpmAuto, &QPushButton::clicked, this, [this]() { ui->spinBpm->setValue(0); });
-    connect(ui->btnBpm130, &QPushButton::clicked, this, [this]() { ui->spinBpm->setValue(130); });
     connect(ui->btnBpm140, &QPushButton::clicked, this, [this]() { ui->spinBpm->setValue(140); });
     connect(ui->btnBpm145, &QPushButton::clicked, this, [this]() { ui->spinBpm->setValue(145); });
     connect(ui->btnBpm150, &QPushButton::clicked, this, [this]() { ui->spinBpm->setValue(150); });
-    connect(ui->btnBpm155, &QPushButton::clicked, this, [this]() { ui->spinBpm->setValue(155); });
-    connect(ui->btnBpm160, &QPushButton::clicked, this, [this]() { ui->spinBpm->setValue(160); });
 
-    // Quick Drum Fill Bars Buttons
+    // Segmented Bars Buttons
+    auto updateBarsSegment = [this](int val) {
+        ui->btnBars0->setChecked(val == 0);
+        ui->btnBars1->setChecked(val == 1);
+        ui->btnBars2->setChecked(val == 2);
+        ui->btnBars4->setChecked(val >= 4);
+    };
+    connect(ui->spinBars, QOverload<int>::of(&QSpinBox::valueChanged), this, updateBarsSegment);
     connect(ui->btnBars0, &QPushButton::clicked, this, [this]() { ui->spinBars->setValue(0); });
     connect(ui->btnBars1, &QPushButton::clicked, this, [this]() { ui->spinBars->setValue(1); });
     connect(ui->btnBars2, &QPushButton::clicked, this, [this]() { ui->spinBars->setValue(2); });
+    connect(ui->btnBars4, &QPushButton::clicked, this, [this]() { ui->spinBars->setValue(4); });
 
-    // Quick Drum Fill Volume Buttons
-    connect(ui->btnVol90, &QPushButton::clicked, this, [this]() { ui->spinFillVol->setValue(90); });
-    connect(ui->btnVol100, &QPushButton::clicked, this, [this]() { ui->spinFillVol->setValue(100); });
-    connect(ui->btnVol110, &QPushButton::clicked, this, [this]() { ui->spinFillVol->setValue(110); });
-    connect(ui->btnVol120, &QPushButton::clicked, this, [this]() { ui->spinFillVol->setValue(120); });
-
-    // Quick Wait Bars Buttons (Outro)
+    // Segmented Wait Bars Buttons (Outro)
+    auto updateWaitSegment = [this](int val) {
+        ui->btnWait0->setChecked(val == 0);
+        ui->btnWait1->setChecked(val == 1);
+        ui->btnWait2->setChecked(val == 2);
+        ui->btnWait4->setChecked(val >= 4);
+    };
+    connect(ui->spinWaitBars, QOverload<int>::of(&QSpinBox::valueChanged), this, updateWaitSegment);
     connect(ui->btnWait0, &QPushButton::clicked, this, [this]() { ui->spinWaitBars->setValue(0); });
     connect(ui->btnWait1, &QPushButton::clicked, this, [this]() { ui->spinWaitBars->setValue(1); });
     connect(ui->btnWait2, &QPushButton::clicked, this, [this]() { ui->spinWaitBars->setValue(2); });
+    connect(ui->btnWait4, &QPushButton::clicked, this, [this]() { ui->spinWaitBars->setValue(4); });
 
-    // Quick Intro Lead-in Bars Buttons
+    // Segmented Intro Lead-in Buttons
+    auto updateIntroSegment = [this](int val) {
+        ui->btnIntro0->setChecked(val == 0);
+        ui->btnIntro1->setChecked(val == 1);
+        ui->btnIntro2->setChecked(val == 2);
+        ui->btnIntro4->setChecked(val >= 4);
+    };
+    connect(ui->spinIntroBars, QOverload<int>::of(&QSpinBox::valueChanged), this, updateIntroSegment);
     connect(ui->btnIntro0, &QPushButton::clicked, this, [this]() { ui->spinIntroBars->setValue(0); });
     connect(ui->btnIntro1, &QPushButton::clicked, this, [this]() { ui->spinIntroBars->setValue(1); });
     connect(ui->btnIntro2, &QPushButton::clicked, this, [this]() { ui->spinIntroBars->setValue(2); });
@@ -195,11 +223,23 @@ void MedleyDialog::loadSettings()
 
     ui->comboPreset->setCurrentIndex(qBound(0, preset, ui->comboPreset->count() - 1));
 
-    ui->spinBars->setEnabled(drumFill);
+    ui->btnBars0->setEnabled(drumFill);
+    ui->btnBars1->setEnabled(drumFill);
+    ui->btnBars2->setEnabled(drumFill);
+    ui->btnBars4->setEnabled(drumFill);
     ui->comboPattern->setEnabled(drumFill);
     ui->sliderFillVol->setEnabled(drumFill);
-    ui->spinFillVol->setEnabled(drumFill);
-    ui->spinWaitBars->setEnabled(autoCutOutro);
+    ui->lblVolValue->setEnabled(drumFill);
+
+    ui->btnWait0->setEnabled(autoCutOutro);
+    ui->btnWait1->setEnabled(autoCutOutro);
+    ui->btnWait2->setEnabled(autoCutOutro);
+    ui->btnWait4->setEnabled(autoCutOutro);
+
+    ui->btnIntro0->setEnabled(skipIntro);
+    ui->btnIntro1->setEnabled(skipIntro);
+    ui->btnIntro2->setEnabled(skipIntro);
+    ui->btnIntro4->setEnabled(skipIntro);
 
     _isUpdatingUi = false;
 
@@ -400,12 +440,26 @@ void MedleyDialog::applyPreset(int index)
         break;
     }
 
-    ui->spinBars->setEnabled(ui->chkDrumFill->isChecked());
-    ui->comboPattern->setEnabled(ui->chkDrumFill->isChecked());
-    ui->sliderFillVol->setEnabled(ui->chkDrumFill->isChecked());
-    ui->spinFillVol->setEnabled(ui->chkDrumFill->isChecked());
-    ui->spinWaitBars->setEnabled(ui->chkAutoCutOutro->isChecked());
-    ui->spinIntroBars->setEnabled(ui->chkSkipIntro->isChecked());
+    const bool dfEnabled = ui->chkDrumFill->isChecked();
+    ui->btnBars0->setEnabled(dfEnabled);
+    ui->btnBars1->setEnabled(dfEnabled);
+    ui->btnBars2->setEnabled(dfEnabled);
+    ui->btnBars4->setEnabled(dfEnabled);
+    ui->comboPattern->setEnabled(dfEnabled);
+    ui->sliderFillVol->setEnabled(dfEnabled);
+    ui->lblVolValue->setEnabled(dfEnabled);
+
+    const bool acEnabled = ui->chkAutoCutOutro->isChecked();
+    ui->btnWait0->setEnabled(acEnabled);
+    ui->btnWait1->setEnabled(acEnabled);
+    ui->btnWait2->setEnabled(acEnabled);
+    ui->btnWait4->setEnabled(acEnabled);
+
+    const bool siEnabled = ui->chkSkipIntro->isChecked();
+    ui->btnIntro0->setEnabled(siEnabled);
+    ui->btnIntro1->setEnabled(siEnabled);
+    ui->btnIntro2->setEnabled(siEnabled);
+    ui->btnIntro4->setEnabled(siEnabled);
 
     _isUpdatingUi = false;
     updatePreview();

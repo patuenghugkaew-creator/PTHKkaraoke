@@ -1,4 +1,4 @@
-<?xml version='1.0' encoding='utf-8'?>
+<?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
  <class>MedleyDialog</class>
  <widget class="QDialog" name="MedleyDialog">
@@ -6,14 +6,14 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>860</width>
-    <height>630</height>
+    <width>800</width>
+    <height>560</height>
    </rect>
   </property>
   <property name="minimumSize">
    <size>
-    <width>840</width>
-    <height>610</height>
+    <width>780</width>
+    <height>550</height>
    </size>
   </property>
   <property name="windowTitle">
@@ -31,8 +31,8 @@ QLabel {
 QGroupBox {
     border: 1px solid #30363d;
     border-radius: 8px;
-    margin-top: 14px;
-    padding-top: 16px;
+    margin-top: 12px;
+    padding-top: 14px;
     font-weight: bold;
     color: #58a6ff;
 }
@@ -190,13 +190,34 @@ QPushButton#btnCancel {
 QPushButton#btnCancel:hover {
     background-color: #484f58;
 }
+QPushButton[segmentBtn="true"] {
+    background-color: #21262d;
+    color: #c9d1d9;
+    border: 1px solid #30363d;
+    border-radius: 5px;
+    padding: 4px 14px;
+    font-size: 9pt;
+    font-weight: normal;
+    min-height: 24px;
+}
+QPushButton[segmentBtn="true"]:hover {
+    background-color: #30363d;
+    color: #58a6ff;
+    border: 1px solid #58a6ff;
+}
+QPushButton[segmentBtn="true"]:checked {
+    background-color: #1f6feb;
+    color: #ffffff;
+    border: 1px solid #388bfd;
+    font-weight: bold;
+}
 QPushButton[quickBtn="true"] {
     background-color: #21262d;
     color: #c9d1d9;
     border: 1px solid #30363d;
     border-radius: 4px;
-    padding: 3px 7px;
-    font-size: 9pt;
+    padding: 3px 8px;
+    font-size: 8.5pt;
     font-weight: normal;
     min-height: 20px;
 }
@@ -213,19 +234,19 @@ QPushButton[quickBtn="true"]:pressed {
   </property>
   <layout class="QVBoxLayout" name="mainLayout">
    <property name="spacing">
-    <number>10</number>
+    <number>8</number>
    </property>
    <property name="leftMargin">
     <number>14</number>
    </property>
    <property name="topMargin">
-    <number>12</number>
+    <number>10</number>
    </property>
    <property name="rightMargin">
     <number>14</number>
    </property>
    <property name="bottomMargin">
-    <number>12</number>
+    <number>10</number>
    </property>
    <item>
     <layout class="QHBoxLayout" name="headerLayout">
@@ -275,7 +296,13 @@ QPushButton[quickBtn="true"]:pressed {
      <property name="minimumSize">
       <size>
        <width>0</width>
-       <height>138</height>
+       <height>96</height>
+      </size>
+     </property>
+     <property name="maximumSize">
+      <size>
+       <width>16777215</width>
+       <height>96</height>
       </size>
      </property>
     </widget>
@@ -287,23 +314,23 @@ QPushButton[quickBtn="true"]:pressed {
      </property>
      <widget class="QWidget" name="tabMidi">
       <attribute name="title">
-       <string>🎵 จังหวะ &amp; ความเร็ว (BPM)</string>
+       <string>🥁 จังหวะและดนตรีสด</string>
       </attribute>
       <layout class="QVBoxLayout" name="layoutTabMidi">
        <property name="spacing">
-        <number>10</number>
+        <number>8</number>
        </property>
        <property name="leftMargin">
         <number>14</number>
        </property>
        <property name="topMargin">
-        <number>12</number>
+        <number>10</number>
        </property>
        <property name="rightMargin">
         <number>14</number>
        </property>
        <property name="bottomMargin">
-        <number>12</number>
+        <number>10</number>
        </property>
        <item>
         <widget class="QGroupBox" name="groupBpm">
@@ -316,18 +343,27 @@ QPushButton[quickBtn="true"]:pressed {
           </property>
           <item>
            <layout class="QHBoxLayout" name="rowBpm">
+            <property name="spacing">
+             <number>8</number>
+            </property>
             <item>
              <widget class="QLabel" name="labelBpm">
-              <property name="text">
-               <string>ความเร็วเมดเล่ย์ (BPM) :</string>
+              <property name="minimumSize">
+               <size>
+                <width>170</width>
+                <height>0</height>
+               </size>
               </property>
-             <property name="minimumSize"><size><width>175</width><height>0</height></size></property></widget>
+              <property name="text">
+               <string>ความเร็วเพลงเมดเล่ย์ :</string>
+              </property>
+             </widget>
             </item>
             <item>
              <widget class="QSpinBox" name="spinBpm">
               <property name="minimumSize">
                <size>
-                <width>110</width>
+                <width>105</width>
                 <height>28</height>
                </size>
               </property>
@@ -341,7 +377,7 @@ QPushButton[quickBtn="true"]:pressed {
                <number>250</number>
               </property>
               <property name="value">
-               <number>120</number>
+               <number>150</number>
               </property>
               <property name="specialValueText">
                <string>0 (ตามเพลง)</string>
@@ -362,16 +398,6 @@ QPushButton[quickBtn="true"]:pressed {
              </widget>
             </item>
             <item>
-             <widget class="QPushButton" name="btnBpm130">
-              <property name="text">
-               <string>130</string>
-              </property>
-              <property name="quickBtn" stdset="0">
-               <bool>true</bool>
-              </property>
-             </widget>
-            </item>
-            <item>
              <widget class="QPushButton" name="btnBpm140">
               <property name="text">
                <string>140</string>
@@ -384,7 +410,7 @@ QPushButton[quickBtn="true"]:pressed {
             <item>
              <widget class="QPushButton" name="btnBpm145">
               <property name="text">
-               <string>145</string>
+               <string>145 สามช่า</string>
               </property>
               <property name="quickBtn" stdset="0">
                <bool>true</bool>
@@ -394,27 +420,7 @@ QPushButton[quickBtn="true"]:pressed {
             <item>
              <widget class="QPushButton" name="btnBpm150">
               <property name="text">
-               <string>150</string>
-              </property>
-              <property name="quickBtn" stdset="0">
-               <bool>true</bool>
-              </property>
-             </widget>
-            </item>
-            <item>
-             <widget class="QPushButton" name="btnBpm155">
-              <property name="text">
-               <string>155</string>
-              </property>
-              <property name="quickBtn" stdset="0">
-               <bool>true</bool>
-              </property>
-             </widget>
-            </item>
-            <item>
-             <widget class="QPushButton" name="btnBpm160">
-              <property name="text">
-               <string>160</string>
+               <string>150 ลำซิ่ง</string>
               </property>
               <property name="quickBtn" stdset="0">
                <bool>true</bool>
@@ -440,10 +446,16 @@ QPushButton[quickBtn="true"]:pressed {
            <layout class="QHBoxLayout" name="rowTempoMode">
             <item>
              <widget class="QLabel" name="labelTempoMode">
+              <property name="minimumSize">
+               <size>
+                <width>170</width>
+                <height>0</height>
+               </size>
+              </property>
               <property name="text">
                <string>โหมดควบคุมความเร็ว :</string>
               </property>
-             <property name="minimumSize"><size><width>175</width><height>0</height></size></property></widget>
+             </widget>
             </item>
             <item>
              <widget class="QComboBox" name="comboTempoMode">
@@ -472,7 +484,7 @@ QPushButton[quickBtn="true"]:pressed {
        <item>
         <widget class="QGroupBox" name="groupDrumFill">
          <property name="title">
-          <string>🥁 ลูกส่งกลองช่วงรอยต่อ (Transition Drum Fill)</string>
+          <string>🥁 ลูกส่งดนตรีสดช่วงรอยต่อ (Live Rhythm Fill)</string>
          </property>
          <layout class="QVBoxLayout" name="layoutGroupDrum">
           <property name="spacing">
@@ -481,7 +493,7 @@ QPushButton[quickBtn="true"]:pressed {
           <item>
            <widget class="QCheckBox" name="chkDrumFill">
             <property name="text">
-             <string>เปิดใช้งานเอฟเฟกต์ลูกส่งกลองช่วงรอยต่อ (Drum Fill-in)</string>
+             <string>เปิดใช้งานลูกส่งดนตรีสดช่วงรอยต่อ (Live Rhythm Fill)</string>
             </property>
             <property name="checked">
              <bool>true</bool>
@@ -492,10 +504,16 @@ QPushButton[quickBtn="true"]:pressed {
            <layout class="QHBoxLayout" name="rowPattern">
             <item>
              <widget class="QLabel" name="labelPattern">
-              <property name="text">
-               <string>จังหวะลูกส่ง (eXtreme Rhythm) :</string>
+              <property name="minimumSize">
+               <size>
+                <width>170</width>
+                <height>0</height>
+               </size>
               </property>
-             <property name="minimumSize"><size><width>175</width><height>0</height></size></property></widget>
+              <property name="text">
+               <string>สไตล์จังหวะลูกส่ง :</string>
+              </property>
+             </widget>
             </item>
             <item>
              <widget class="QComboBox" name="comboPattern">
@@ -534,50 +552,37 @@ QPushButton[quickBtn="true"]:pressed {
                 <string>🎲 สุ่มตามจังหวะเพลง (Auto / Dynamic)</string>
                </property>
               </item>
-              </widget>
+             </widget>
             </item>
            </layout>
           </item>
           <item>
            <layout class="QHBoxLayout" name="rowBars">
+            <property name="spacing">
+             <number>6</number>
+            </property>
             <item>
              <widget class="QLabel" name="labelBars">
-              <property name="text">
-               <string>จำนวนห้องลูกส่งรอ :</string>
-              </property>
-             <property name="minimumSize"><size><width>175</width><height>0</height></size></property></widget>
-            </item>
-            <item>
-             <widget class="QSpinBox" name="spinBars">
               <property name="minimumSize">
                <size>
-                <width>80</width>
-                <height>26</height>
+                <width>170</width>
+                <height>0</height>
                </size>
               </property>
-              <property name="alignment">
-               <set>Qt::AlignCenter</set>
-              </property>
-              <property name="minimum">
-               <number>0</number>
-              </property>
-              <property name="maximum">
-               <number>4</number>
-              </property>
-              <property name="value">
-               <number>1</number>
-              </property>
-              <property name="suffix">
-               <string> ห้อง</string>
+              <property name="text">
+               <string>ความยาวลูกส่ง :</string>
               </property>
              </widget>
             </item>
             <item>
              <widget class="QPushButton" name="btnBars0">
               <property name="text">
-               <string>0 ห้อง (ต่อทันที)</string>
+               <string>ไม่ส่ง (ต่อทันที)</string>
               </property>
-              <property name="quickBtn" stdset="0">
+              <property name="checkable">
+               <bool>true</bool>
+              </property>
+              <property name="segmentBtn" stdset="0">
                <bool>true</bool>
               </property>
              </widget>
@@ -587,7 +592,10 @@ QPushButton[quickBtn="true"]:pressed {
               <property name="text">
                <string>1 ห้อง</string>
               </property>
-              <property name="quickBtn" stdset="0">
+              <property name="checkable">
+               <bool>true</bool>
+              </property>
+              <property name="segmentBtn" stdset="0">
                <bool>true</bool>
               </property>
              </widget>
@@ -597,8 +605,37 @@ QPushButton[quickBtn="true"]:pressed {
               <property name="text">
                <string>2 ห้อง</string>
               </property>
-              <property name="quickBtn" stdset="0">
+              <property name="checkable">
                <bool>true</bool>
+              </property>
+              <property name="segmentBtn" stdset="0">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="btnBars4">
+              <property name="text">
+               <string>4 ห้อง</string>
+              </property>
+              <property name="checkable">
+               <bool>true</bool>
+              </property>
+              <property name="segmentBtn" stdset="0">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QSpinBox" name="spinBars">
+              <property name="visible">
+               <bool>false</bool>
+              </property>
+              <property name="maximum">
+               <number>8</number>
+              </property>
+              <property name="value">
+               <number>1</number>
               </property>
              </widget>
             </item>
@@ -620,21 +657,33 @@ QPushButton[quickBtn="true"]:pressed {
           <item>
            <layout class="QHBoxLayout" name="rowFillVol">
             <property name="spacing">
-             <number>8</number>
+             <number>10</number>
             </property>
             <item>
              <widget class="QLabel" name="labelFillVol">
+              <property name="minimumSize">
+               <size>
+                <width>170</width>
+                <height>0</height>
+               </size>
+              </property>
               <property name="text">
                <string>ระดับความดังลูกส่ง :</string>
               </property>
-             <property name="minimumSize"><size><width>175</width><height>0</height></size></property></widget>
+             </widget>
             </item>
             <item>
              <widget class="QSlider" name="sliderFillVol">
               <property name="minimumSize">
                <size>
-                <width>130</width>
+                <width>240</width>
                 <height>0</height>
+               </size>
+              </property>
+              <property name="maximumSize">
+               <size>
+                <width>340</width>
+                <height>16777215</height>
                </size>
               </property>
               <property name="minimum">
@@ -644,7 +693,7 @@ QPushButton[quickBtn="true"]:pressed {
                <number>130</number>
               </property>
               <property name="value">
-               <number>100</number>
+               <number>110</number>
               </property>
               <property name="orientation">
                <enum>Qt::Horizontal</enum>
@@ -652,18 +701,28 @@ QPushButton[quickBtn="true"]:pressed {
              </widget>
             </item>
             <item>
-             <widget class="QSpinBox" name="spinFillVol">
+             <widget class="QLabel" name="lblVolValue">
               <property name="minimumSize">
                <size>
-                <width>70</width>
-                <height>26</height>
+                <width>55</width>
+                <height>24</height>
                </size>
+              </property>
+              <property name="styleSheet">
+               <string notr="true">color: #58a6ff; font-weight: bold; font-size: 11pt;</string>
+              </property>
+              <property name="text">
+               <string>110 %</string>
               </property>
               <property name="alignment">
                <set>Qt::AlignCenter</set>
               </property>
-              <property name="suffix">
-               <string> %</string>
+             </widget>
+            </item>
+            <item>
+             <widget class="QSpinBox" name="spinFillVol">
+              <property name="visible">
+               <bool>false</bool>
               </property>
               <property name="minimum">
                <number>50</number>
@@ -672,49 +731,22 @@ QPushButton[quickBtn="true"]:pressed {
                <number>130</number>
               </property>
               <property name="value">
-               <number>100</number>
+               <number>110</number>
               </property>
              </widget>
             </item>
             <item>
-             <widget class="QPushButton" name="btnVol90">
-              <property name="text">
-               <string>90%</string>
+             <spacer name="spacerFillVol">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
               </property>
-              <property name="quickBtn" stdset="0">
-               <bool>true</bool>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>10</width>
+                <height>20</height>
+               </size>
               </property>
-             </widget>
-            </item>
-            <item>
-             <widget class="QPushButton" name="btnVol100">
-              <property name="text">
-               <string>100%</string>
-              </property>
-              <property name="quickBtn" stdset="0">
-               <bool>true</bool>
-              </property>
-             </widget>
-            </item>
-            <item>
-             <widget class="QPushButton" name="btnVol110">
-              <property name="text">
-               <string>110%</string>
-              </property>
-              <property name="quickBtn" stdset="0">
-               <bool>true</bool>
-              </property>
-             </widget>
-            </item>
-            <item>
-             <widget class="QPushButton" name="btnVol120">
-              <property name="text">
-               <string>120%</string>
-              </property>
-              <property name="quickBtn" stdset="0">
-               <bool>true</bool>
-              </property>
-             </widget>
+             </spacer>
             </item>
            </layout>
           </item>
@@ -748,23 +780,23 @@ QPushButton[quickBtn="true"]:pressed {
      </widget>
      <widget class="QWidget" name="tabCues">
       <attribute name="title">
-       <string>✂️ ตัดต่อเพลง &amp; คิว (Cue)</string>
+       <string>✂️ จุดตัดต่อและคิว</string>
       </attribute>
       <layout class="QVBoxLayout" name="layoutTabCues">
        <property name="spacing">
-        <number>10</number>
+        <number>8</number>
        </property>
        <property name="leftMargin">
         <number>14</number>
        </property>
        <property name="topMargin">
-        <number>12</number>
+        <number>10</number>
        </property>
        <property name="rightMargin">
         <number>14</number>
        </property>
        <property name="bottomMargin">
-        <number>12</number>
+        <number>10</number>
        </property>
        <item>
         <widget class="QGroupBox" name="groupOutro">
@@ -787,44 +819,31 @@ QPushButton[quickBtn="true"]:pressed {
           </item>
           <item>
            <layout class="QHBoxLayout" name="rowWaitBars">
+            <property name="spacing">
+             <number>6</number>
+            </property>
             <item>
              <widget class="QLabel" name="labelWaitBars">
-              <property name="text">
-               <string>เล่นต่อหลังคำร้องสุดท้าย :</string>
-              </property>
-             <property name="minimumSize"><size><width>185</width><height>0</height></size></property></widget>
-            </item>
-            <item>
-             <widget class="QSpinBox" name="spinWaitBars">
               <property name="minimumSize">
                <size>
-                <width>80</width>
-                <height>26</height>
+                <width>175</width>
+                <height>0</height>
                </size>
               </property>
-              <property name="alignment">
-               <set>Qt::AlignCenter</set>
-              </property>
-              <property name="suffix">
-               <string> ห้อง</string>
-              </property>
-              <property name="minimum">
-               <number>0</number>
-              </property>
-              <property name="maximum">
-               <number>8</number>
-              </property>
-              <property name="value">
-               <number>1</number>
+              <property name="text">
+               <string>เล่นต่อหลังคำร้องจบ :</string>
               </property>
              </widget>
             </item>
             <item>
              <widget class="QPushButton" name="btnWait0">
               <property name="text">
-               <string>0 ห้อง (ทันที)</string>
+               <string>ทันที (0 ห้อง)</string>
               </property>
-              <property name="quickBtn" stdset="0">
+              <property name="checkable">
+               <bool>true</bool>
+              </property>
+              <property name="segmentBtn" stdset="0">
                <bool>true</bool>
               </property>
              </widget>
@@ -834,7 +853,10 @@ QPushButton[quickBtn="true"]:pressed {
               <property name="text">
                <string>1 ห้อง</string>
               </property>
-              <property name="quickBtn" stdset="0">
+              <property name="checkable">
+               <bool>true</bool>
+              </property>
+              <property name="segmentBtn" stdset="0">
                <bool>true</bool>
               </property>
              </widget>
@@ -844,8 +866,37 @@ QPushButton[quickBtn="true"]:pressed {
               <property name="text">
                <string>2 ห้อง</string>
               </property>
-              <property name="quickBtn" stdset="0">
+              <property name="checkable">
                <bool>true</bool>
+              </property>
+              <property name="segmentBtn" stdset="0">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="btnWait4">
+              <property name="text">
+               <string>4 ห้อง</string>
+              </property>
+              <property name="checkable">
+               <bool>true</bool>
+              </property>
+              <property name="segmentBtn" stdset="0">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QSpinBox" name="spinWaitBars">
+              <property name="visible">
+               <bool>false</bool>
+              </property>
+              <property name="maximum">
+               <number>8</number>
+              </property>
+              <property name="value">
+               <number>1</number>
               </property>
              </widget>
             </item>
@@ -867,7 +918,7 @@ QPushButton[quickBtn="true"]:pressed {
           <item>
            <widget class="QCheckBox" name="chkQuantizeBar">
             <property name="text">
-             <string>ล็อกการตัดให้ตรงจังหวะตกต้นห้องเพลง (Quantize to Beat 1 Sync)</string>
+             <string>ล็อกการตัดให้ตรงจังหวะตกต้นห้องเพลง (Beat 1 Sync)</string>
             </property>
             <property name="checked">
              <bool>true</bool>
@@ -898,44 +949,31 @@ QPushButton[quickBtn="true"]:pressed {
           </item>
           <item>
            <layout class="QHBoxLayout" name="rowIntroBars">
+            <property name="spacing">
+             <number>6</number>
+            </property>
             <item>
              <widget class="QLabel" name="labelIntroBars">
-              <property name="text">
-               <string>ระยะเวลารอก่อนเริ่มท่อนร้อง :</string>
-              </property>
-             <property name="minimumSize"><size><width>185</width><height>0</height></size></property></widget>
-            </item>
-            <item>
-             <widget class="QSpinBox" name="spinIntroBars">
               <property name="minimumSize">
                <size>
-                <width>80</width>
-                <height>26</height>
+                <width>175</width>
+                <height>0</height>
                </size>
               </property>
-              <property name="alignment">
-               <set>Qt::AlignCenter</set>
-              </property>
-              <property name="minimum">
-               <number>0</number>
-              </property>
-              <property name="maximum">
-               <number>8</number>
-              </property>
-              <property name="value">
-               <number>2</number>
-              </property>
-              <property name="suffix">
-               <string> ห้อง</string>
+              <property name="text">
+               <string>ระยะเวลารอก่อนเริ่มร้อง :</string>
               </property>
              </widget>
             </item>
             <item>
              <widget class="QPushButton" name="btnIntro0">
               <property name="text">
-               <string>0 ห้อง (ร้องทันที)</string>
+               <string>ร้องทันที (0)</string>
               </property>
-              <property name="quickBtn" stdset="0">
+              <property name="checkable">
+               <bool>true</bool>
+              </property>
+              <property name="segmentBtn" stdset="0">
                <bool>true</bool>
               </property>
              </widget>
@@ -943,9 +981,12 @@ QPushButton[quickBtn="true"]:pressed {
             <item>
              <widget class="QPushButton" name="btnIntro1">
               <property name="text">
-               <string>1 ห้อง</string>
+               <string>ก่อนร้อง 1 ห้อง</string>
               </property>
-              <property name="quickBtn" stdset="0">
+              <property name="checkable">
+               <bool>true</bool>
+              </property>
+              <property name="segmentBtn" stdset="0">
                <bool>true</bool>
               </property>
              </widget>
@@ -953,9 +994,12 @@ QPushButton[quickBtn="true"]:pressed {
             <item>
              <widget class="QPushButton" name="btnIntro2">
               <property name="text">
-               <string>2 ห้อง</string>
+               <string>ก่อนร้อง 2 ห้อง</string>
               </property>
-              <property name="quickBtn" stdset="0">
+              <property name="checkable">
+               <bool>true</bool>
+              </property>
+              <property name="segmentBtn" stdset="0">
                <bool>true</bool>
               </property>
              </widget>
@@ -963,10 +1007,26 @@ QPushButton[quickBtn="true"]:pressed {
             <item>
              <widget class="QPushButton" name="btnIntro4">
               <property name="text">
-               <string>4 ห้อง</string>
+               <string>ก่อนร้อง 4 ห้อง</string>
               </property>
-              <property name="quickBtn" stdset="0">
+              <property name="checkable">
                <bool>true</bool>
+              </property>
+              <property name="segmentBtn" stdset="0">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QSpinBox" name="spinIntroBars">
+              <property name="visible">
+               <bool>false</bool>
+              </property>
+              <property name="maximum">
+               <number>8</number>
+              </property>
+              <property name="value">
+               <number>2</number>
               </property>
              </widget>
             </item>
@@ -989,16 +1049,22 @@ QPushButton[quickBtn="true"]:pressed {
            <layout class="QHBoxLayout" name="rowPreBuffer">
             <item>
              <widget class="QLabel" name="labelPreBuffer">
+              <property name="minimumSize">
+               <size>
+                <width>175</width>
+                <height>0</height>
+               </size>
+              </property>
               <property name="text">
                <string>ระยะเวลาโหลดล่วงหน้า :</string>
               </property>
-             <property name="minimumSize"><size><width>185</width><height>0</height></size></property></widget>
+             </widget>
             </item>
             <item>
              <widget class="QSpinBox" name="spinPreBuffer">
               <property name="minimumSize">
                <size>
-                <width>80</width>
+                <width>85</width>
                 <height>26</height>
                </size>
               </property>
@@ -1054,23 +1120,23 @@ QPushButton[quickBtn="true"]:pressed {
      </widget>
      <widget class="QWidget" name="tabAudio">
       <attribute name="title">
-       <string>🎚️ มิกซ์เสียง &amp; เฟด (Audio)</string>
+       <string>🎚️ ระบบเสียงและมิกซ์</string>
       </attribute>
       <layout class="QVBoxLayout" name="layoutTab3">
        <property name="spacing">
-        <number>10</number>
+        <number>8</number>
        </property>
        <property name="leftMargin">
         <number>14</number>
        </property>
        <property name="topMargin">
-        <number>12</number>
+        <number>10</number>
        </property>
        <property name="rightMargin">
         <number>14</number>
        </property>
        <property name="bottomMargin">
-        <number>12</number>
+        <number>10</number>
        </property>
        <item>
         <widget class="QGroupBox" name="groupAudioFade">
@@ -1083,12 +1149,21 @@ QPushButton[quickBtn="true"]:pressed {
           </property>
           <item>
            <layout class="QHBoxLayout" name="rowCrossfadeSec">
+            <property name="spacing">
+             <number>6</number>
+            </property>
             <item>
              <widget class="QLabel" name="labelCrossfadeSec">
-              <property name="text">
-               <string>ระยะเวลาเสียงซ้อนกัน (Fade) :</string>
+              <property name="minimumSize">
+               <size>
+                <width>175</width>
+                <height>0</height>
+               </size>
               </property>
-             <property name="minimumSize"><size><width>185</width><height>0</height></size></property></widget>
+              <property name="text">
+               <string>ระยะเวลาเสียงซ้อนกัน :</string>
+              </property>
+             </widget>
             </item>
             <item>
              <widget class="QDoubleSpinBox" name="spinCrossfadeSec">
@@ -1117,7 +1192,7 @@ QPushButton[quickBtn="true"]:pressed {
                <double>10.000000000000000</double>
               </property>
               <property name="value">
-               <double>3.000000000000000</double>
+               <double>2.500000000000000</double>
               </property>
              </widget>
             </item>
@@ -1180,10 +1255,16 @@ QPushButton[quickBtn="true"]:pressed {
            <layout class="QHBoxLayout" name="rowCrossfadeCurve">
             <item>
              <widget class="QLabel" name="labelCrossfadeCurve">
-              <property name="text">
-               <string>รูปแบบกราฟการเฟด (Curve) :</string>
+              <property name="minimumSize">
+               <size>
+                <width>175</width>
+                <height>0</height>
+               </size>
               </property>
-             <property name="minimumSize"><size><width>185</width><height>0</height></size></property></widget>
+              <property name="text">
+               <string>รูปแบบกราฟการเฟด :</string>
+              </property>
+             </widget>
             </item>
             <item>
              <widget class="QComboBox" name="comboCrossfadeCurve">
@@ -1205,10 +1286,16 @@ QPushButton[quickBtn="true"]:pressed {
            <layout class="QHBoxLayout" name="rowSilenceDb">
             <item>
              <widget class="QLabel" name="labelSilenceDb">
-              <property name="text">
-               <string>ระดับเสียงเริ่มตัดช่วงเงียบ :</string>
+              <property name="minimumSize">
+               <size>
+                <width>175</width>
+                <height>0</height>
+               </size>
               </property>
-             <property name="minimumSize"><size><width>185</width><height>0</height></size></property></widget>
+              <property name="text">
+               <string>ระดับเสียงตัดช่วงเงียบ :</string>
+              </property>
+             </widget>
             </item>
             <item>
              <widget class="QSpinBox" name="spinSilenceDb">
@@ -1341,6 +1428,6 @@ QPushButton[quickBtn="true"]:pressed {
    <container>1</container>
   </customwidget>
  </customwidgets>
- <resources />
- <connections />
+ <resources/>
+ <connections/>
 </ui>

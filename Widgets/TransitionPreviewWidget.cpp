@@ -55,18 +55,14 @@ void TransitionPreviewWidget::paintEvent(QPaintEvent *)
     p.setBrush(bgGrad);
     p.drawRoundedRect(fullRect, 8, 8);
 
-    // Layout zones
-    const int footerH = 26;
-    const QRect visRect(fullRect.left() + 8, fullRect.top() + 6, fullRect.width() - 16, fullRect.height() - footerH - 10);
-    const QRect footRect(fullRect.left() + 8, fullRect.bottom() - footerH, fullRect.width() - 16, footerH - 2);
+    // Layout zone - clean, modern, no redundant footer
+    const QRect visRect(fullRect.left() + 6, fullRect.top() + 6, fullRect.width() - 12, fullRect.height() - 12);
 
     if (_activeTab == 2) {
         drawAudioCrossfade(p, visRect);
     } else {
         drawMidiTransition(p, visRect);
     }
-
-    drawStatusFooter(p, footRect);
 }
 
 void TransitionPreviewWidget::drawMidiTransition(QPainter &p, const QRect &r)
@@ -110,8 +106,8 @@ void TransitionPreviewWidget::drawMidiTransition(QPainter &p, const QRect &r)
     // Waveform bars inside Deck A (neatly positioned between header and caption)
     p.setPen(QPen(QColor(96, 165, 250, 180), 2.5, Qt::SolidLine, Qt::RoundCap));
     const int numBarsA = 10;
-    const int barAreaTop = y + 24;
-    const int barAreaBottom = y + 66;
+    const int barAreaTop = y + 22;
+    const int barAreaBottom = y + 54;
     const int barAreaMid = (barAreaTop + barAreaBottom) / 2;
     const int barAreaMaxH = (barAreaBottom - barAreaTop) / 2;
 
@@ -136,7 +132,7 @@ void TransitionPreviewWidget::drawMidiTransition(QPainter &p, const QRect &r)
     } else {
         aInfo = QString("จบคำร้อง + รอ %1 ห้อง").arg(_waitBars);
     }
-    p.drawText(deckARect.adjusted(8, 72, -8, 0), Qt::AlignLeft | Qt::AlignTop, aInfo);
+    p.drawText(deckARect.adjusted(8, 58, -8, 0), Qt::AlignLeft | Qt::AlignTop, aInfo);
 
     // -------------------------------------------------------------
     // 2. TRANSITION BRIDGE (Drum Fill-in)
@@ -179,14 +175,14 @@ void TransitionPreviewWidget::drawMidiTransition(QPainter &p, const QRect &r)
         fPat.setBold(true);
         p.setFont(fPat);
         p.setPen(QColor(254, 240, 138));
-        p.drawText(QRect(bridgeRect.left() + 2, y + 24, bridgeRect.width() - 4, 16),
+        p.drawText(QRect(bridgeRect.left() + 2, y + 20, bridgeRect.width() - 4, 16),
                    Qt::AlignCenter, patStr);
 
         // 4 Rhythm Beat Pills (Beats 1, 2, 3, 4)
         const int dotW = 14;
         const int dotH = 12;
         const int dotSpacing = bridgeRect.width() / 5;
-        const int dotY = y + 46;
+        const int dotY = y + 38;
         p.setFont(fSub);
         for (int d = 1; d <= 4; ++d) {
             int dotX = bridgeRect.left() + d * dotSpacing - (dotW / 2);
@@ -201,14 +197,14 @@ void TransitionPreviewWidget::drawMidiTransition(QPainter &p, const QRect &r)
         // Sub-caption Bridge
         p.setFont(fSub);
         p.setPen(QColor(253, 230, 138));
-        QString bridgeSub = QString("%1 ห้อง (%2%)").arg(_fillBars).arg(_fillVolume);
+        QString bridgeSub = (_fillBars > 0) ? QString("%1 ห้อง (%2%)").arg(_fillBars).arg(_fillVolume) : "ไม่ส่งจังหวะ";
         if (_tempoMode == 2) bridgeSub += " • BPM Ramp";
-        p.drawText(bridgeRect.adjusted(2, 70, -2, 0), Qt::AlignHCenter | Qt::AlignTop, bridgeSub);
+        p.drawText(bridgeRect.adjusted(2, 58, -2, 0), Qt::AlignHCenter | Qt::AlignTop, bridgeSub);
     } else {
         p.setFont(fSub);
         p.setPen(QColor(209, 213, 219));
-        p.drawText(QRect(bridgeRect.left(), y + 36, bridgeRect.width(), 20), Qt::AlignCenter, "ตัดเข้าทันที (Cut)");
-        p.drawText(bridgeRect.adjusted(4, 72, -4, 0), Qt::AlignCenter | Qt::AlignTop, "ไม่ส่งกลอง");
+        p.drawText(QRect(bridgeRect.left(), y + 28, bridgeRect.width(), 20), Qt::AlignCenter, "ตัดเข้าทันที (Cut)");
+        p.drawText(bridgeRect.adjusted(4, 58, -4, 0), Qt::AlignCenter | Qt::AlignTop, "ไม่ส่งลูกส่ง");
     }
 
     // -------------------------------------------------------------
@@ -270,7 +266,7 @@ void TransitionPreviewWidget::drawMidiTransition(QPainter &p, const QRect &r)
         bInfo = QString("เข้าก่อนร้อง %1 ห้อง").arg(_introBars);
     }
     if (_quantizeBar) bInfo += " (Beat 1)";
-    p.drawText(deckBRect.adjusted(10, 72, -6, 0), Qt::AlignLeft | Qt::AlignTop, bInfo);
+    p.drawText(deckBRect.adjusted(10, 58, -6, 0), Qt::AlignLeft | Qt::AlignTop, bInfo);
 }
 
 void TransitionPreviewWidget::drawAudioCrossfade(QPainter &p, const QRect &r)
