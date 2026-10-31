@@ -592,6 +592,19 @@ void MainWindow::showContextMenuAt(const QPoint &globalPos)
 
     menu.addSeparator();
     menu.addAction(&actionSettings);
+    {   // medley sets: one click on stage
+        QMenu *sets = menu.addMenu(MenuIcons::make(MenuIcons::Transition), tr("ชุดเมดเลย์"));
+        const QStringList names = medleySetNames();
+        for (const QString &n : names)
+            sets->addAction(n, this, [this, n]() { QTimer::singleShot(0, this, [this, n]() { loadMedleySet(n); }); });
+        if (names.isEmpty()) {
+            QAction *none = sets->addAction(tr("(ยังไม่มีชุด)"));
+            none->setEnabled(false);
+        }
+        sets->addSeparator();
+        sets->addAction(tr("บันทึกคิวเพลงตอนนี้เป็นชุด..."), this, [this]() { QTimer::singleShot(0, this, [this]() { saveMedleySet(); }); });
+        sets->addAction(tr("จัดการชุด (เปลี่ยนชื่อ / ลบ)..."), this, [this]() { QTimer::singleShot(0, this, [this]() { manageMedleySets(); }); });
+    }
     menu.addAction(MenuIcons::make(MenuIcons::Transition), tr("การต่อเพลง (เฟดเสียง / ตัดท้ายเพลง)..."), this, [this]() { showTransitionDialog(); });
     QAction *helpAct = menu.addAction(MenuIcons::make(MenuIcons::Help), tr("คู่มือการใช้งาน / ปุ่มลัด (F1)"));
     connect(helpAct, &QAction::triggered, this, [this]() { showHelpDialog(); });

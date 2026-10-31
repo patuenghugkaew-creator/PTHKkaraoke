@@ -67,6 +67,12 @@ public:
     MidiPlayer* midiPlayer() { return player; }
     Background *backgroundWidget() { return bgWidget; }
     void showSlideshowDialog();         // background slideshow settings (MainWindow_Menu.cpp)
+    // medley sets: named song lists + their medley tempo / bridge (MainWindow_Playlist.cpp)
+    QStringList medleySetNames() const;
+    void saveMedleySet();
+    void loadMedleySet(const QString &name);
+    void manageMedleySets();
+    void applyMedleyToPlayingSong();
     void applySlideshowFromSettings(Background *bg);
     void setBackgroundVideoFolder(const QString &dir);   // video background on both screens
     LyricsWidget* lyricsWidget() { return lyrWidget; }
