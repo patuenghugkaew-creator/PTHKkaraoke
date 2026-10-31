@@ -28,7 +28,6 @@ SOURCES += main.cpp\
     Theme.cpp \
     Dialogs/MedleyDialog.cpp \
     Dialogs/EasyMedleyDialog.cpp \
-    Dialogs/AutoMedleyDialog.cpp \
     Widgets/TransitionPreviewWidget.cpp \
     Dialogs/SongListsDialog.cpp \
     Dialogs/YouTube.cpp \
@@ -117,7 +116,6 @@ HEADERS  += Widgets/PanKnob.h \
     MainWindow.h \
     Dialogs/MedleyDialog.h \
     Dialogs/EasyMedleyDialog.h \
-    Dialogs/AutoMedleyDialog.h \
     Widgets/TransitionPreviewWidget.h \
     Dialogs/SongListsDialog.h \
     Dialogs/YouTube.h \
@@ -210,7 +208,6 @@ HEADERS  += Widgets/PanKnob.h \
     Remote/RemoteDialog.h
 
 FORMS    += MainWindow.ui \
-    Dialogs/MedleyDialog.ui \
     SettingsDialog.ui \
     Widgets/ChMx.ui \
     Widgets/RhythmWidget.ui \
