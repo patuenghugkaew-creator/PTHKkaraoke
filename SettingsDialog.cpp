@@ -12,6 +12,8 @@
 #include <QSettings>
 #include <QClipboard>
 #include <QDialog>
+#include <QBoxLayout>
+#include <QRadioButton>
 #include <QElapsedTimer>
 #include <cmath>
 #include <bass.h>
@@ -84,6 +86,100 @@ SettingsDialog::SettingsDialog(QWidget *parent, MainWindow *m) :
             break;
         default:
             break;
+        }
+
+        { // background: slideshow and video, next to colour / picture
+            QWidget *box = ui->radioBgColor->parentWidget();
+            QBoxLayout *lay = qobject_cast<QBoxLayout *>(box->layout());
+            Background *bg = mainWin->backgroundWidget();
+            if (lay) {
+                // slideshow
+                QRadioButton *rSlide = new QRadioButton(tr("สไลด์ภาพ (หลายภาพ เปลี่ยนเองตามเวลา)"), box);
+                QLabel *slideInfo = new QLabel(box);
+                QPushButton *btnSlide = new QPushButton(tr("เลือกภาพ / ตั้งค่า..."), box);
+                QHBoxLayout *slideRow = new QHBoxLayout();
+                slideRow->addWidget(slideInfo, 1);
+                slideRow->addWidget(btnSlide);
+                // video
+                QRadioButton *rVideo = new QRadioButton(tr("วิดีโอ (เล่นวนทุกไฟล์ในโฟลเดอร์ ไม่มีเสียง)"), box);
+                QLineEdit *videoDir = new QLineEdit(QDir::toNativeSeparators(
+                        settings->value("BackgroundVideoDir", bg->backgroundVideoDir()).toString()), box);
+                videoDir->setReadOnly(true);
+                QPushButton *btnVideo = new QPushButton("...", box);
+                btnVideo->setFixedWidth(ui->btnBgImg->sizeHint().width());
+                QHBoxLayout *videoRow = new QHBoxLayout();
+                videoRow->addWidget(videoDir, 1);
+                videoRow->addWidget(btnVideo);
+
+                lay->addSpacing(8);
+                lay->addWidget(rSlide);
+                lay->addLayout(slideRow);
+                lay->addSpacing(8);
+                lay->addWidget(rVideo);
+                lay->addLayout(videoRow);
+
+                auto refreshSlide = [this, slideInfo]() {
+                    const int n = settings->value("Slideshow/Files").toStringList().count();
+                    slideInfo->setText(n > 0 ? tr("มีภาพ %1 ภาพ เปลี่ยนทุก %2 วินาที")
+                                                   .arg(n).arg(settings->value("Slideshow/IntervalSec", 15).toInt())
+                                             : tr("ยังไม่ได้เลือกภาพ"));
+                };
+                refreshSlide();
+                if (bg->backgroundType() == Background::Slideshow)
+                    rSlide->setChecked(true);
+                else if (bg->backgroundType() == Background::Video)
+                    rVideo->setChecked(true);
+
+                auto syncChecks = [this, rSlide, rVideo]() {
+                    switch (mainWin->backgroundWidget()->backgroundType()) {
+                    case Background::Color: ui->radioBgColor->setChecked(true); break;
+                    case Background::Image: ui->radioBgImg->setChecked(true); break;
+                    case Background::Slideshow: rSlide->setChecked(true); break;
+                    case Background::Video: rVideo->setChecked(true); break;
+                    }
+                };
+                auto openSlides = [this, refreshSlide, syncChecks]() {
+                    mainWin->showSlideshowDialog();
+                    refreshSlide();
+                    syncChecks();
+                };
+                connect(btnSlide, &QPushButton::clicked, this, openSlides);
+                connect(rSlide, &QRadioButton::clicked, this, [this, openSlides]() {
+                    if (settings->value("Slideshow/Files").toStringList().isEmpty()) {
+                        openSlides();           // no pictures yet: choose them first
+                        return;
+                    }
+                    settings->setValue("BackgroundType", int(Background::Slideshow));
+                    mainWin->applySlideshowFromSettings(mainWin->backgroundWidget());
+                    mainWin->backgroundWidget()->setBackgroundType(Background::Slideshow);
+                    if (mainWin->secondMonitorDlg() != nullptr) {
+                        mainWin->applySlideshowFromSettings(mainWin->secondMonitorDlg()->backgroundWidget());
+                        mainWin->secondMonitorDlg()->backgroundWidget()->setBackgroundType(Background::Slideshow);
+                    }
+                });
+                auto chooseVideo = [this, videoDir, syncChecks]() {
+                    const QString p = QFileDialog::getExistingDirectory(this, tr("เลือกโฟลเดอร์วิดีโอพื้นหลัง"),
+                            QDir::fromNativeSeparators(videoDir->text()), QFileDialog::ShowDirsOnly);
+                    if (!p.isEmpty()) {
+                        if (mainWin->backgroundWidget()->setBackgroundVideoDir(p) == 0)
+                            QMessageBox::information(this, tr("พื้นหลังวิดีโอ"), tr("ไม่พบไฟล์วิดีโอในโฟลเดอร์นี้"));
+                        else {
+                            videoDir->setText(QDir::toNativeSeparators(p));
+                            mainWin->setBackgroundVideoFolder(p);
+                        }
+                    }
+                    syncChecks();
+                };
+                connect(btnVideo, &QPushButton::clicked, this, chooseVideo);
+                connect(rVideo, &QRadioButton::clicked, this, [this, videoDir, chooseVideo]() {
+                    const QString d = QDir::fromNativeSeparators(videoDir->text());
+                    if (d.isEmpty() || !QDir(d).exists()) {
+                        chooseVideo();
+                        return;
+                    }
+                    mainWin->setBackgroundVideoFolder(d);
+                });
+            }
         }
 
         { // automatic update

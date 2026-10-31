@@ -66,6 +66,9 @@ public:
     SongDatabase* database() { return db; }
     MidiPlayer* midiPlayer() { return player; }
     Background *backgroundWidget() { return bgWidget; }
+    void showSlideshowDialog();         // background slideshow settings (MainWindow_Menu.cpp)
+    void applySlideshowFromSettings(Background *bg);
+    void setBackgroundVideoFolder(const QString &dir);   // video background on both screens
     LyricsWidget* lyricsWidget() { return lyrWidget; }
     LyricsWidget* secondLyrics() { return secondLyr; }
     SecondMonitorDialog* secondMonitorDlg() { return secondMonitor; }
@@ -116,13 +119,11 @@ public:
     QLabel *drumHoldBanner = nullptr;
     QTimer *drumHoldBlink = nullptr;
     void showDrumHoldBanner(int state);
-    void showSlideshowDialog();         // background slideshow settings (MainWindow_Menu.cpp)
     // control bar: buttons that do not fit go into the "more" button's menu
     QList<QPushButton *> barButtons;
     QPushButton *btnBarMore = nullptr;
     bool fitBarQueued = false;
     void fitControlBar();
-    void applySlideshowFromSettings(class Background *bg);
     void toggleDrumHold();
     void songUnplayable(const QString &reason);
     void changeVideoKey(int step);

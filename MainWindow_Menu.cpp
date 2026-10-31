@@ -355,25 +355,6 @@ void MainWindow::showContextMenuAt(const QPoint &globalPos)
     QAction actionDmx(tr("ไฟเวที DMX..."), this);
     connect(&actionDmx, &QAction::triggered, this, [this]() { showDmxDialog(); });
 
-    QAction actionBgVideo(tr("พื้นหลังเป็นวิดีโอ..."), this);
-    connect(&actionBgVideo, &QAction::triggered, this, [this]() {
-        QString path = QFileDialog::getExistingDirectory(dialogParent(), tr("เลือกโฟลเดอร์วิดีโอพื้นหลัง"),
-                                                         bgWidget->backgroundVideoDir(), QFileDialog::ShowDirsOnly);
-        if (path.isEmpty())
-            return;
-        int n = bgWidget->setBackgroundVideoDir(path);
-        if (n == 0) {
-            QMessageBox::information(dialogParent(), tr("พื้นหลังเป็นวิดีโอ"), tr("ไม่พบไฟล์วิดีโอในโฟลเดอร์นี้"));
-            return;
-        }
-        bgWidget->setBackgroundType(Background::Video);
-        settings->setValue("BackgroundType", Background::Video);
-        settings->setValue("BackgroundVideoDir", path);
-        if (secondMonitor != nullptr && secondLyr != nullptr) {
-            secondMonitor->backgroundWidget()->setBackgroundVideoDir(path);
-            secondMonitor->backgroundWidget()->setBackgroundType(Background::Video);
-        }
-    });
 
     QAction actionRecord(OutputRecorder::instance().isRecording() ? tr("หยุดบันทึกเสียงร้อง (F12)")
                                                                   : tr("บันทึกเสียงร้อง (F12)"), this);
@@ -428,7 +409,6 @@ void MainWindow::showContextMenuAt(const QPoint &globalPos)
     actionRecord.setIcon(MenuIcons::make(MenuIcons::MicRecord));
     actionFullScreen.setIcon(MenuIcons::make(MenuIcons::Fullscreen));
     actionSecond.setIcon(MenuIcons::make(MenuIcons::Screen));
-    actionBgVideo.setIcon(MenuIcons::make(MenuIcons::Video));
     actionShowMixer.setIcon(MenuIcons::make(MenuIcons::Eq));
     actionNewSongs.setIcon(MenuIcons::make(MenuIcons::Search));
     actionQuickUpdate.setIcon(MenuIcons::make(MenuIcons::Reset));
@@ -487,9 +467,8 @@ void MainWindow::showContextMenuAt(const QPoint &globalPos)
         m->addAction(MenuIcons::make(MenuIcons::Screen), tr("ย่อหน้าต่าง (ซ่อนไว้ที่แถบงาน)"), this,
                      [this]() { QTimer::singleShot(0, this, [this]() { minimizeWindow(); }); });
         m->addAction(&actionSecond);
-        m->addAction(&actionBgVideo);
-        m->addAction(MenuIcons::make(MenuIcons::Screen), tr("ภาพพื้นหลัง (สไลด์ภาพ)..."), this,
-                     [this]() { QTimer::singleShot(0, this, [this]() { showSlideshowDialog(); }); });
+        m->addAction(MenuIcons::make(MenuIcons::Screen), tr("พื้นหลัง (สี / รูปภาพ / สไลด์ภาพ / วิดีโอ)..."), this,
+                     [this]() { QTimer::singleShot(0, this, [this]() { showSettingsDialog(); }); });
         m->addSeparator();
         m->addAction(&actionShowMixer);
         m->addAction(&actionMixerAtStart);
@@ -961,6 +940,18 @@ void MainWindow::showSlideshowDialog()
 
 // Control bar in a small window: rather than squeezing the labels on top of each other,
 // the less used buttons move into "เพิ่มเติม..." (first the ones least needed while singing).
+void MainWindow::setBackgroundVideoFolder(const QString &dir)
+{
+    bgWidget->setBackgroundVideoDir(dir);
+    bgWidget->setBackgroundType(Background::Video);
+    settings->setValue("BackgroundType", int(Background::Video));
+    settings->setValue("BackgroundVideoDir", dir);
+    if (secondMonitor != nullptr && secondLyr != nullptr) {
+        secondMonitor->backgroundWidget()->setBackgroundVideoDir(dir);
+        secondMonitor->backgroundWidget()->setBackgroundType(Background::Video);
+    }
+}
+
 void MainWindow::fitControlBar()
 {
     if (!btnBarMore || barButtons.isEmpty() || !ui->frameControl->layout())
