@@ -456,8 +456,15 @@ void MainWindow::checkEndAfterLyrics(qint64 pos, qint64 remainingMs)
                         }
                     }
                 }
-                if (totalBars > 0 && cutBar >= totalBars) {
-                    cutBar = seq->barAtTick(uint32_t(seq->lastNoteOnTick())) + 1;
+                // A short ending (the band is about to land on its final chord): play the song's
+                // own ending to the last note instead of cutting just before it.
+                const int endBar = seq->barAtTick(uint32_t(seq->lastNoteOnTick())) + 1;
+                const int kShortEndingBars = 8;
+                if (endBar > cutBar && endBar - cutBar <= kShortEndingBars) {
+                    reason = QString("short ending (%1 bar(s) left): played to the last note").arg(endBar - cutBar);
+                    cutBar = endBar;
+                } else if (totalBars > 0 && cutBar >= totalBars) {
+                    cutBar = endBar;
                     reason = "after the last note";
                 }
                 int cutTick = int(seq->barStartTick(cutBar));
