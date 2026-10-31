@@ -319,6 +319,7 @@ private:
 
     // YouTube vocal cut: AI (separation, sound and picture a few seconds late) or fast
     AiVocalEngine *aiEngine = nullptr;
+    int ytAiOverload = 0;               // 2-second periods in a row the AI was busy all the time
     bool ytAiLatched = false;           // AI was used: it keeps running, so the cut key works at once
     void applyYtVocalCut();             // after the cut key / settings changed
     void showYtVocalDialog();

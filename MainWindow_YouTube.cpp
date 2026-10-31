@@ -153,6 +153,39 @@ void MainWindow::playYouTube()
                         .arg(stTicks ? 100 * stAiTicks / stTicks : 0).arg(dly, 0, 'f', 1)
                         .arg(int(delayedFrames.size())).arg(pm.width()).arg(pm.height()).toUtf8() + QByteArray(1, char(10)));
                 }
+#ifdef KM_HAVE_PROCLOOP
+                // The AI cannot keep up with the clip (busy all the time for ~10 s): its delay grows
+                // until the picture stops. Step down once: lighter model, then let it use the
+                // graphics card, then the fast (non-AI) cut.
+                const int busyPct = stTicks ? 100 * stAiTicks / stTicks : 0;
+                if (ytAudio && ytAudio->aiMode() && busyPct >= 97)
+                    ++ytAiOverload;
+                else
+                    ytAiOverload = 0;
+                if (ytAiOverload >= 5) {
+                    ytAiOverload = -15;         // give the change ~30 s before judging again
+                    QString what;
+                    if (settings->value("YtAiModel", "light").toString() != "light") {
+                        settings->setValue("YtAiModel", "light");
+                        what = tr("เปลี่ยนเป็น AI รุ่นเบา");
+                    } else if (settings->value("YtAiDevice", 0).toInt() == 1) {
+                        settings->setValue("YtAiDevice", 0);
+                        AiVocalEngine::setDevicePreference(0);
+                        aiEngine->reloadModel();
+                        what = tr("ให้ AI เลือกการ์ดจอ / CPU เอง");
+                    } else {
+                        settings->setValue("YtCutAi", false);
+                        what = tr("เปลี่ยนเป็นตัดเสียงแบบเร็ว (ไม่ใช้ AI)");
+                    }
+                    if (aiEngine) aiEngine->reset();
+                    delayedFrames.clear();
+                    applyYtVocalCut();
+                    ui->detail->setDetail(tr("AI ตัดเสียงร้องทำงานไม่ทัน"), what + tr(" ภาพจะกลับมาลื่น"));
+                    ui->detail->show();
+                    detailTimer->start(6000);
+                    uiLog("AI overloaded on YouTube: " + what);
+                }
+#endif
                 stTicks = stShown = stSkipped = stAiTicks = 0;
                 stGrabSum = stGrabMax = stTickGapMax = stShowGapMax = 0;
                 statClock.restart();
