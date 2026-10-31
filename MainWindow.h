@@ -116,6 +116,8 @@ public:
     QLabel *drumHoldBanner = nullptr;
     QTimer *drumHoldBlink = nullptr;
     void showDrumHoldBanner(int state);
+    void showSlideshowDialog();         // background slideshow settings (MainWindow_Menu.cpp)
+    void applySlideshowFromSettings(class Background *bg);
     void toggleDrumHold();
     void songUnplayable(const QString &reason);
     void changeVideoKey(int step);

@@ -156,6 +156,8 @@ MainWindow::MainWindow(QWidget *parent) :
         bgWidget->setBackgroundImage(bgImg);
         if (bg == Background::Video)
             bgWidget->setBackgroundVideoDir(Config::relocatePath(settings->value("BackgroundVideoDir", "").toString()));
+        if (bg == Background::Slideshow)
+            applySlideshowFromSettings(bgWidget);
 
         int w       = settings->value("WindowWidth", this->minimumWidth()).toInt();
         int h       = settings->value("WindowHeight", this->minimumHeight()).toInt();
