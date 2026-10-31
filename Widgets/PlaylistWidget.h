@@ -2,6 +2,7 @@
 #define PLAYLISTWIDGET_H
 
 #include <QWidget>
+#include <QColor>
 
 #include "Song.h"
 
@@ -16,6 +17,8 @@ class PlaylistWidget : public QWidget
 public:
     explicit PlaylistWidget(QWidget *parent = 0);
     ~PlaylistWidget();
+
+    static QColor typeColor(const QString &type);
 
     void setPlaylist(const QList<Song*> &songlist);
     void addSong(Song *song);

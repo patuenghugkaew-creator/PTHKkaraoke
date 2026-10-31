@@ -111,6 +111,11 @@ public:
     void offerUpdate(const Updater::Release &r, bool manual);
     void installUpdate(const Updater::Release &r);
     bool updateChecking = false;
+    QString nextMedleyTitle;            // "name - artist" of the medley song loaded next
+    // drum hold: blinking banner on screen while the band waits (see showDrumHoldBanner)
+    QLabel *drumHoldBanner = nullptr;
+    QTimer *drumHoldBlink = nullptr;
+    void showDrumHoldBanner(int state);
     void toggleDrumHold();
     void songUnplayable(const QString &reason);
     void changeVideoKey(int step);

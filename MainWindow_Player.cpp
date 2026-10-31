@@ -302,8 +302,10 @@ void MainWindow::onMedleyCountIn(int beat, int beatsPerBar, int bar, int totalBa
         else
             countStr += QString(" %1 ").arg(b);
     }
-    ui->detail->setDetail(tr("เมดเล่ย์: ลูกส่งรอเพลงใหม่ (ห้อง %1/%2)").arg(bar).arg(totalBars),
-                          tr("เพลง: %1 - จังหวะ: %2").arg(playingSong.name(), countStr.trimmed()));
+    const int barsLeft = qMax(1, totalBars - bar + 1);
+    const QString next = nextMedleyTitle.isEmpty() ? tr("เพลงถัดไป") : nextMedleyTitle;
+    ui->detail->setDetail(tr("ลูกส่ง: อีก %1 ห้อง %2 เข้าเพลง %3").arg(barsLeft).arg(QChar(0x2192)).arg(next),
+                          tr("ห้อง %1/%2   จังหวะ: %3").arg(bar).arg(totalBars).arg(countStr.trimmed()));
     ui->detail->show();
     detailTimer->start(1200);
 }
@@ -533,6 +535,54 @@ void MainWindow::loadPlaylist()
 }
 
 // Drum hold ("ค้างจังหวะกลอง"): MIDI songs only (audio songs have no separate drums)
+// Drum hold banner: a blinking orange strip at the top of the screen, so nobody forgets
+// the band is waiting. 1 = stopping at the next bar, 2 = holding, 3 = fill, 0 = off.
+void MainWindow::showDrumHoldBanner(int state)
+{
+    if (state == 0) {
+        if (drumHoldBlink) drumHoldBlink->stop();
+        if (drumHoldBanner) drumHoldBanner->hide();
+        return;
+    }
+    if (!drumHoldBanner) {
+        drumHoldBanner = new QLabel(this);
+        drumHoldBanner->setAlignment(Qt::AlignCenter);
+        drumHoldBanner->setAttribute(Qt::WA_TransparentForMouseEvents);
+        QFont f = drumHoldBanner->font();
+        f.setPointSize(16);
+        f.setBold(true);
+        drumHoldBanner->setFont(f);
+        drumHoldBlink = new QTimer(this);
+        drumHoldBlink->setInterval(500);
+        connect(drumHoldBlink, &QTimer::timeout, this, [this]() {
+            const bool on = drumHoldBanner->property("lit").toBool();
+            drumHoldBanner->setProperty("lit", !on);
+            drumHoldBanner->setStyleSheet(QString("QLabel{color:#111;border-radius:10px;padding:8px 22px;"
+                                                  "background:%1;border:2px solid #fde68a;}")
+                                          .arg(on ? "rgba(245,158,11,0.55)" : "rgba(245,158,11,0.95)"));
+        });
+    }
+    QString text;
+    if (state == 1)
+        text = tr("ค้างกลอง: ดนตรีจะหยุดที่ต้นห้องถัดไป");
+    else if (state == 2)
+        text = tr("ค้างจังหวะกลองอยู่  |  กดปุ่ม \"ส่งเข้าเพลง\" หรือ Ctrl+D เพื่อลูกส่งเข้าเพลงต่อ");
+    else
+        text = tr("ลูกส่ง... เข้าเพลงต่อในห้องถัดไป");
+    drumHoldBanner->setText(text);
+    drumHoldBanner->adjustSize();
+    drumHoldBanner->move((width() - drumHoldBanner->width()) / 2, qMax(8, height() / 12));
+    drumHoldBanner->setProperty("lit", true);   // first frame: bright
+    drumHoldBanner->setStyleSheet("QLabel{color:#111;border-radius:10px;padding:8px 22px;"
+                                  "background:rgba(245,158,11,0.95);border:2px solid #fde68a;}");
+    drumHoldBanner->show();
+    drumHoldBanner->raise();
+    if (state == 2)
+        drumHoldBlink->start();
+    else
+        drumHoldBlink->stop();         // steady while stopping / during the fill
+}
+
 void MainWindow::toggleDrumHold()
 {
     if (videoActive || ytActive || mp3Stream || !player->isPlayerPlaying()) {

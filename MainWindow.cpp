@@ -634,6 +634,7 @@ MainWindow::MainWindow(QWidget *parent) :
 
         // Drum hold messages (see MidiSequencer::toggleDrumHold)
         connect(player, &MidiPlayer::drumHoldChanged, this, [this](int st) {
+            showDrumHoldBanner(st);
             switch (st) {
             case 1:
                 ui->detail->setDetail(tr("ค้างจังหวะกลอง"), tr("ดนตรีจะหยุดที่ต้นห้องถัดไป เหลือแต่กลอง"));

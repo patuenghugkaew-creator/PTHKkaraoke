@@ -1,4 +1,5 @@
 #include "Song.h"
+#include <QStringList>
 
 Song::Song(QObject *parent) : QObject(parent)
 {
@@ -74,19 +75,18 @@ QString Song::detail()
 
 QString Song::detailWithoutIDType()
 {
+    // shown in the playlist: name - artist   120 BPM · Cm  (speed +5) (key +2)
     QString d = sName + " - " + sArtist;
-    d += "  (" + QString::number(sTempo + sBpmSpeed);
-    d += sKey == "" ? ")" : "-" + sKey + ")";
+    QStringList info;
+    if (sTempo + sBpmSpeed > 0)
+        info << QString::number(sTempo + sBpmSpeed) + " BPM";
+    if (!sKey.isEmpty())
+        info << sKey;
+    if (!info.isEmpty())
+        d += "   " + info.join(QString(" ") + QChar(0x00B7) + " ");
     if (sBpmSpeed != 0)
-    {
-        QString s = sBpmSpeed > 0 ? "+" + QString::number(sBpmSpeed) : QString::number(sBpmSpeed);
-        d += " (" + s + ")";
-    }
+        d += QString(" (%1%2)").arg(sBpmSpeed > 0 ? "+" : "").arg(sBpmSpeed);
     if (sTranspose != 0)
-    {
-        QString str = sTranspose > 0 ? "+" + QString::number(sTranspose) : QString::number(sTranspose);
-        d += " (Key " + str + ")";
-    }
-
+        d += QString(" (Key %1%2)").arg(sTranspose > 0 ? "+" : "").arg(sTranspose);
     return d;
 }

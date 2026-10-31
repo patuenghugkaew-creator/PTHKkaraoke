@@ -80,8 +80,10 @@ void MainWindow::loadNextMedley(Song *song)
 {
     if (!song || (song->songType() != "NCN" && song->songType() != "EMK" && song->songType() != "HNK" && song->songType() != "KAR" && song->songType() != "SIB")) {
         player->unloadNextMedley();
+        nextMedleyTitle.clear();
         return;
     }
+    nextMedleyTitle = song->name() + (song->artist().isEmpty() ? QString() : " - " + song->artist());
     if ((medleyLoader != nullptr) && medleyLoader->isRunning())
         medleyLoader->wait();
 

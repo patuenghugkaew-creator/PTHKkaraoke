@@ -30,6 +30,17 @@ PlaylistWidget::PlaylistWidget(QWidget *parent) :
     header->setSectionResizeMode(3, QHeaderView::ResizeToContents);
 }
 
+// one colour per kind of song, so the queue can be read at a glance
+QColor PlaylistWidget::typeColor(const QString &type)
+{
+    if (type == "YOUTUBE") return QColor("#f87171");   // red
+    if (type == "VIDEO")   return QColor("#c084fc");   // purple
+    if (type == "MP3")     return QColor("#34d399");   // green
+    if (type == "SIB")     return QColor("#fbbf24");   // amber
+    if (type == "EMK")     return QColor("#fb923c");   // orange
+    return QColor("#60a5fa");                          // MIDI (NCN, KAR, HNK...): blue
+}
+
 PlaylistWidget::~PlaylistWidget()
 {
     delete ui;
@@ -54,7 +65,10 @@ void PlaylistWidget::addSong(Song *song)
     ui->tableWidget->setItem(rowCount, 0, new QTableWidgetItem(QString::number(rowCount+1)));
     ui->tableWidget->setItem(rowCount, 1, new QTableWidgetItem(song->id()));
     ui->tableWidget->setItem(rowCount, 2, new QTableWidgetItem(song->detailWithoutIDType()));
-    ui->tableWidget->setItem(rowCount, 3, new QTableWidgetItem(song->songType()));
+    QTableWidgetItem *type = new QTableWidgetItem(song->songType());
+    type->setTextAlignment(Qt::AlignCenter);
+    type->setForeground(typeColor(song->songType()));
+    ui->tableWidget->setItem(rowCount, 3, type);
 
     ui->tableWidget->item(rowCount, 0)->setTextAlignment(Qt::AlignHCenter|Qt::AlignVCenter);
 }
