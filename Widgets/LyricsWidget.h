@@ -32,6 +32,7 @@ public:
     long lastActiveLyricTick() const { return computeLastLyricTick(lyrics, cursors); }
     long lastActiveTempLyricTick() const { return computeLastLyricTick(lyricsTemp, cursorsTemp); }
     long firstSungTempLyricTick() const { return computeFirstSungTick(lyricsTemp, cursorsTemp); }
+    long firstSungLyricTick() const { return computeFirstSungTick(lyrics, cursors); }
 
     // Tick of the first real sung word. NCN/EMK lyric files start with a header
     // (title, artist, key, blank line) and a "....music...." progress line whose

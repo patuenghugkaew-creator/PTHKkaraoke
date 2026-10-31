@@ -430,6 +430,32 @@ void MainWindow::checkEndAfterLyrics(qint64 pos, qint64 remainingMs)
                 QString reason = (cutBar == grooveEnd && grooveEnd < targetBar)
                                      ? QString("where the song's beat stops")
                                      : QString("%1 bar(s) after last lyric").arg(waitBars);
+
+                // Finish the musical phrase: songs move in 4-bar phrases counted from the bar
+                // where the singing starts. Cutting "N bars after the last word" in the middle
+                // of a phrase sounded unfinished; the next phrase line is where the band lands.
+                if (cutBar == targetBar) {
+                    const int res = qMax(1, seq->midiFile()->resorution());
+                    const long first = lyrWidget->firstSungLyricTick();
+                    if (first > 0) {
+                        int anchor = seq->barAtTick(uint32_t(first));
+                        const double beatInBar = double(long(first) - long(seq->barStartTick(anchor))) / res;
+                        if (beatInBar >= 2.5)       // a pick-up before the bar line: the phrase starts after it
+                            ++anchor;
+                        int phraseCut = cutBar;
+                        while ((phraseCut - anchor) % 4 != 0)
+                            ++phraseCut;
+                        const int limit = (grooveEnd > currentBar) ? grooveEnd : phraseCut;
+                        if (phraseCut > cutBar && phraseCut <= limit) {
+                            reason = QString("end of the 4-bar phrase (phrases from bar %1; %2 bar(s) after last lyric at least)")
+                                         .arg(anchor).arg(waitBars);
+                            cutBar = phraseCut;
+                        } else if (phraseCut > limit && limit > cutBar) {
+                            reason = QString("where the song's beat stops (before the phrase end)");
+                            cutBar = limit;
+                        }
+                    }
+                }
                 if (totalBars > 0 && cutBar >= totalBars) {
                     cutBar = seq->barAtTick(uint32_t(seq->lastNoteOnTick())) + 1;
                     reason = "after the last note";
