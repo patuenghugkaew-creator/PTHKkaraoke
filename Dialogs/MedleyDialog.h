@@ -62,6 +62,7 @@ private:
     QPushButton *_btnBar0 = nullptr;
     QPushButton *_btnBar1 = nullptr;
     QPushButton *_btnBar2 = nullptr;
+    QPushButton *_btnBar3 = nullptr;
     QPushButton *_btnBar4 = nullptr;
     QLabel     *_lblBarsHint = nullptr;
     QSlider    *_sliderVol = nullptr;

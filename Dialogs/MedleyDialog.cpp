@@ -278,14 +278,17 @@ MedleyDialog::MedleyDialog(QWidget *parent, MidiPlayer *player)
         connect(b, &QPushButton::clicked, this, [this, bars]() { onBarsButtonClicked(bars); });
         return b;
     };
-    _btnBar0 = makeBarBtn(tr("ต่อทันที (ไม่มีลูกส่ง)"), 0);
-    _btnBar1 = makeBarBtn(tr("ลูกส่ง 1 ห้อง"), 1);
-    _btnBar2 = makeBarBtn(tr("จังหวะ 1 + ลูกส่ง 1"), 2);
-    _btnBar4 = makeBarBtn(tr("จังหวะ 3 + ลูกส่ง 1  ★ แนะนำ"), 4);
+    // "ห้อง" = one bar of the drums (count 1-2-3-4); the number first, the parts in brackets
+    _btnBar0 = makeBarBtn(tr("0 ห้อง (ต่อทันที)"), 0);
+    _btnBar1 = makeBarBtn(tr("1 ห้อง (ลูกส่ง)"), 1);
+    _btnBar2 = makeBarBtn(tr("2 ห้อง (จังหวะ 1 + ลูกส่ง 1)"), 2);
+    _btnBar3 = makeBarBtn(tr("3 ห้อง (จังหวะ 2 + ลูกส่ง 1)"), 3);
+    _btnBar4 = makeBarBtn(tr("4 ห้อง (จังหวะ 3 + ลูกส่ง 1)  ★ แนะนำ"), 4);
     barsGrid->addWidget(_btnBar0, 0, 0);
     barsGrid->addWidget(_btnBar1, 0, 1);
     barsGrid->addWidget(_btnBar2, 1, 0);
-    barsGrid->addWidget(_btnBar4, 1, 1);
+    barsGrid->addWidget(_btnBar3, 1, 1);
+    barsGrid->addWidget(_btnBar4, 2, 0, 1, 2);
     barsGrid->setColumnStretch(0, 1);
     barsGrid->setColumnStretch(1, 1);
     c2->addLayout(barsGrid);
@@ -380,12 +383,12 @@ MedleyDialog::MedleyDialog(QWidget *parent, MidiPlayer *player)
 
 void MedleyDialog::updateBarsSelection(int bars)
 {
-    if (bars != 0 && bars != 1 && bars != 2 && bars != 4)
-        bars = (bars >= 3) ? 4 : 1;
+    if (bars < 0 || bars > 4)
+        bars = (bars > 4) ? 4 : 1;
     _selectedBars = bars;
 
     const QList<QPair<QPushButton*, int>> btns = {
-        {_btnBar0, 0}, {_btnBar1, 1}, {_btnBar2, 2}, {_btnBar4, 4}
+        {_btnBar0, 0}, {_btnBar1, 1}, {_btnBar2, 2}, {_btnBar3, 3}, {_btnBar4, 4}
     };
     for (const auto &p : btns) {
         p.first->setProperty("active", p.second == bars ? "true" : "false");
@@ -396,8 +399,8 @@ void MedleyDialog::updateBarsSelection(int bars)
     switch (bars) {
     case 0: hint = tr("จบเพลง  →  เข้าเพลงถัดไปทันที"); break;
     case 1: hint = tr("จบเพลง  →  ลูกส่ง 1 ห้อง  →  เข้าเพลงถัดไป"); break;
-    case 2: hint = tr("จบเพลง  →  จังหวะ 1 ห้อง  →  ลูกส่ง 1 ห้อง  →  เข้าเพลงถัดไป"); break;
-    default: hint = tr("จบเพลง  →  จังหวะ 3 ห้อง  →  ลูกส่ง 1 ห้อง  →  เข้าเพลงถัดไป"); break;
+    default: hint = tr("จบเพลง  →  จังหวะ %1 ห้อง  →  ลูกส่ง 1 ห้อง  →  เข้าเพลงถัดไป  (รวม %2 ห้อง)")
+                         .arg(bars - 1).arg(bars); break;
     }
     _lblBarsHint->setText(QStringLiteral("▶  ") + hint);
 
