@@ -463,6 +463,18 @@ void MainWindow::showContextMenuAt(const QPoint &globalPos)
     { // Screen
         QMenu *m = menu.addMenu(MenuIcons::make(MenuIcons::Screen), tr("หน้าจอ"));
         m->addAction(&actionFullScreen);
+        {
+            QMenu *ms = m->addMenu(tr("ขนาดเมนู"));
+            const QStringList labels = { tr("ปกติ"), tr("ใหญ่"), tr("ใหญ่มาก") };
+            for (int i = 0; i < labels.size(); ++i) {
+                QAction *a = ms->addAction(labels[i]);
+                a->setCheckable(true);
+                a->setChecked(Theme::menuSize() == i);
+                connect(a, &QAction::triggered, this, [this, i]() {
+                    QTimer::singleShot(0, this, [i]() { Theme::setMenuSize(i); });
+                });
+            }
+        }
         // after the menu has closed, so the menu does not stay on screen
         m->addAction(MenuIcons::make(MenuIcons::Screen), tr("ย่อหน้าต่าง (ซ่อนไว้ที่แถบงาน)"), this,
                      [this]() { QTimer::singleShot(0, this, [this]() { minimizeWindow(); }); });

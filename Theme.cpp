@@ -13,6 +13,8 @@
 #include <QString>
 #include <QStyleFactory>
 #include <QTimer>
+#include <QProxyStyle>
+#include <QMenu>
 
 #include "Config.h"
 
@@ -27,6 +29,22 @@ struct Colors {
 };
 
 Mode g_mode = Dark;
+int g_menuSize = 1;            // large by default (easier to read on stage)
+
+// bigger icons in menus (the style sheet cannot size a menu's icons)
+class MenuIconStyle : public QProxyStyle
+{
+public:
+    using QProxyStyle::QProxyStyle;
+    int pixelMetric(PixelMetric m, const QStyleOption *opt, const QWidget *w) const override
+    {
+        if (m == PM_SmallIconSize && w && qobject_cast<const QMenu *>(w)) {
+            static const int sizes[] = { 16, 22, 28 };
+            return sizes[qBound(0, g_menuSize, 2)];
+        }
+        return QProxyStyle::pixelMetric(m, opt, w);
+    }
+};
 bool g_dark = true;
 bool g_orange = false;
 QTimer *g_watch = nullptr;
@@ -111,8 +129,8 @@ QString buildStyleSheet(const Colors &c)
 {
     QString css =
         "QToolTip { background-color: @btn; color: @text; border: 1px solid @border; padding: 4px; }"
-        "QMenu { background-color: @base; color: @text; border: 1px solid @border2; border-radius: 10px; padding: 6px; }"
-        "QMenu::item { padding: 7px 28px 7px 22px; border-radius: 5px; }"
+        "QMenu { background-color: @base; color: @text; border: 1px solid @border2; border-radius: 10px; padding: 6px; @menuFont }"
+        "QMenu::item { padding: @menuPad; border-radius: 5px; }"
         "QMenu::item:selected { background-color: @accent; color: @accentText; }"
         "QMenu::item:disabled { color: @dim; }"
         "QMenu::separator { height: 1px; background: @border2; margin: 5px 8px; }"
@@ -190,6 +208,13 @@ QString buildStyleSheet(const Colors &c)
         css.replace(tokens[i].first, tokens[i].second);
     css.replace("@arrowNormal", arrowImage(c.text, "n" + c.text.mid(1)));
     css.replace("@arrowHover", arrowImage(c.accent, "h" + c.accent.mid(1)));
+    {   // menu size
+        static const char *fonts[] = { "", "font-size: 12pt;", "font-size: 14pt;" };
+        static const char *pads[] = { "7px 28px 7px 22px", "10px 34px 10px 26px", "12px 40px 12px 30px" };
+        const int m = qBound(0, g_menuSize, 2);
+        css.replace("@menuFont", fonts[m]);
+        css.replace("@menuPad", pads[m]);
+    }
     return css;
 }
 
@@ -247,9 +272,10 @@ void applyCurrent()
 
 void init(QApplication &app)
 {
-    app.setStyle(QStyleFactory::create("Fusion"));
+    app.setStyle(new MenuIconStyle(QStyleFactory::create("Fusion")));
 
     QSettings st(Config::CONFIG_APP_FILE_PATH, QSettings::IniFormat);
+    g_menuSize = qBound(0, st.value("MenuSize", 1).toInt(), 2);
     int m = st.value("Theme", static_cast<int>(Dark)).toInt();
     g_mode = (m == Dark) ? Dark : (m == Light) ? Light : (m == DarkOrange) ? DarkOrange : System;
 
@@ -288,6 +314,19 @@ bool isDark()
 bool isOrange()
 {
     return g_orange;
+}
+
+int menuSize()
+{
+    return g_menuSize;
+}
+
+void setMenuSize(int size)
+{
+    g_menuSize = qBound(0, size, 2);
+    QSettings st(Config::CONFIG_APP_FILE_PATH, QSettings::IniFormat);
+    st.setValue("MenuSize", g_menuSize);
+    applyCurrent();
 }
 
 }
