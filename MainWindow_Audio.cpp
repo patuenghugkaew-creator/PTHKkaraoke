@@ -150,6 +150,9 @@ void MainWindow::showYtVocalDialog()
     };
     QSlider *voc = slider(settings->value("YtVocalLevel", 0).toInt());
     QSlider *mus = slider(settings->value("YtMusicLevel", 100).toInt());
+    mus->setRange(0, 200);              // music alone is quieter than the full song: allow a boost
+    mus->setValue(settings->value("YtMusicLevel", 100).toInt());
+    mus->setToolTip(tr("ดนตรีหลังตัดเสียงร้องมักเบาลง เลื่อนเกิน 100% เพื่อเร่งให้ดังเท่าเดิม (แนะนำ 120-140%)"));
     QLabel *vocL = new QLabel(&dlg), *musL = new QLabel(&dlg);
     auto showLevels = [=]() {
         vocL->setText(QString::number(voc->value()) + "%");

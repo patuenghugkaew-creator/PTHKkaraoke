@@ -155,8 +155,8 @@ void MainWindow::playYouTube()
                 }
 #ifdef KM_HAVE_PROCLOOP
                 // The AI cannot keep up with the clip (busy all the time for ~10 s): its delay grows
-                // until the picture stops. Step down once: lighter model, then let it use the
-                // graphics card, then the fast (non-AI) cut.
+                // until the picture stops. Step down once: first the graphics card (same quality),
+                // then the lighter model, then the fast (non-AI) cut.
                 const int busyPct = stTicks ? 100 * stAiTicks / stTicks : 0;
                 if (ytAudio && ytAudio->aiMode() && busyPct >= 97)
                     ++ytAiOverload;
@@ -165,14 +165,14 @@ void MainWindow::playYouTube()
                 if (ytAiOverload >= 5) {
                     ytAiOverload = -15;         // give the change ~30 s before judging again
                     QString what;
-                    if (settings->value("YtAiModel", "light").toString() != "light") {
-                        settings->setValue("YtAiModel", "light");
-                        what = tr("เปลี่ยนเป็น AI รุ่นเบา");
-                    } else if (settings->value("YtAiDevice", 0).toInt() == 1) {
+                    if (settings->value("YtAiDevice", 0).toInt() == 1) {
                         settings->setValue("YtAiDevice", 0);
                         AiVocalEngine::setDevicePreference(0);
                         aiEngine->reloadModel();
-                        what = tr("ให้ AI เลือกการ์ดจอ / CPU เอง");
+                        what = tr("ให้ AI ใช้การ์ดจอช่วย (คุณภาพเท่าเดิม)");
+                    } else if (settings->value("YtAiModel", "light").toString() != "light") {
+                        settings->setValue("YtAiModel", "light");
+                        what = tr("เปลี่ยนเป็น AI รุ่นเบา");
                     } else {
                         settings->setValue("YtCutAi", false);
                         what = tr("เปลี่ยนเป็นตัดเสียงแบบเร็ว (ไม่ใช้ AI)");
