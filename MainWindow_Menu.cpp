@@ -959,6 +959,51 @@ void MainWindow::showSlideshowDialog()
     }
 }
 
+// Control bar in a small window: rather than squeezing the labels on top of each other,
+// the less used buttons move into "เพิ่มเติม..." (first the ones least needed while singing).
+void MainWindow::fitControlBar()
+{
+    if (!btnBarMore || barButtons.isEmpty() || !ui->frameControl->layout())
+        return;
+    QLayout *bar = ui->frameControl->layout();
+    auto need = [&]() {
+        ui->horizontalLayout_8->invalidate();
+        bar->invalidate();
+        return bar->minimumSize().width();
+    };
+    for (QPushButton *b : barButtons) {
+        b->ensurePolished();
+        b->setMinimumWidth(b->sizeHint().width());
+        b->setProperty("barOverflow", false);
+        b->show();
+    }
+    btnBarMore->ensurePolished();
+    btnBarMore->setMinimumWidth(btnBarMore->sizeHint().width());
+    btnBarMore->hide();
+    const int avail = ui->frameControl->width();
+    if (need() <= avail) {
+        uiLog(QString("control bar: width %1, needs %2, all buttons fit").arg(avail).arg(need()));
+        return;
+    }
+    btnBarMore->show();
+    // creation order: เพิ่มเพลง, YouTube, เริ่มใหม่, จบเพลง, เมดเลย์, ตั้งค่าเมดเลย์, ค้างกลอง,
+    // ตัดเสียงร้อง, มิกเซอร์, จอที่ 2, ซับไตเติล, เต็มจอ  ->  hide first: subtitles, 2nd screen...
+    static const int order[] = { 10, 9, 5, 2, 8, 0, 1, 11, 3, 4, 6, 7 };
+    for (int idx : order) {
+        if (idx >= barButtons.size())
+            continue;
+        QPushButton *b = barButtons[idx];
+        b->hide();
+        b->setProperty("barOverflow", true);
+        if (need() <= avail)
+            break;
+    }
+    int hidden = 0;
+    for (QPushButton *b : barButtons)
+        if (b->property("barOverflow").toBool()) ++hidden;
+    uiLog(QString("control bar: width %1, needs %2, %3 button(s) in the more menu").arg(avail).arg(need()).arg(hidden));
+}
+
 void MainWindow::minimizeWindow()
 {
     // keep full screen: clicking the taskbar button brings it back full screen

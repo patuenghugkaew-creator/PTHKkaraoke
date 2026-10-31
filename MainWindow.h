@@ -117,6 +117,11 @@ public:
     QTimer *drumHoldBlink = nullptr;
     void showDrumHoldBanner(int state);
     void showSlideshowDialog();         // background slideshow settings (MainWindow_Menu.cpp)
+    // control bar: buttons that do not fit go into the "more" button's menu
+    QList<QPushButton *> barButtons;
+    QPushButton *btnBarMore = nullptr;
+    bool fitBarQueued = false;
+    void fitControlBar();
     void applySlideshowFromSettings(class Background *bg);
     void toggleDrumHold();
     void songUnplayable(const QString &reason);

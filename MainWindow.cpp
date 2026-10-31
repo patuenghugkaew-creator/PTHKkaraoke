@@ -778,6 +778,7 @@ MainWindow::MainWindow(QWidget *parent) :
                                  "QPushButton::menu-indicator { width: 0px; }");
                 b->setMinimumWidth(b->sizeHint().width());   // never cut the label; the position slider gives way
                 ui->horizontalLayout_8->addWidget(b);
+                barButtons << b;
                 return b;
             };
 
@@ -883,6 +884,28 @@ MainWindow::MainWindow(QWidget *parent) :
 
             QPushButton *full = addBarButton(tr("เต็มจอ"), tr("เต็มจอ / หน้าต่างปกติ"));
             connect(full, &QPushButton::clicked, this, [this]() { showFullScreenOrNormal(); });
+
+            // small window: the buttons that do not fit are in this menu (see fitControlBar)
+            btnBarMore = addBarButton(tr("เพิ่มเติม..."), tr("ปุ่มที่ไม่พอที่บนแถบ"));
+            barButtons.removeAll(btnBarMore);
+            btnBarMore->hide();
+            connect(btnBarMore, &QPushButton::clicked, this, [this]() {
+                QMenu m(this);
+                for (QPushButton *b : barButtons) {
+                    if (!b->property("barOverflow").toBool())
+                        continue;
+                    QAction *a = m.addAction(b->text().trimmed());
+                    a->setToolTip(b->toolTip());
+                    if (b->isCheckable()) {
+                        a->setCheckable(true);
+                        a->setChecked(b->isChecked());
+                    }
+                    connect(a, &QAction::triggered, b, [b]() { b->click(); });
+                }
+                m.exec(btnBarMore->mapToGlobal(QPoint(0, 0)) - QPoint(0, m.sizeHint().height()));
+            });
+            ui->frameControl->installEventFilter(this);
+            QTimer::singleShot(0, this, [this]() { fitControlBar(); });
         }
 
         // Every shortcut (Home, End, PageUp/Down, arrows, numbers...) is handled by this window.

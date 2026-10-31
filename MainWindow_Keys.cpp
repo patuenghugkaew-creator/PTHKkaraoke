@@ -646,6 +646,10 @@ QString MainWindow::searchWithThaiFallback(const QString &text)
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
+    if (watched == ui->frameControl && event->type() == QEvent::Resize && !fitBarQueued) {
+        fitBarQueued = true;        // once the resize is over
+        QTimer::singleShot(0, this, [this]() { fitBarQueued = false; fitControlBar(); });
+    }
     if (watched == ui->sliderPosition) {
         if (event->type() == QEvent::MouseButtonPress) {
             QMouseEvent *me = static_cast<QMouseEvent *>(event);
