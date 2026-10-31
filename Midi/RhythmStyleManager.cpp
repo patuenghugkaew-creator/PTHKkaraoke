@@ -107,10 +107,14 @@ bool RhythmStyleManager::buildTransitionBridge(int rhythmId, int totalBars, doub
         return -1;
     };
 
+    // Like eXtreme Karaoke, the medley bridge is the drum kit only.
+    // The style files also carry bass/chord/pad parts (ch 10..15, or 1..5 in 904)
+    // recorded in the style's own key (e.g. Gm, Cm); playing them clashes with the next song.
+    auto isBridgeChannel = [](int ch) { return ch == 9; };
+
     // 1. Initial Setup Events (ProgramChange, BankSelect, Volume, Pan, Expression, Reverb)
-    // Send all setups for channels 0..15 at beatOffset = 0.0
     for (MidiEvent *e : allEvents) {
-        if (e->tick() < barTicks) {
+        if (e->tick() < barTicks && isBridgeChannel(e->channel())) {
             if (e->eventType() == MidiEventType::ProgramChange) {
                 outEvents.append({0.0, MidiEventType::ProgramChange, e->channel(), e->data1(), 0});
             } else if (e->eventType() == MidiEventType::Controller) {
@@ -131,26 +135,81 @@ bool RhythmStyleManager::buildTransitionBridge(int rhythmId, int totalBars, doub
     if (fillStart < 0) fillStart = findMarker("Fill In CC");
     if (fillStart < 0) fillStart = findMarker("Fill In DD");
 
-    int64_t mainStart = findMarker("Main A");
-    if (mainStart < 0) mainStart = findMarker("Main B");
-    if (mainStart < 0) mainStart = findMarker("Main C");
-
     // Standard 100.mid or unmarked rhythm: first bar is fill
     if (fillStart < 0) fillStart = 0;
-    if (mainStart < 0) mainStart = fillStart;
 
-    // 3. Groove Bars (Main A / B) for (totalBars - 1)
-    const int grooveBars = clampedBars - 1;
-    for (int b = 0; b < grooveBars; ++b) {
-        const double barBeatBase = b * 4.0;
+    // Groove source: bars of a Main (or Intro) section that really contain drums.
+    // Some styles (e.g. 900 "intro") have no drums in Main A at all, which made the
+    // groove bars silent; skip those and use the next Main section that has a beat.
+    auto drumHitsInBar = [&](int64_t barStart) {
+        int hits = 0;
         for (MidiEvent *e : allEvents) {
-            if (e->tick() >= uint32_t(mainStart) && e->tick() < uint32_t(mainStart + barTicks)) {
+            if (e->tick() >= uint32_t(barStart) && e->tick() < uint32_t(barStart + barTicks)
+                && e->channel() == 9 && e->eventType() == MidiEventType::NoteOn && e->data2() > 0)
+                ++hits;
+        }
+        return hits;
+    };
+    auto sectionEnd = [&](int64_t start) {
+        for (const MarkerEntry &m : markers)
+            if (int64_t(m.tick) > start)
+                return int64_t(m.tick);
+        return int64_t(midi.events().isEmpty() ? start + barTicks : midi.events().last()->tick());
+    };
+
+    QVector<int64_t> grooveSrcBars;
+    // Main sections first; intro-type styles (900) keep their beat in Intro C/B/A.
+    // Within a section keep only the full bars (>= 75% of its busiest bar), so
+    // break/turnaround bars with few hits don't leave a hole in the groove.
+    for (const char *name : {"Main A", "Main B", "Main C", "Main D", "Intro C", "Intro B", "Intro A"}) {
+        const int64_t secStart = findMarker(name);
+        if (secStart < 0)
+            continue;
+        const int64_t secEnd = sectionEnd(secStart);
+        QVector<QPair<int64_t, int>> bars;
+        int maxHits = 0;
+        for (int64_t bar = secStart; bar + barTicks <= secEnd; bar += barTicks) {
+            const int h = drumHitsInBar(bar);
+            bars.append({bar, h});
+            maxHits = qMax(maxHits, h);
+        }
+        if (maxHits < 8)
+            continue;   // too sparse to carry a groove
+        for (const auto &bh : bars)
+            if (bh.second * 4 >= maxHits * 3)
+                grooveSrcBars.append(bh.first);
+        if (!grooveSrcBars.isEmpty())
+            break;      // one consistent section is enough
+    }
+
+    // 3. Groove Bars for (totalBars - 1)
+    const int grooveBars = clampedBars - 1;
+    if (grooveBars > 0 && grooveSrcBars.isEmpty()) {
+        // No usable drum groove in this style: basic kick/snare/hi-hat so the bridge is never silent.
+        auto addNote = [&](double beat, int note, int vel) {
+            const int v = qBound(1, int(vel * volumeScale), 127);
+            outEvents.append({beat, MidiEventType::NoteOn, 9, note, v});
+            outEvents.append({beat + 0.4, MidiEventType::NoteOff, 9, note, 0});
+        };
+        for (int b = 0; b < grooveBars * 4; ++b) {
+            addNote(b, (b % 2 == 0) ? 36 : 38, (b % 2 == 0) ? 110 : 100);
+            addNote(b, 42, 85);
+            addNote(b + 0.5, 42, 70);
+        }
+    }
+    for (int b = 0; b < grooveBars && !grooveSrcBars.isEmpty(); ++b) {
+        const double barBeatBase = b * 4.0;
+        const int64_t srcBar = grooveSrcBars[b % grooveSrcBars.size()];
+        for (MidiEvent *e : allEvents) {
+            if (!isBridgeChannel(e->channel()))
+                continue;
+            if (e->tick() >= uint32_t(srcBar) && e->tick() < uint32_t(srcBar + barTicks)) {
                 if (e->eventType() == MidiEventType::NoteOn ||
                     e->eventType() == MidiEventType::NoteOff ||
                     e->eventType() == MidiEventType::Controller ||
                     e->eventType() == MidiEventType::PitchBend)
                 {
-                    double beat = barBeatBase + double(e->tick() - mainStart) / double(res);
+                    double beat = barBeatBase + double(int64_t(e->tick()) - srcBar) / double(res);
                     int d2 = e->data2();
                     if (e->eventType() == MidiEventType::NoteOn && d2 > 0) {
                         d2 = qBound(1, int(d2 * volumeScale), 127);
@@ -164,6 +223,8 @@ bool RhythmStyleManager::buildTransitionBridge(int rhythmId, int totalBars, doub
     // 4. Final Transition Fill Bar (Fill In BA)
     const double fillBeatBase = (clampedBars - 1) * 4.0;
     for (MidiEvent *e : allEvents) {
+        if (!isBridgeChannel(e->channel()))
+            continue;
         if (e->tick() >= uint32_t(fillStart) && e->tick() < uint32_t(fillStart + barTicks)) {
             if (e->eventType() == MidiEventType::NoteOn ||
                 e->eventType() == MidiEventType::NoteOff ||

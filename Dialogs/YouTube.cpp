@@ -1,3 +1,4 @@
+#include "Config.h"
 #include "YouTube.h"
 
 #ifdef Q_OS_WIN
@@ -58,6 +59,10 @@ static const char *FFMPEG_URL = "https://github.com/yt-dlp/FFmpeg-Builds/release
 
 QString YtTools::toolsDir()
 {
+    // portable (flash drive / external HD): next to the program, so they travel with it
+    // (the AI models go to the "models" folder beside it)
+    if (Config::isPortableMode())
+        return QDir::fromNativeSeparators(QApplication::applicationDirPath()) + "/Tools/tools";
     return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + "/PTHK Karaoke/tools";
 }
 
@@ -640,12 +645,26 @@ void YouTubeSearchDialog::buildGenreButtons()
         showHome();
     });
     place(home);
+    bool hasLocalButton = false;
     for (const QString &g : names) {
         QPushButton *b = new QPushButton(g, genreBox);
-        connect(b, &QPushButton::clicked, this, [this, g]() {
-            edSearch->setText(g);
-            search();
-        });
+        if (g.contains(QStringLiteral("ดาวน์โหลด"))) {
+            // a "downloaded" button lists the clips on this computer instead of searching YouTube
+            hasLocalButton = true;
+            b->setToolTip(tr("วิดีโอที่ดาวน์โหลดไว้ในเครื่อง (พิมพ์ชื่อในช่องค้นหาก่อนเพื่อกรองได้)"));
+            connect(b, &QPushButton::clicked, this, &YouTubeSearchDialog::showLocalVideos);
+        } else {
+            connect(b, &QPushButton::clicked, this, [this, g]() {
+                edSearch->setText(g);
+                search();
+            });
+        }
+        place(b);
+    }
+    if (!hasLocalButton) {
+        QPushButton *b = new QPushButton(tr("วิดีโอดาวน์โหลด"), genreBox);
+        b->setToolTip(tr("วิดีโอที่ดาวน์โหลดไว้ในเครื่อง (พิมพ์ชื่อในช่องค้นหาก่อนเพื่อกรองได้)"));
+        connect(b, &QPushButton::clicked, this, &YouTubeSearchDialog::showLocalVideos);
         place(b);
     }
     QPushButton *rnd = new QPushButton(tr("สุ่มเพลง"), genreBox);
@@ -935,6 +954,49 @@ void YouTubeSearchDialog::search()
 }
 
 // thumbnails with Windows' curl.exe (Qt's own HTTPS would need the OpenSSL DLLs)
+// The clips downloaded to this computer (newest first), filtered by the search text.
+void YouTubeSearchDialog::showLocalVideos()
+{
+    if (proc) {
+        proc->disconnect(this);
+        proc->kill();
+    }
+    homeMode = false;
+    pendingThumbs.clear();
+    list->clear();
+    QDir dir(localDir);
+    if (localDir.isEmpty() || !dir.exists()) {
+        lbStatus->setText(tr("ยังไม่มีโฟลเดอร์วิดีโอดาวน์โหลด"));
+        return;
+    }
+    const QString filter = edSearch->text().trimmed();
+    const QFileInfoList files = dir.entryInfoList({ "*.mp4", "*.mkv", "*.webm", "*.mov", "*.avi" },
+                                                  QDir::Files, QDir::Time);
+    QPixmap ph(160, 90);
+    ph.fill(QColor(30, 60, 90));
+    int n = 0;
+    for (const QFileInfo &fi : files) {
+        const QString title = fi.completeBaseName();
+        if (!filter.isEmpty() && !title.contains(filter, Qt::CaseInsensitive))
+            continue;
+        const bool ai = QFile::exists(fi.absoluteFilePath() + ".ai.wav");
+        QListWidgetItem *li = new QListWidgetItem(title + "\n" + tr("ในเครื่อง") + "   "
+                                                  + QString::number(fi.size() / (1024 * 1024)) + " MB"
+                                                  + (ai ? tr("   ✓ AI ตัดเสียงร้องพร้อม") : QString()), list);
+        li->setData(Qt::UserRole, "file:" + fi.absoluteFilePath());
+        li->setData(Qt::UserRole + 1, title);
+        li->setData(Qt::UserRole + 2, tr("ในเครื่อง"));
+        li->setData(Qt::UserRole + 3, 0);
+        li->setSizeHint(QSize(0, 98));
+        li->setIcon(QIcon(ph));
+        ++n;
+    }
+    lbStatus->setText(n ? tr("วิดีโอที่ดาวน์โหลดไว้ %1 เพลง").arg(n)
+                        : tr("ไม่พบวิดีโอที่ดาวน์โหลดไว้") + (filter.isEmpty() ? QString() : tr(" ที่ตรงกับ \"%1\"").arg(filter)));
+    if (list->count() > 0)
+        list->setCurrentRow(0);
+}
+
 void YouTubeSearchDialog::loadThumb(const QString &id)
 {
     const QString file = thumbDir + "/" + id + ".jpg";

@@ -3,6 +3,8 @@
 #include <QRegion>
 
 #include <QApplication>
+#include <QQuickWindow>
+#include <QSettings>
 #include <QSplashScreen>
 #include <QDirIterator>
 #include <QMetaType>
@@ -101,6 +103,19 @@ int main(int argc, char *argv[])
 
     { // Config Dir
         Config::initConfigDataPath();
+
+        #ifdef PTHK_WEBENGINE
+        // YouTube drawn by the CPU (Qt Quick software renderer + Chromium without GPU).
+        // The AI vocal cut runs on the GPU in long bursts; a GPU-drawn player made every
+        // picture copy wait up to ~0.4 s for it (measured), so the video stuttered.
+        // Must be set before the first web view / Qt Quick window exists.
+        if (QSettings(Config::CONFIG_APP_FILE_PATH, QSettings::IniFormat).value("YtSoftwareVideo", true).toBool()) {
+            QQuickWindow::setSceneGraphBackend(QSGRendererInterface::Software);
+            QByteArray flags = qgetenv("QTWEBENGINE_CHROMIUM_FLAGS");
+            if (!flags.contains("--disable-gpu"))
+                qputenv("QTWEBENGINE_CHROMIUM_FLAGS", (flags + " --disable-gpu").trimmed());
+        }
+        #endif
 
         QDir dir(TEMP_DIR_PATH);
         if (!dir.exists())

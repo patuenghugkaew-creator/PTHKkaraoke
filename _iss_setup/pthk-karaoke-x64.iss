@@ -1,9 +1,9 @@
-; PTHK Karaoke (based on KaraMixer Edition / Handy Karaoke, GPLv3) - Inno Setup script
+﻿; PTHK Karaoke (based on KaraMixer Edition / Handy Karaoke, GPLv3) - Inno Setup script
 ; Build with:  iscc _iss_setup\pthk-karaoke-x64.iss
 ; Expects the deployed program in D:\REA\PTHK-Build\deploy (see D:\REA\build-pthk.ps1).
 
 #ifndef AppVersion
-  #define AppVersion "1.0.0"
+  #define AppVersion "1.1.0"
 #endif
 #define MyAppName "PTHK Karaoke"
 #define MyAppPublisher "PTHK"
@@ -52,6 +52,8 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 [Run]
 Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Microsoft Visual C++ Runtime..."; Flags: waituntilterminated; Check: IsAdminInstallMode
 Filename: "{app}\{#MyAppExeName}"; Flags: nowait postinstall skipifsilent; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"
+; automatic update (started by the program with /update=1): open the program again when done
+Filename: "{app}\{#MyAppExeName}"; Flags: nowait; Check: IsAutoUpdate
 
 [Dirs]
 Name: "{app}\SoundFonts"; Flags: uninsneveruninstall
@@ -67,16 +69,27 @@ Name: "{app}\Songs\VIDEO"; Flags: uninsneveruninstall
 Name: "{app}\Songs\MP3"; Flags: uninsneveruninstall
 Name: "{app}\Config"; Tasks: portable; Flags: uninsneveruninstall
 Name: "{app}\Data"; Tasks: portable; Flags: uninsneveruninstall
+Name: "{app}\Tools"; Tasks: portable; Flags: uninsneveruninstall
 
 [Files]
 ; the portable Config / Data folders of the build are not packed: the installed program keeps
 ; its settings and song database in %USERPROFILE%\.PTHKKaraoke (or {app}\Config and {app}\Data in portable mode)
-Source: "{#DeployDir}\*"; DestDir: "{app}"; Excludes: "Config,Data,vc_redist.x64.exe,KaraMixer.exe,*.pdb"; Flags: ignoreversion recursesubdirs createallsubdirs
+; (developer logs / leftovers are never packed; Tools and models are downloaded on first use)
+Source: "{#DeployDir}\*"; DestDir: "{app}"; Excludes: "Config,Data,Tools,models,vc_redist.x64.exe,KaraMixer.exe,*.pdb,*.log,*.old,*.bak,debug-logs.txt"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; On the development PC only ("external": read at install time, not packed into Setup.exe; skipped
 ; where the build folder does not exist): start with the settings and the song database already
 ; made there, instead of choosing the folders and building the database again. Never overwritten.
-Source: "{#DeployDir}\Config\*.conf"; DestDir: "{%USERPROFILE}\.PTHKKaraoke\Config"; Flags: external skipifsourcedoesntexist onlyifdoesntexist uninsneveruninstall
-Source: "{#DeployDir}\Data\Database.db3"; DestDir: "{%USERPROFILE}\.PTHKKaraoke\Data"; Flags: external skipifsourcedoesntexist onlyifdoesntexist uninsneveruninstall
+Source: "{#DeployDir}\Config\*.conf"; DestDir: "{%USERPROFILE}\.PTHKKaraoke\Config"; Tasks: not portable; Flags: external skipifsourcedoesntexist onlyifdoesntexist uninsneveruninstall
+Source: "{#DeployDir}\Data\Database.db3"; DestDir: "{%USERPROFILE}\.PTHKKaraoke\Data"; Tasks: not portable; Flags: external skipifsourcedoesntexist onlyifdoesntexist uninsneveruninstall
+; portable install: the same, but into the program folder itself (travels with the drive)
+Source: "{#DeployDir}\Config\*.conf"; DestDir: "{app}\Config"; Tasks: portable; Flags: external skipifsourcedoesntexist onlyifdoesntexist uninsneveruninstall
+Source: "{#DeployDir}\Data\Database.db3"; DestDir: "{app}\Data"; Tasks: portable; Flags: external skipifsourcedoesntexist onlyifdoesntexist uninsneveruninstall
 Source: "..\NOTICE.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\gpl-3.0.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#DeployDir}\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: ignoreversion deleteafterinstall
+
+[Code]
+function IsAutoUpdate: Boolean;
+begin
+  Result := ExpandConstant('{param:update|0}') = '1';
+end;

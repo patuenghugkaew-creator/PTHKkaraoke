@@ -10,6 +10,8 @@
 #include "BASSFX/ReverbFX.h"
 #include "BASSFX/VSTFX.h"
 #include "Midi/AsioOutput.h"
+#include "Config.h"
+#include <QSettings>
 
 #include <cstring>
 #include <memory>
@@ -2472,10 +2474,20 @@ DWORD MidiSynthesizer::createStream(InstrumentType t)
              if (!useFX) flags = flags|BASS_MIDI_NOFX;
              if (!MidiHelper::isStereoSpeaker(instMap[t].speaker))
                  flags = flags|BASS_SAMPLE_MONO;
+             // Events come from the sequencer thread in real time. ASYNC makes BASSMIDI
+             // place each one at the exact sample matching when it was sent, instead of
+             // snapping it to the next render block (which made drums "loose").
+             // Turn off with [Synth] AsyncEvents=false in the app INI if a device misbehaves.
+             static const bool asyncEvents = QSettings(Config::CONFIG_APP_FILE_PATH, QSettings::IniFormat)
+                                                 .value("Synth/AsyncEvents", true).toBool();
+             if (asyncEvents) flags = flags|BASS_MIDI_ASYNC;
 
             HSTREAM ms = BASS_MIDI_StreamCreate(16, flags, sampleRate);
-            if (ms)
+            if (ms) {
                 BASS_ChannelSetAttribute(ms, BASS_ATTRIB_MIDI_VOICES, float(maxVoices));
+                if (asyncEvents)
+                    BASS_ChannelSetAttribute(ms, BASS_ATTRIB_MIDI_QUEUE_ASYNC, 65536.0f);
+            }
             return ms;
         }
         else // VSTi

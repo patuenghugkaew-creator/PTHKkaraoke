@@ -50,3 +50,13 @@ PTHK-Installers/
 km_private.key
 license-tools/km_private.key
 Widgets/km_secret.h
+
+# ---- not source code: kept on the developer PC, not in the repository ----
+# AI runtime DLLs (download: onnxruntime-win-x64 + DirectML, see CLAUDE.md)
+3rdParty/onnxruntime/lib/*.dll
+# BASS for other systems (this program is built for Windows only) and BASS help files
+BASS/*-osx/
+BASS/*-linux/
+BASS/*.chm
+# design files
+*.psd

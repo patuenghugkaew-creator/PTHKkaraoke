@@ -24,6 +24,47 @@ bool Config::isPortableMode()
     return s_portableMode;
 }
 
+// A flash drive / external HD gets another drive letter (or folder) on another computer.
+// The saved settings hold full paths (song folders, SoundFonts, VST...). When the program
+// folder moved since the last start, paths inside the old program folder and on the old
+// drive letter are moved along (C: paths, which belong to the computer, are left alone).
+static void rebasePortablePaths(const QString &appDir)
+{
+    const QString marker = Config::CONFIG_DIR_PATH + "/portable-location.txt";
+    QString oldApp;
+    {
+        QFile m(marker);
+        if (m.open(QIODevice::ReadOnly))
+            oldApp = QString::fromUtf8(m.readAll()).trimmed();
+    }
+    const QString newApp = appDir;
+    if (!oldApp.isEmpty() && oldApp.compare(newApp, Qt::CaseInsensitive) != 0) {
+        const QString oldDrive = oldApp.left(2), newDrive = newApp.left(2);    // "E:"
+        const bool driveMoved = oldDrive.compare(newDrive, Qt::CaseInsensitive) != 0
+                                && oldDrive.compare(QStringLiteral("C:"), Qt::CaseInsensitive) != 0;
+        for (const QString &file : { Config::CONFIG_APP_FILE_PATH, Config::CONFIG_SYNTH_FILE_PATH }) {
+            QFile f(file);
+            if (!f.open(QIODevice::ReadOnly))
+                continue;
+            QString text = QString::fromLatin1(f.readAll());   // INI: non-ASCII is \x-escaped
+            f.close();
+            const QString before = text;
+            text.replace(oldApp + "/", newApp + "/", Qt::CaseInsensitive);
+            text.replace(QString(oldApp).replace('/', "\\\\") + "\\\\",
+                         QString(newApp).replace('/', "\\\\") + "\\\\", Qt::CaseInsensitive);
+            if (driveMoved) {
+                text.replace(oldDrive + "/", newDrive + "/", Qt::CaseInsensitive);
+                text.replace(oldDrive + "\\\\", newDrive + "\\\\", Qt::CaseInsensitive);
+            }
+            if (text != before && f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+                f.write(text.toLatin1());
+        }
+    }
+    QFile m(marker);
+    if (m.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        m.write(newApp.toUtf8());
+}
+
 void Config::initConfigDataPath()
 {
     const QString appDir = QDir::fromNativeSeparators(qApp->applicationDirPath());
@@ -71,6 +112,7 @@ void Config::initConfigDataPath()
         CONFIG_DIR_PATH = appDir + "/Config";
         CONFIG_APP_FILE_PATH = CONFIG_DIR_PATH + "/PTHKKaraoke.conf";
         CONFIG_SYNTH_FILE_PATH = CONFIG_DIR_PATH + "/SynthMixer.conf";
+        rebasePortablePaths(appDir);
     }
 
     // settings made before the rename (KaraMixer.conf) carry over once

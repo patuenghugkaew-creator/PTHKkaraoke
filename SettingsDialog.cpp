@@ -86,7 +86,15 @@ SettingsDialog::SettingsDialog(QWidget *parent, MainWindow *m) :
             break;
         }
 
-        ui->groupBoxUpdate->hide();
+        { // automatic update
+            ui->spinUpdateInterval->setMaximum(24 * 7);
+            ui->spinUpdateInterval->setValue(qBound(1, settings->value("Update/IntervalHours", 24).toInt(), 24 * 7));
+            const bool on = settings->value("Update/Auto", true).toBool();
+            ui->chbAutoCheckUpdate->setChecked(on);
+            ui->lbUpdateInterval->setEnabled(on);
+            ui->spinUpdateInterval->setEnabled(on);
+            connect(ui->spinUpdateInterval, SIGNAL(valueChanged(int)), this, SLOT(onSpinUpdateValueChanged(int)));
+        }
 
         connect(ui->spinSearch, SIGNAL(valueChanged(int)), this, SLOT(onSpinSearchValueChanged(int)));
         connect(ui->spinPlaylist, SIGNAL(valueChanged(int)), this, SLOT(onSpinPlaylistValueChanged(int)));
@@ -958,11 +966,12 @@ void SettingsDialog::on_chbAutoCheckUpdate_toggled(bool checked)
 {
     ui->lbUpdateInterval->setEnabled(checked);
     ui->spinUpdateInterval->setEnabled(checked);
+    settings->setValue("Update/Auto", checked);
 }
 
 void SettingsDialog::onSpinUpdateValueChanged(int value)
 {
-    Q_UNUSED(value)
+    settings->setValue("Update/IntervalHours", value);
 }
 
 void SettingsDialog::on_btnNCNPath_clicked()

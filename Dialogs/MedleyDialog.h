@@ -51,13 +51,19 @@ private:
     QSpinBox   *_spinRhythm = nullptr;
     QComboBox  *_comboRhythm = nullptr;
     QSpinBox   *_spinBpm = nullptr;
-    QComboBox  *_comboTempoMode = nullptr;
+    QPushButton *_btnTempoLock = nullptr;
+    QPushButton *_btnTempoFollow = nullptr;
+    QWidget    *_bpmChips = nullptr;
+    QCheckBox  *_chkKeepFar = nullptr;
+    bool        _tempoFollow = false;   // true = each song keeps its own tempo (BPM 0)
 
     // Transition & Volume
     int         _selectedBars = 1;
     QPushButton *_btnBar0 = nullptr;
     QPushButton *_btnBar1 = nullptr;
     QPushButton *_btnBar2 = nullptr;
+    QPushButton *_btnBar4 = nullptr;
+    QLabel     *_lblBarsHint = nullptr;
     QSlider    *_sliderVol = nullptr;
     QLabel     *_lblVolVal = nullptr;
 
@@ -71,6 +77,7 @@ private:
     bool _isSyncing = false;
 
     void updateBarsSelection(int bars);
+    void updateTempoMode(bool follow);
     void loadFromPlayer();
     void saveToPlayer();
 };

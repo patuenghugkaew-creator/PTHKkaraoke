@@ -9,6 +9,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -34,13 +35,29 @@ public:
     static const ModelInfo *models(int *count);
     static const ModelInfo *model(const QString &key);
 
+    // Where the model runs: 0 = auto (faster of GPU/CPU), 1 = CPU only, 2 = GPU only.
+    // On a machine with one GPU, the model's long GPU bursts stall the whole desktop's
+    // drawing (the YouTube picture freezes ~0.7 s), so CPU can be chosen. Applies on
+    // the next model load.
+    static void setDevicePreference(int pref);
+    static int devicePreference();
+
     // one window (planar 2 x 261120 samples) through a model file, for testing; false on error
     static bool separateOnce(const QString &modelFile, const QString &key, bool gpu, const float *mix, float *inst);
+
+    // Separate a whole track ahead of time (downloaded video songs). mix: interleaved stereo
+    // 44.1 kHz, `frames` long. inst receives the interleaved stereo instrumental (same length);
+    // vocals = mix - inst. progress gets 0..100. Returns false on error / cancel (see error).
+    static bool separateTrack(const QString &modelsDir, const QString &key, bool gpu,
+                              const float *mix, long long frames, std::vector<float> &inst,
+                              const std::function<void(int)> &progress,
+                              const std::atomic<bool> *cancel, QString *error);
 
     explicit AiVocalEngine(const QString &modelsDir);
     ~AiVocalEngine();
 
     void selectModel(const QString &key);      // loads (and downloads) in the background
+    void reloadModel();                         // load the current model again (e.g. CPU/GPU changed)
     QString modelKey() const;
 
     // capture thread: interleaved stereo at 44.1 kHz
@@ -56,6 +73,7 @@ public:
     QString statusText() const;                 // for the settings dialog
     double delaySeconds() const;                // picture delay needed (0 = not running)
     bool receiving() const;
+    bool computing() const { return isComputing.load(); }   // the model is separating a window right now
 
 private:
     struct Block { std::vector<float> data; long long idx; };   // 4 x n: inst L/R, voc L/R (planar)
@@ -100,6 +118,7 @@ private:
 
     std::thread workerThread, loaderThread;
     std::atomic<bool> quit{false};
+    std::atomic<bool> isComputing{false};
 };
 
 #endif // AIVOCAL_H

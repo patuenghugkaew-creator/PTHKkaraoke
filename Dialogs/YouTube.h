@@ -102,6 +102,10 @@ public:
     explicit YouTubeSearchDialog(QWidget *parent = nullptr, const YtItem &seed = YtItem());
     ~YouTubeSearchDialog() override;
 
+    // Folder of the downloaded clips: the "ดาวน์โหลด" button lists these files (played
+    // locally, with the AI vocal cut). Their items carry id "file:<absolute path>".
+    void setLocalVideoDir(const QString &dir) { localDir = dir; }
+
 signals:
     void playNow(const YtItem &item);
     void addToQueue(const YtItem &item);
@@ -113,6 +117,7 @@ protected:
 private:
     void search();
     void showHome();
+    void showLocalVideos();
     void loadSuggestions();
     void pickRandom();
     void buildGenreButtons();
@@ -137,6 +142,7 @@ private:
     YtItem seed;
     QVector<YtItem> suggestions;        // the "next songs" of the home page
     bool homeMode = false;
+    QString localDir;
     QStringList pendingThumbs;
     int activeThumbs = 0;
 };

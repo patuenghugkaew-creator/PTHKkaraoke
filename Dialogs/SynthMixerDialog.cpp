@@ -1192,6 +1192,32 @@ void SynthMixerDialog::resetMixLevel(InstrumentType t)
     synth->setVolume(t, 50);
 }
 
+void SynthMixerDialog::showAudioBands(const int *bands, int count, int total)
+{
+    using T = InstrumentType;
+    static const QVector<QVector<T>> byBand = {
+        { T::Bass, T::BassDrum, T::LowTom },                                                     // 60-250 Hz
+        { T::Piano, T::Organ, T::Accordion, T::AcousticGuitarNylon, T::AcousticGuitarSteel,
+          T::Strings, T::Ensemble, T::SynthPad, T::MidTom, T::Conga },                           // 250-700 Hz
+        { T::ElectricGuitarJazz, T::ElectricGuitarClean, T::OverdrivenGuitar, T::DistortionGuitar,
+          T::Trumpet, T::Brass, T::Saxophone, T::Reed, T::Pipe, T::SynthLead, T::Ethnic,
+          T::HighTom, T::Bongo, T::Timbale },                                                    // 0.7-2.5 kHz
+        { T::Snare, T::SideStick, T::ChromaticPercussion, T::HarmonicsGuitar, T::SynthBrass,
+          T::Cowbell, T::SynthEffects },                                                         // 2.5-6 kHz
+        { T::Hihat, T::CrashCymbal, T::RideCymbal, T::SmallCupShapedCymbals, T::ThaiChap,
+          T::Percussive, T::PercussionEtc, T::SoundEffects },                                   // 6-14 kHz
+    };
+    for (int b = 0; b < count && b < byBand.size(); ++b) {
+        if (bands[b] <= 0)
+            continue;
+        for (T t : byBand[b])
+            if (InstCh *c = chInstMap.value(t, nullptr))
+                c->peak(bands[b]);
+    }
+    if (masterStrip && total > 0)
+        masterStrip->peak(qMin(127, total));
+}
+
 void SynthMixerDialog::showPeakVU(InstrumentType t, int bus,  int ch, int note, int velocity)
 {
     chInstMap[t]->peak(velocity);

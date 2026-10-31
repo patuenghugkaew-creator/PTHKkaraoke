@@ -295,7 +295,7 @@
           <item>
            <widget class="QCheckBox" name="chbAutoCheckUpdate">
             <property name="text">
-             <string>ตรวจสอบอัพเดทอัตโนมัต</string>
+             <string>ตรวจสอบอัปเดตอัตโนมัติ</string>
             </property>
            </widget>
           </item>

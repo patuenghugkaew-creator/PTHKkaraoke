@@ -160,6 +160,19 @@ public:
     int medleyPreset() const { return _medleyPreset; }
     void setMedleyPreset(int preset) { _medleyPreset = preset; }
 
+    // Tempo a song should play at under a locked medley tempo. Slow songs use half the
+    // lock (and very fast ones double), so a ballad isn't rushed to dance speed but stays
+    // on the same pulse. Songs too far even then keep their own tempo.
+    // keepFar: songs whose feel is >15% away from the lock (even at half/double) keep their own tempo.
+    // !keepFar: every song plays at exactly lockBpm.
+    static int fitLockedBpm(int lockBpm, int songBpm, bool keepFar = true);
+    bool medleyKeepFarSongs() const { return _medleyKeepFarSongs; }
+    void setMedleyKeepFarSongs(bool on) { _medleyKeepFarSongs = on; }
+
+    // drum hold ("ค้างจังหวะกลอง") on the playing MIDI song
+    void toggleDrumHold();
+    bool isDrumHoldOn() const;
+
     void loadMedleySettings();
     void saveMedleySettings();
 
@@ -178,9 +191,14 @@ signals:
     void nextMedleyStarted();
     void nextMedleyAfterStarted();
     void medleyCountIn(int beat, int beatsPerBar, int bar, int totalBars);
+    void drumHoldChanged(int state);   // see MidiSequencer::drumHoldChanged
+
+private:
+    void connectSequencer(MidiSequencer *seq);
 
 private slots:
     void onSeqBpmChanged(int bpm);
+    void onSeqEndApproaching(double endClockMs);
 
 private:
     void sendEventToDevices(MidiEvent evt);
@@ -228,6 +246,7 @@ private:
     bool                _medleyAudioNormalize = false;
     int                 _medleyPreset = 0;
     bool                _useMedley = false;
+    bool                _medleyKeepFarSongs = true;
     bool                _useSolo = false;
 
     QString _medleyId = "";

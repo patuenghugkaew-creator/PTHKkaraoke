@@ -48,6 +48,7 @@ class MixerAutoHide;
 class DmxLights;
 class YtAudio;
 class AiVocalEngine;
+namespace Updater { struct Release; }
 
 
 namespace Ui {
@@ -103,6 +104,15 @@ public:
     void stopVideoAudioStream();
     void setVideoAudioVolume();
     void applyVideoVocalCut();
+    void enqueueAiStems(const QString &video);
+    void startSibBackfill();
+    // automatic update (GitHub Releases)
+    void checkForUpdate(bool manual);
+    void offerUpdate(const Updater::Release &r, bool manual);
+    void installUpdate(const Updater::Release &r);
+    bool updateChecking = false;
+    void toggleDrumHold();
+    void songUnplayable(const QString &reason);
     void changeVideoKey(int step);
     qint64 videoAudioPositionMs();
     static void CALLBACK videoVocalDspCallback(HDSP handle, DWORD channel, void *buffer, DWORD length, void *user);
@@ -110,6 +120,7 @@ public:
     // Karaoke recording (music + microphone, F12) and vocal score
     void showHelpDialog();     // F1: shortcut keys and how to use the player
     QStringList importSongs(const QStringList &files, bool quiet = false);
+    QStringList importSongsImpl(const QStringList &files, bool quiet);
     void showImportDialog();
     void showYouTubeDownload(const QString &url = QString());
     bool isSongPlaying();
@@ -257,6 +268,12 @@ private:
     DWORD videoAudioStream = 0;
     DWORD videoAudioTempo = 0;
     VocalRemover *videoVocalRemover = nullptr;
+    bool videoStemMode = false;
+    bool videoStemMatrixSet = false;
+    int videoMixerChans = 2;                    // output channels of the main mixer (matrix size)                 // playing the AI stems file (music + vocals, 4 ch)
+    class AiStemMaker *aiStems = nullptr;       // background AI separation of video songs
+    class SibBackfill *sibFill = nullptr;
+    class AudioBandMeter *audioMeter = nullptr;  // audio songs' levels for the synth mixer       // fills SIB lyrics preview / tempo in the background
     int   videoPitch = 0;
 
     bool vocalScore = false;
@@ -285,9 +302,10 @@ private:
     bool ytAiLatched = false;           // AI was used: it keeps running, so the cut key works at once
     void applyYtVocalCut();             // after the cut key / settings changed
     void showYtVocalDialog();
-    struct DelayedFrame { qint64 t; QImage img; };
+    struct DelayedFrame { qint64 t; QPixmap img; };   // QPixmap: no copy/convert per frame
     std::deque<DelayedFrame> delayedFrames;     // the YouTube picture kept for the AI delay
     QElapsedTimer frameClock;
+    bool ytInputGateOpen = true;               // false while switching YouTube clips (see playYouTube)
     void changeYtKey(int step);
 
     // song transitions
@@ -313,6 +331,7 @@ private:
     SongDatabase *db;
     QTimer *timer1, *timer2, *positionTimer, *lyricsTimer;
     QTimer *detailTimer;
+    QTimer *medleyRetempoTimer = nullptr;   // re-prepares the next medley song after a live tempo change
 
     QList<Song*> playlist;
     MidiPlayer *player;

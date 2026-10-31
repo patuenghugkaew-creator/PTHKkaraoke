@@ -32,7 +32,17 @@ SOURCES += main.cpp\
     Dialogs/SongListsDialog.cpp \
     Dialogs/YouTube.cpp \
     Dmx/DmxLights.cpp \
-        MainWindow.cpp \
+    MainWindow.cpp \
+    MainWindow_Import.cpp \
+    MainWindow_Audio.cpp \
+    MainWindow_Remote.cpp \
+    MainWindow_YouTube.cpp \
+    MainWindow_Playback.cpp \
+    MainWindow_Keys.cpp \
+    MainWindow_Playlist.cpp \
+    MainWindow_Menu.cpp \
+    MainWindow_Update.cpp \
+    MainWindow_Player.cpp \
     MedleyLoader.cpp \
     SettingsDialog.cpp \
     SongDatabase.cpp \
@@ -114,6 +124,8 @@ SOURCES += main.cpp\
 
 HEADERS  += Widgets/PanKnob.h \
     MainWindow.h \
+    MainWindow_p.h \
+    Updater.h \
     Dialogs/MedleyDialog.h \
     Dialogs/EasyMedleyDialog.h \
     Widgets/TransitionPreviewWidget.h \

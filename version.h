@@ -3,11 +3,11 @@
 
 // PTHK Karaoke - based on KaraMixer Edition (Buai Music) and Handy Karaoke (pie62), GPLv3
 
-#define VER_FILEVERSION             1,0,0
-#define VER_FILEVERSION_STR         "v.1.0.0\0"
+#define VER_FILEVERSION             1,1,1
+#define VER_FILEVERSION_STR         "v.1.1.1\0"
 
-#define VER_PRODUCTVERSION          1,0,0
-#define VER_PRODUCTVERSION_STR      "v.1.0.0\0"
+#define VER_PRODUCTVERSION          1,1,1
+#define VER_PRODUCTVERSION_STR      "v.1.1.1\0"
 
 #define VER_COMPANYNAME_STR         "PTHK"
 #define VER_FILEDESCRIPTION_STR     "PTHK Karaoke"

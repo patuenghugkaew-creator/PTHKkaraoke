@@ -31,6 +31,39 @@ public:
     QVector<long> curTempData() { return cursorsTemp; }
     long lastActiveLyricTick() const { return computeLastLyricTick(lyrics, cursors); }
     long lastActiveTempLyricTick() const { return computeLastLyricTick(lyricsTemp, cursorsTemp); }
+    long firstSungTempLyricTick() const { return computeFirstSungTick(lyricsTemp, cursorsTemp); }
+
+    // Tick of the first real sung word. NCN/EMK lyric files start with a header
+    // (title, artist, key, blank line) and a "....music...." progress line whose
+    // cursors run through the intro; those must not count as singing.
+    static long computeFirstSungTick(const QStringList &lyrs, const QVector<long> &curs)
+    {
+        const int header = (lyrs.size() > 6 && lyrs[3].trimmed().isEmpty()) ? 4 : 0;
+        int idx = 0;
+        for (int li = 0; li < lyrs.size(); ++li) {
+            const QString &l = lyrs[li];
+            if (li >= header) {
+                const QString t = l.trimmed();
+                QString text = t;
+                text.remove('.');
+                const bool meta = t.isEmpty() || isMetaOnlyLine(t)
+                                  || t.contains("music", Qt::CaseInsensitive) || t.contains("ดนตรี")
+                                  || t.contains("intro", Qt::CaseInsensitive) || t.contains("อินโทร")
+                                  || t.contains("solo", Qt::CaseInsensitive)
+                                  || text.trimmed().isEmpty();
+                if (!meta) {
+                    int k = 0;
+                    while (k < l.size() && (l[k] == '.' || l[k].isSpace()))
+                        ++k;
+                    const int ci = idx + k;
+                    if (ci < curs.size() && curs[ci] > 0 && curs[ci] < 1000000)
+                        return curs[ci];
+                }
+            }
+            idx += l.length() + 1;
+        }
+        return -1;
+    }
     static bool isMetaOnlyLine(const QString &line)
     {
         const QString t = line.trimmed();

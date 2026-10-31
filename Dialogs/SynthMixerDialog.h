@@ -23,6 +23,8 @@ class SynthMixerDialog : public QDialog
     Q_OBJECT
 
 public:
+    // audio songs: strips follow frequency bands (low..high, 0..127), MASTER the real level
+    void showAudioBands(const int *bands, int count, int total);
     explicit SynthMixerDialog(QWidget *parent = 0, MainWindow *mainWin = 0);//, MainWindow *mainWin = 0);
     ~SynthMixerDialog();
 

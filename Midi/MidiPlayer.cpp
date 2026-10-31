@@ -1,5 +1,7 @@
 #include "Config.h"
 #include "MidiPlayer.h"
+#include <cmath>
+#include <QCoreApplication>
 #include <QSettings>
 #include "Midi/FaderTaper.h"
 #include <algorithm>
@@ -302,6 +304,9 @@ bool MidiPlayer::load(const QString &file, bool seekFileChunkID)
             this, SLOT(onSeqFinished()), Qt::DirectConnection);
     connect(_midiSeq, SIGNAL(medleyCountIn(int,int,int,int)),
             this, SIGNAL(medleyCountIn(int,int,int,int)), Qt::DirectConnection);
+    connect(_midiSeq, SIGNAL(endApproaching(double)),
+            this, SLOT(onSeqEndApproaching(double)), Qt::DirectConnection);
+    connect(_midiSeq, SIGNAL(drumHoldChanged(int)), this, SIGNAL(drumHoldChanged(int)));
 
     if (!_midiSeq->load(file, seekFileChunkID))
         return false;
@@ -355,6 +360,8 @@ void MidiPlayer::stop(bool resetPos)
         return;
 
     _midiSeq->stop(resetPos);
+    if (_midiSeqTemp != nullptr && _midiSeqTemp->isRunning())
+        _midiSeqTemp->stop(true);   // next medley song was pre-started
 
     sendAllNotesOff();
 }
@@ -711,8 +718,11 @@ void MidiPlayer::loadMedleySettings()
 {
     QSettings s(Config::CONFIG_APP_FILE_PATH, QSettings::IniFormat);
     s.beginGroup("Medley");
-    _useMedley = s.value("Enable", false).toBool();
+    // Medley always starts OFF (like eXtreme: Ctrl+[ / F11 turns it on each session).
+    // Remembering "on" made every song after a restart play at the locked medley tempo.
+    _useMedley = false;
     _medleyPreset = s.value("Preset", 0).toInt();
+    _medleyKeepFarSongs = s.value("KeepFarSongs", true).toBool();
     _medleyBPM = s.value("BPM", 120).toInt();
     _medleyTempoMode = s.value("TempoMode", 0).toInt();
     _medleyTransitionBars = s.value("TransitionBars", 1).toInt();
@@ -738,6 +748,7 @@ void MidiPlayer::saveMedleySettings()
     s.beginGroup("Medley");
     s.setValue("Enable", _useMedley);
     s.setValue("Preset", _medleyPreset);
+    s.setValue("KeepFarSongs", _medleyKeepFarSongs);
     s.setValue("BPM", _medleyBPM);
     s.setValue("TempoMode", _medleyTempoMode);
     s.setValue("TransitionBars", _medleyTransitionBars);
@@ -758,10 +769,38 @@ void MidiPlayer::saveMedleySettings()
 }
 
 
+int MidiPlayer::fitLockedBpm(int lockBpm, int songBpm, bool keepFar)
+{
+    if (lockBpm <= 0 || songBpm <= 0)
+        return songBpm;
+    // "Keep far songs" unticked = the operator wants every song at exactly this tempo
+    // (e.g. an 80 BPM song played as a 151 BPM medley), so do just that.
+    if (!keepFar)
+        return lockBpm;
+    // Ticked: a slow song uses half the lock (same pulse, keeps its feel), a very fast
+    // one double; a song far from both keeps its own tempo.
+    int best = lockBpm;
+    double bestDiff = 1e9;
+    for (double f : {1.0, 0.5, 2.0}) {
+        const int cand = int(lockBpm * f + 0.5);
+        if (cand < 30 || cand > 260)
+            continue;
+        const double diff = qAbs(std::log(double(cand) / songBpm));
+        if (diff < bestDiff) { bestDiff = diff; best = cand; }
+    }
+    // More than ~15% away even at half/double: forcing it would change the song's
+    // feel (e.g. a 115 BPM ballad pushed to 145), so it keeps its own tempo.
+    if (keepFar && bestDiff > std::log(1.15))
+        return songBpm;
+    return best;
+}
+
 bool MidiPlayer::loadNextMedley(const QString &file, int cutStartBar, int cutEndBar, int midiSpeed, int transpose)
 {
     if (!_useMedley)
         return false;
+
+    MidiSequencer::timingLog(QString("next song queued: %1").arg(QFileInfo(file).fileName()));
 
     if (_midiSeqTemp != nullptr)
         delete _midiSeqTemp;
@@ -775,9 +814,10 @@ bool MidiPlayer::loadNextMedley(const QString &file, int cutStartBar, int cutEnd
     const int sourceBpm = _midiSeqTemp->currentBpm();
     // Easy Medley's 0 BPM mode keeps each queued song at its own tempo.
     // midiSpeed is the per-song adjustment set from the playlist.
-    const int targetBpm = _medleyBPM > 0
-        ? _medleyBPM
-        : qBound(20, sourceBpm + midiSpeed, 250);
+    const int songBpm = qBound(20, sourceBpm + midiSpeed, 250);
+    const int targetBpm = _medleyBPM > 0 ? fitLockedBpm(_medleyBPM, songBpm, _medleyKeepFarSongs) : songBpm;
+    MidiSequencer::timingLog(QString("tempo: song %1 BPM, lock %2 -> plays at %3 BPM")
+                             .arg(songBpm).arg(_medleyBPM).arg(targetBpm));
     _midiSeqTemp->setBpmSpeed(targetBpm - sourceBpm);
     _midiTransposeTemp = transpose;
 
@@ -824,27 +864,37 @@ void MidiPlayer::sendEvent(MidiEvent e)
 
 void MidiPlayer::onSeqFinished()
 {
+    // Only the current song's thread may drive the hand-off (a pre-started next
+    // song that gets stopped/deleted also emits finished()).
+    // (sender() is unreliable for direct connections from another thread; the
+    // sequencer *is* the emitting thread, so compare against the current thread.)
+    // MainWindow::onPlayerThreadFinished() also calls this directly from the GUI thread.
+    if (QThread::currentThread() != static_cast<QThread*>(_midiSeq)
+        && QThread::currentThread() != QCoreApplication::instance()->thread())
+        return;
+
     if (_useMedley) {
         if (_midiSeq->isSeqFinished() && (_midiSeqTemp != nullptr)) {
+            const bool preStarted = _midiSeqTemp->isRunning();
+            if (!preStarted) {
+                _midiSeqTemp->setOutgoingGroove(_midiSeq->extractOutgoingGroove());
+                _midiSeqTemp->setMedleyFromBpm(_midiSeq->currentBpm());
+                _midiSeqTemp->setMedleyStartClockMs(_midiSeq->idealEndClockMs());
+            }
             _midiSeq->deleteLater();
             _midiSeq = _midiSeqTemp;
             _midiSeqTemp = nullptr;
 
-            connect(_midiSeq, SIGNAL(playingEvent(MidiEvent)),
-                    this, SLOT(sendEvent(MidiEvent)), Qt::DirectConnection);
-            connect(_midiSeq, SIGNAL(bpmChanged(int)),
-                    this, SLOT(onSeqBpmChanged(int)), Qt::DirectConnection);
-            connect(_midiSeq, SIGNAL(finished()),
-                    this, SLOT(onSeqFinished()), Qt::DirectConnection);
-    connect(_midiSeq, SIGNAL(medleyCountIn(int,int,int,int)),
-            this, SIGNAL(medleyCountIn(int,int,int,int)), Qt::DirectConnection);
+            if (!preStarted)
+                connectSequencer(_midiSeq);
 
             _midiTranspose = _midiTransposeTemp;
             _midiTransposeTemp = 0;
 
             // Do NOT call compactSoundfont() during medley transition to prevent audio stutter!
             emit nextMedleyStarted();
-            _midiSeq->start(QThread::TimeCriticalPriority);
+            if (!preStarted)
+                _midiSeq->start(QThread::TimeCriticalPriority);
             emit nextMedleyAfterStarted();
         } else if (_midiSeq->isSeqFinished() && (_midiSeqTemp == nullptr)) {
             emit finished();
@@ -852,6 +902,50 @@ void MidiPlayer::onSeqFinished()
     } else {
         emit finished();
     }
+}
+
+void MidiPlayer::connectSequencer(MidiSequencer *seq)
+{
+    connect(seq, SIGNAL(playingEvent(MidiEvent)),
+            this, SLOT(sendEvent(MidiEvent)), Qt::DirectConnection);
+    connect(seq, SIGNAL(bpmChanged(int)),
+            this, SLOT(onSeqBpmChanged(int)), Qt::DirectConnection);
+    connect(seq, SIGNAL(finished()),
+            this, SLOT(onSeqFinished()), Qt::DirectConnection);
+    connect(seq, SIGNAL(medleyCountIn(int,int,int,int)),
+            this, SIGNAL(medleyCountIn(int,int,int,int)), Qt::DirectConnection);
+    connect(seq, SIGNAL(endApproaching(double)),
+            this, SLOT(onSeqEndApproaching(double)), Qt::DirectConnection);
+    connect(seq, SIGNAL(drumHoldChanged(int)), this, SIGNAL(drumHoldChanged(int)));
+}
+
+void MidiPlayer::toggleDrumHold()
+{
+    if (_midiSeq)
+        _midiSeq->toggleDrumHold();
+}
+
+bool MidiPlayer::isDrumHoldOn() const
+{
+    return _midiSeq && _midiSeq->isDrumHoldOn();
+}
+
+// The current song is ~0.4 s from its cut-out point: start the next medley song's
+// thread now. It prepares everything and waits for the exact end moment, so thread
+// start-up time can no longer delay the first drum hit of the bridge.
+void MidiPlayer::onSeqEndApproaching(double endClockMs)
+{
+    if (QThread::currentThread() != static_cast<QThread*>(_midiSeq) || !_useMedley)
+        return;
+    MidiSequencer *next = _midiSeqTemp;
+    if (next == nullptr || next->isRunning() || !next->isMedleyTransition())
+        return;
+    next->setOutgoingGroove(_midiSeq->extractOutgoingGroove());
+    _midiSeq->setEndHitHold(next->medleyTransitionBars() > 0);
+    next->setMedleyFromBpm(_midiSeq->currentBpm());
+    next->setMedleyStartClockMs(endClockMs);
+    connectSequencer(next);
+    next->start(QThread::TimeCriticalPriority);
 }
 
 void MidiPlayer::onSeqBpmChanged(int bpm)

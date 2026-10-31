@@ -8,7 +8,7 @@
 struct RhythmBridgeEvent {
     double beatOffset;          // in beats from transition start (0.0 to totalBeats)
     MidiEventType eventType;    // NoteOn, NoteOff, Controller, ProgramChange, PitchBend
-    int channel;                // 0..15 (Ch 9=Drums, 10=Percussion, 11=Bass, 12=Chords/Phin, 13=Brass, 14=Organ, 15=Khaen)
+    int channel;                // 0..15; the medley bridge only uses Ch 9 (drums)
     int data1;                  // Note number, Controller CC#, or Program#
     int data2;                  // Velocity (Note) or Controller value
 };

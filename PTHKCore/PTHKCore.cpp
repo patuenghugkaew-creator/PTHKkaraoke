@@ -252,8 +252,15 @@ EmkSong readEmk(const QString &filePath)
                             else if (k == QLatin1String("TEMPO")) song.tempo = v.toInt();
                         }
                     }
-                } else if (uncomp.startsWith("MThd")) {
+                } else if (uncomp.startsWith("MThd")
+                           || (song.midData.isEmpty() && uncomp.size() > 22
+                               && uncomp.mid(4, 4) == QByteArray("\x00\x00\x00\x06", 4)
+                               && uncomp.mid(14, 4) == "MTrk")) {
+                    // Many EMK files scramble the 4-byte "MThd" tag of the MIDI (e.g. "X&\"\xa6");
+                    // the rest is a normal MIDI (header length 6, first "MTrk" at byte 14).
                     song.midData = uncomp;
+                    if (!song.midData.startsWith("MThd"))
+                        song.midData.replace(0, 4, "MThd");
                 } else if (!song.midData.isEmpty() && song.lyrData.isEmpty()) {
                     song.lyrData = uncomp;
                 } else if (!song.lyrData.isEmpty() && song.curData.isEmpty()) {

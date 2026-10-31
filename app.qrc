@@ -2,5 +2,6 @@
     <qresource prefix="/">
         <file>update-database.sql</file>
         <file>dsa_pub.pem</file>
+        <file>Images/default-background.png</file>
     </qresource>
 </RCC>

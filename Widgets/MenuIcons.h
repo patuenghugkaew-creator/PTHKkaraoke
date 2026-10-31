@@ -21,7 +21,7 @@ enum Kind {
     Soundfont, Reset, Save, Open, Language, Theme, About, Exit, Phone,
     AddSong, YouTube, Star, MicRecord, Screen, Fullscreen, Video,
     Search, Book, Download, AiSparkle, Lock, DmxLight, Trophy,
-    Transition, Help, QrCode
+    Transition, Help, QrCode, Drum
 };
 
 inline bool isDark()
@@ -84,6 +84,7 @@ inline QColor defaultAccent(Kind kind)
     case Help:       return QColor("#0284c7"); // Help blue
     case About:      return QColor("#4f46e5"); // Indigo info
     case Exit:       return QColor("#ef4444"); // Power red
+    case Drum:       return QColor("#e11d48"); // Rose drum
     }
     return normalColor();
 }
@@ -263,6 +264,16 @@ inline QIcon make(Kind kind, const QColor &customColor)
         p.drawLine(QPointF(3.8, 13.0), QPointF(15.5, 7.0));
         p.drawLine(QPointF(13.0, 5.8), QPointF(15.8, 7.0));
         p.drawLine(QPointF(13.0, 14.2), QPointF(15.8, 13.0));
+        break;
+    }
+    case Drum: {
+        // Snare drum (top, shell, bottom rim) with two sticks
+        p.drawEllipse(QRectF(3.5, 7.2, 13.0, 4.0));
+        p.drawLine(QPointF(3.5, 9.2), QPointF(3.5, 14.6));
+        p.drawLine(QPointF(16.5, 9.2), QPointF(16.5, 14.6));
+        p.drawArc(QRectF(3.5, 12.6, 13.0, 4.0), 180 * 16, 180 * 16);
+        p.drawLine(QPointF(6.5, 8.2), QPointF(9.4, 2.6));
+        p.drawLine(QPointF(13.5, 8.2), QPointF(10.6, 2.6));
         break;
     }
     case QrCode: {

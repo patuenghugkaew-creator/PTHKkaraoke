@@ -1,6 +1,7 @@
 #include <QTextCodec>
 #include "PTHKCore.h"
 #include "SongDatabase.h"
+#include "SongFuzzy.h"
 
 #include "Midi/MidiFile.h"
 #include "Midi/HNKFile.h"
@@ -488,6 +489,8 @@ QString SongDatabase::kedmaneeToThai(const QString &s)
 
 SongDatabase::~SongDatabase()
 {
+    delete fuzzy;           // waits for a running index build
+    fuzzy = nullptr;
     if (db.isOpen()) {
         db.close();
     }
@@ -1021,6 +1024,10 @@ Song* SongDatabase::nextType(const QString &s)
         sg = search(_searchText);
         break;
     case SearchType::ByArtist:
+        searchType = SearchType::ByVideo;
+        sg = search(_searchText);
+        break;
+    case SearchType::ByVideo:
         searchType = SearchType::ByAll;
         sg = search(_searchText);
         break;
@@ -1042,34 +1049,96 @@ void setSong(Song *s, QSqlQuery *qry) {
     s->setTranspose(0);
 }
 
-// "Search all": id, name and artist prefix matches first, then songs whose name
-// only contains the text somewhere in the middle, then KAR files by name.
+// "Search all": video / MP3 songs (the user's own files, few) whose name or artist
+// contains the text come first - downloaded clip names usually start with words like
+// "คาราโอเกะ", so a prefix match would never find them. Then id, name and artist prefix
+// matches, then names containing the text in the middle, then KAR files by name.
 static QString byAllSql()
 {
-    return "SELECT * FROM (SELECT * FROM songs WHERE id LIKE ? AND songtype != 'KAR' ORDER BY id, name, artist) "
+    return "SELECT * FROM (SELECT * FROM songs WHERE songtype IN ('VIDEO','MP3') AND (name LIKE ? OR artist LIKE ?) ORDER BY name, artist, id) "
            "UNION ALL "
-           "SELECT * FROM (SELECT * FROM songs WHERE name LIKE ? AND songtype != 'KAR' ORDER BY name, artist, id) "
+           "SELECT * FROM (SELECT * FROM songs WHERE id LIKE ? AND songtype NOT IN ('KAR','VIDEO','MP3') ORDER BY id, name, artist) "
            "UNION ALL "
-           "SELECT * FROM (SELECT * FROM songs WHERE artist LIKE ? AND songtype != 'KAR' ORDER BY artist, name, id) "
+           "SELECT * FROM (SELECT * FROM songs WHERE name LIKE ? AND songtype NOT IN ('KAR','VIDEO','MP3') ORDER BY name, artist, id) "
            "UNION ALL "
-           "SELECT * FROM (SELECT * FROM songs WHERE name LIKE ? AND name NOT LIKE ? AND songtype != 'KAR' ORDER BY name, artist, id) "
+           "SELECT * FROM (SELECT * FROM songs WHERE artist LIKE ? AND songtype NOT IN ('KAR','VIDEO','MP3') ORDER BY artist, name, id) "
+           "UNION ALL "
+           "SELECT * FROM (SELECT * FROM songs WHERE name LIKE ? AND name NOT LIKE ? AND songtype NOT IN ('KAR','VIDEO','MP3') ORDER BY name, artist, id) "
            "UNION ALL "
            "SELECT * FROM (SELECT * FROM songs WHERE name LIKE ? AND songtype = 'KAR' ORDER BY name, artist, id) ";
 }
 
 static void bindByAll(QSqlQuery &q, const QString &s)
 {
-    q.bindValue(0, s + "%");
-    q.bindValue(1, s + "%");
+    q.bindValue(0, "%" + s + "%");
+    q.bindValue(1, "%" + s + "%");
     q.bindValue(2, s + "%");
-    q.bindValue(3, "%" + s + "%");
+    q.bindValue(3, s + "%");
     q.bindValue(4, s + "%");
     q.bindValue(5, "%" + s + "%");
+    q.bindValue(6, s + "%");
+    q.bindValue(7, "%" + s + "%");
+}
+
+static const char *kByVideoSql =
+    "SELECT * FROM songs WHERE songtype IN ('VIDEO','MP3') AND (name LIKE ? OR artist LIKE ?) "
+    "ORDER BY name, artist, id";
+
+static void bindSearch(QSqlQuery &q, SearchType t, const QString &s)
+{
+    if (t == SearchType::ByAll) {
+        bindByAll(q, s);
+    } else if (t == SearchType::ByVideo) {
+        q.bindValue(0, "%" + s + "%");
+        q.bindValue(1, "%" + s + "%");
+    } else {
+        q.bindValue(0, s + "%");
+    }
+}
+
+void SongDatabase::startFuzzyIndex()
+{
+    if (!fuzzy)
+        fuzzy = new SongFuzzy();
+    fuzzy->build(db.databaseName());
+}
+
+bool SongDatabase::loadRow(qint64 rowid)
+{
+    QSqlQuery q(db);
+    q.prepare("SELECT * FROM songs WHERE rowid = ?");
+    q.bindValue(0, rowid);
+    const bool ok = q.exec() && q.next();
+    if (ok)
+        setSong(song, &q);
+    q.finish();
+    return ok;
+}
+
+Song *SongDatabase::searchFuzzy(const QString &s)
+{
+    fuzzyMode = false;
+    fuzzyRows.clear();
+    fuzzyPos = 0;
+    if (!fuzzy || !fuzzy->isReady())
+        return song;
+    const QVector<qint64> rows = fuzzy->find(s);
+    for (int i = 0; i < rows.size(); ++i) {
+        if (loadRow(rows[i])) {             // skips rows deleted since the index was built
+            fuzzyRows = rows.mid(i);
+            fuzzyMode = true;
+            lastFound = true;
+            _searchText = s;
+            break;
+        }
+    }
+    return song;
 }
 
 Song *SongDatabase::search(const QString &s)
 {
     QString sql = "";
+    fuzzyMode = false;
     _searchText = s;
     currentResultIndex = 0;
     lastFound = false;
@@ -1095,14 +1164,14 @@ Song *SongDatabase::search(const QString &s)
         sql = "SELECT * FROM songs WHERE artist LIKE ? "
               "ORDER BY artist, name, id LIMIT 1";
         break;
+    case SearchType::ByVideo:
+        sql = QString(kByVideoSql) + " LIMIT 1";
+        break;
     }
 
     QSqlQuery query(db);
     query.prepare(sql);
-    if (searchType == SearchType::ByAll)
-        bindByAll(query, s);
-    else
-        query.bindValue(0, s + "%");
+    bindSearch(query, searchType, s);
 
     if (query.exec()) {
         if (query.next()) {
@@ -1118,6 +1187,14 @@ Song *SongDatabase::search(const QString &s)
 
 Song *SongDatabase::searchNext()
 {
+    if (fuzzyMode) {
+        while (fuzzyPos + 1 < fuzzyRows.size()) {
+            ++fuzzyPos;
+            if (loadRow(fuzzyRows[fuzzyPos]))
+                break;
+        }
+        return song;
+    }
     QString sql = "";
 
     switch (searchType) {
@@ -1136,15 +1213,15 @@ Song *SongDatabase::searchNext()
         sql = "SELECT * FROM songs WHERE artist LIKE ? "
               "ORDER BY artist, name, id";
         break;
+    case SearchType::ByVideo:
+        sql = kByVideoSql;
+        break;
     }
 
     QSqlQuery q(db);
     q.prepare(sql);
 
-    if (searchType == SearchType::ByAll)
-        bindByAll(q, _searchText);
-    else
-        q.bindValue(0, _searchText + "%");
+    bindSearch(q, searchType, _searchText);
 
     if (q.exec() && q.seek(currentResultIndex + 1)) {
         currentResultIndex++;
@@ -1159,6 +1236,14 @@ Song *SongDatabase::searchNext()
 
 Song *SongDatabase::searchPrevious()
 {
+    if (fuzzyMode) {
+        while (fuzzyPos > 0) {
+            --fuzzyPos;
+            if (loadRow(fuzzyRows[fuzzyPos]))
+                break;
+        }
+        return song;
+    }
     QString sql = "";
 
     switch (searchType) {
@@ -1177,15 +1262,15 @@ Song *SongDatabase::searchPrevious()
         sql = "SELECT * FROM songs WHERE artist LIKE ? "
               "ORDER BY artist, name, id";
         break;
+    case SearchType::ByVideo:
+        sql = kByVideoSql;
+        break;
     }
 
     QSqlQuery q(db);
     q.prepare(sql);
 
-    if (searchType == SearchType::ByAll)
-        bindByAll(q, _searchText);
-    else
-        q.bindValue(0, _searchText + "%");
+    bindSearch(q, searchType, _searchText);
 
     if (q.exec() && q.seek(currentResultIndex - 1)) {
         currentResultIndex--;
@@ -1196,6 +1281,18 @@ Song *SongDatabase::searchPrevious()
     q.clear();
 
     return song;
+}
+
+bool SongDatabase::removeSong(Song &s)
+{
+    QSqlQuery q(db);
+    q.prepare("DELETE FROM songs WHERE id = ? AND songtype = ? AND path = ?");
+    q.bindValue(0, s.id());
+    q.bindValue(1, s.songType());
+    q.bindValue(2, s.path());
+    const bool ok = q.exec() && q.numRowsAffected() > 0;
+    q.finish();
+    return ok;
 }
 
 bool SongDatabase::removeCurrentSong(bool removeFromStorage)

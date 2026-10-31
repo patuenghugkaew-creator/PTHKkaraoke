@@ -101,6 +101,7 @@ public:
 
     bool running() const { return tempo != 0 && cap.running(); }
     DWORD pid() const { return capturedPid; }
+    DWORD outputHandle() const { return tempo; }   // what the mixer plays (for the level meter)
 
     void setPitch(int semis)
     {
@@ -109,6 +110,18 @@ public:
             BASS_ChannelSetAttribute(tempo, BASS_ATTRIB_TEMPO_PITCH, float(semis));
     }
     int pitch() const { return semitones; }
+
+    // Closed while the browser switches to the next clip: whatever it still plays of the
+    // previous one must not enter the AI / ring, or it comes out at the new song's start.
+    void setInputOpen(bool on)
+    {
+        inputOpen.store(on);
+        if (!on) {
+            std::lock_guard<std::mutex> lock(m);
+            readPos = writePos = filled = 0;
+            primed = false;
+        }
+    }
 
     // vocal cut and its settings
     void setAiMode(bool on)
@@ -125,7 +138,11 @@ public:
     bool isVocalCut() const { return cut; }
     void setLevels(float vocals, float music) { cutVocals = vocals; cutMusic = music; applyCut(); }
     // AI: seconds the sound comes late (0 = no delay); the picture should be delayed as much
-    double delaySeconds() const { return useAi && running() && ai->isPlaying() ? ai->delaySeconds() : 0.0; }
+    // Counted from the moment the AI is switched on (not only once it plays), so the picture
+    // freezes at the switch point and both resume together from there.
+    double delaySeconds() const { return useAi && running() && ai->ready() ? ai->delaySeconds() : 0.0; }
+    // true while the AI is switched on but has not produced sound yet (sound is held silent)
+    bool aiWarmingUp() const { return useAi && running() && ai->ready() && !ai->isPlaying(); }
 
 private:
     static constexpr float kQuiet = 0.00003f;               // about -90 dB at the speakers
@@ -157,6 +174,8 @@ private:
     // capture thread: the sound comes in at kQuiet, so it is amplified back
     void push(const float *d, int n)
     {
+        if (!inputOpen.load())
+            return;
         const float gain = 1.0f / kQuiet;
         scratch.resize(size_t(n));
 
@@ -212,6 +231,12 @@ private:
                 self->ai->pull(out, int(want / 2));
                 return length;
             }
+            if (self->ai->ready()) {
+                // Warming up (~one AI delay): stay silent. Playing the live sound now would
+                // make the AI sound, which starts at the switch point, repeat it ("echo").
+                std::fill(out, out + want, 0.0f);
+                return length;
+            }
             self->remover.setEnabled(self->cut);
         }
 
@@ -256,6 +281,7 @@ private:
     float cutVocals = 0.0f, cutMusic = 1.0f;
     bool primed = false;
     std::atomic<float> lastRmsDb{-90.0f};
+    std::atomic<bool> inputOpen{true};
 };
 
 #endif // KM_HAVE_PROCLOOP

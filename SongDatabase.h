@@ -13,7 +13,8 @@ enum class SearchType {
     ByAll,
     ById,
     ByName,
-    ByArtist
+    ByArtist,
+    ByVideo         // video / MP3 songs only, the text anywhere in the name or artist
 };
 
 enum class UpdateType {
@@ -89,6 +90,11 @@ public:
 
     // true when the last search() found a song (otherwise currentSong() is unchanged)
     bool lastSearchFound() { return lastFound; }
+    // Approximate search (SongFuzzy.h) when the exact search found nothing: typos, missing
+    // tone marks / spaces, sound-alike letters. Next / previous then step through its results.
+    void startFuzzyIndex();
+    Song *searchFuzzy(const QString &s);
+    bool isFuzzyResult() const { return fuzzyMode; }
     // text typed while the keyboard was still in English mode -> Thai (Kedmanee layout)
     static QString kedmaneeToThai(const QString &s);
 
@@ -126,12 +132,15 @@ public slots:
                      const QString &type = "VIDEO", const QString &idPrefix = "V");
 
     void setSearchType(SearchType t) { searchType = t; }
+    SearchType currentSearchType() const { return searchType; }
     Song *nextType(const QString &s);
     Song* search(const QString &s);
     Song* searchNext();
     Song* searchPrevious();
 
     bool removeCurrentSong(bool removeFromStorage = false);
+    // remove this song from the song list (the database only; files stay)
+    bool removeSong(Song &s);
 
 signals:
     void updateCountChanged(int c);
@@ -170,6 +179,11 @@ private:
 
     int currentResultIndex = -1;
     bool lastFound = false;
+    class SongFuzzy *fuzzy = nullptr;
+    bool fuzzyMode = false;
+    QVector<qint64> fuzzyRows;
+    int fuzzyPos = 0;
+    bool loadRow(qint64 rowid);
 
     void createListTables();
 };

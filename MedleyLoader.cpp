@@ -167,7 +167,9 @@ void MedleyLoader::run()
     }
 
     if (_player->midiSequencerTemp() != nullptr) {
-        _player->midiSequencerTemp()->applyAutoMedleyBounds(_lyrWidget->curTempData(),
+        // Pass the first *sung* word only (skips title/artist/"....music...." cursors).
+        const long firstSung = _lyrWidget->firstSungTempLyricTick();
+        _player->midiSequencerTemp()->applyAutoMedleyBounds(firstSung > 0 ? QVector<long>{firstSung} : QVector<long>(),
                                                            _song->cutStartBar(),
                                                            _song->cutEndBar(),
                                                            _lyrWidget->lastActiveTempLyricTick(),

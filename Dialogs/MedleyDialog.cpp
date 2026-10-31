@@ -15,294 +15,357 @@
 #include <QKeyEvent>
 #include <QSettings>
 #include <QFrame>
+#include <QStyle>
+
+namespace {
+
+// Re-apply the stylesheet after changing a dynamic property such as "active".
+void repolish(QWidget *w)
+{
+    w->style()->unpolish(w);
+    w->style()->polish(w);
+}
+
+QLabel *fieldLabel(const QString &text, QWidget *parent)
+{
+    auto *l = new QLabel(text, parent);
+    l->setProperty("class", "fieldLabel");
+    return l;
+}
+
+QFrame *makeCard(const QString &title, QWidget *parent, QVBoxLayout **outLayout)
+{
+    auto *card = new QFrame(parent);
+    card->setProperty("class", "card");
+    auto *lay = new QVBoxLayout(card);
+    lay->setSpacing(10);
+    lay->setContentsMargins(16, 12, 16, 14);
+    auto *t = new QLabel(title, card);
+    t->setProperty("class", "cardTitle");
+    lay->addWidget(t);
+    *outLayout = lay;
+    return card;
+}
+
+} // namespace
 
 MedleyDialog::MedleyDialog(QWidget *parent, MidiPlayer *player)
     : QDialog(parent), _player(player)
 {
-    setWindowTitle(tr("ตั้งค่าระบบเมดเล่ย์ (Medley Settings)"));
-    setFixedSize(540, 520);
+    setWindowTitle(tr("ตั้งค่าเมดเลย์"));
     setWindowFlag(Qt::WindowContextHelpButtonHint, false);
+    setMinimumWidth(600);
 
     setStyleSheet(
         "QDialog { background-color: #0d1117; color: #e6edf3; font-size: 10pt; }"
-        "QFrame.card {"
-        "  background-color: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px;"
-        "}"
-        "QLabel { color: #e6edf3; }"
-        "QLabel.header { font-size: 12.5pt; font-weight: bold; color: #58a6ff; }"
-        "QLabel.sub { font-size: 8.5pt; color: #8b949e; }"
-        "QLabel.cardTitle { font-size: 10pt; font-weight: bold; color: #58a6ff; margin-bottom: 2px; }"
-        "QLabel.fieldLabel { font-size: 9.5pt; font-weight: bold; color: #c9d1d9; }"
+        "QFrame[class=\"card\"] { background-color: #161b22; border: 1px solid #30363d; border-radius: 10px; }"
+        "QLabel { color: #e6edf3; background: transparent; }"
+        "QLabel[class=\"header\"] { font-size: 14pt; font-weight: bold; color: #f0f6fc; }"
+        "QLabel[class=\"sub\"] { font-size: 9pt; color: #8b949e; }"
+        "QLabel[class=\"cardTitle\"] { font-size: 10.5pt; font-weight: bold; color: #58a6ff; }"
+        "QLabel[class=\"fieldLabel\"] { font-size: 9.5pt; color: #c9d1d9; }"
+        "QLabel[class=\"hint\"] { font-size: 9pt; color: #7ee787; background-color: #12261e;"
+        "  border: 1px solid #238636; border-radius: 6px; padding: 6px 10px; }"
         "QComboBox, QSpinBox {"
-        "  background-color: #21262d; color: #58a6ff; font-size: 10.5pt; font-weight: bold;"
-        "  border: 1px solid #30363d; border-radius: 6px; padding: 3px 8px; min-height: 28px;"
+        "  background-color: #21262d; color: #e6edf3; font-size: 10pt;"
+        "  border: 1px solid #30363d; border-radius: 6px; padding: 4px 8px; min-height: 26px;"
         "}"
-        "QComboBox:focus, QSpinBox:focus { border: 1px solid #58a6ff; background-color: #1c2128; }"
-        "QComboBox::drop-down { border: none; width: 20px; }"
+        "QSpinBox { color: #58a6ff; font-weight: bold; }"
+        "QComboBox:focus, QSpinBox:focus { border: 1px solid #58a6ff; }"
+        "QComboBox:disabled, QSpinBox:disabled { color: #6e7681; background-color: #161b22; }"
+        "QComboBox::drop-down { border: none; width: 22px; }"
         "QComboBox QAbstractItemView {"
         "  background-color: #161b22; color: #e6edf3; selection-background-color: #1f6feb;"
-        "  border: 1px solid #30363d; border-radius: 6px; padding: 4px;"
+        "  border: 1px solid #30363d; padding: 4px;"
         "}"
-        "QPushButton.segBtn {"
+        "QPushButton[class=\"segBtn\"] {"
         "  background-color: #21262d; color: #c9d1d9; border: 1px solid #30363d;"
-        "  border-radius: 6px; padding: 5px 12px; font-size: 9pt; min-height: 24px;"
+        "  border-radius: 6px; padding: 7px 10px; font-size: 9.5pt;"
         "}"
-        "QPushButton.segBtn:hover { background-color: #30363d; color: #58a6ff; }"
-        "QPushButton.segBtn[active=\"true\"] {"
+        "QPushButton[class=\"segBtn\"]:hover { background-color: #30363d; color: #f0f6fc; }"
+        "QPushButton[class=\"segBtn\"][active=\"true\"] {"
         "  background-color: #1f6feb; color: #ffffff; font-weight: bold; border: 1px solid #58a6ff;"
         "}"
-        "QPushButton.quick {"
-        "  background-color: #21262d; color: #c9d1d9; border: 1px solid #30363d;"
-        "  border-radius: 4px; padding: 3px 9px; font-size: 8.5pt; min-height: 20px;"
+        "QPushButton[class=\"quick\"] {"
+        "  background-color: transparent; color: #8b949e; border: 1px solid #30363d;"
+        "  border-radius: 12px; padding: 3px 12px; font-size: 9pt;"
         "}"
-        "QPushButton.quick:hover { background-color: #30363d; color: #58a6ff; border: 1px solid #58a6ff; }"
+        "QPushButton[class=\"quick\"]:hover { color: #58a6ff; border: 1px solid #58a6ff; }"
+        "QPushButton[class=\"quick\"]:disabled { color: #484f58; border-color: #21262d; }"
         "QSlider::groove:horizontal { height: 6px; background-color: #30363d; border-radius: 3px; }"
         "QSlider::sub-page:horizontal { background-color: #1f6feb; border-radius: 3px; }"
         "QSlider::handle:horizontal {"
-        "  background-color: #58a6ff; width: 14px; height: 14px; margin: -4px 0; border-radius: 7px;"
+        "  background-color: #58a6ff; width: 16px; height: 16px; margin: -5px 0; border-radius: 8px;"
         "}"
         "QSlider::handle:horizontal:hover { background-color: #79c0ff; }"
-        "QCheckBox { color: #e6edf3; font-size: 9pt; spacing: 6px; }"
-        "QCheckBox::indicator { width: 16px; height: 16px; border-radius: 3px; border: 1px solid #30363d; background-color: #21262d; }"
+        "QCheckBox { color: #e6edf3; font-size: 9.5pt; spacing: 8px; background: transparent; }"
+        "QCheckBox::indicator { width: 18px; height: 18px; border-radius: 4px; border: 1px solid #484f58; background-color: #21262d; }"
         "QCheckBox::indicator:checked { background-color: #1f6feb; border-color: #58a6ff; }"
         "QPushButton#btnOk {"
         "  background-color: #1f6feb; color: #ffffff; font-weight: bold; border-radius: 6px;"
-        "  padding: 8px 22px; border: 1px solid #388bfd; min-width: 90px;"
+        "  padding: 8px 26px; border: 1px solid #388bfd;"
         "}"
         "QPushButton#btnOk:hover { background-color: #388bfd; }"
         "QPushButton#btnCancel, QPushButton#btnOff, QPushButton#btnReset {"
         "  background-color: #21262d; color: #c9d1d9; border: 1px solid #30363d;"
-        "  border-radius: 6px; padding: 8px 14px; min-width: 70px;"
+        "  border-radius: 6px; padding: 8px 16px;"
         "}"
         "QPushButton#btnCancel:hover { background-color: #30363d; color: #f0f6fc; }"
+        "QPushButton#btnOff { color: #ff7b72; }"
         "QPushButton#btnOff:hover { background-color: #da3633; color: #ffffff; border: 1px solid #f85149; }"
-        "QPushButton#btnReset:hover { background-color: #30363d; color: #58a6ff; }"
+        "QPushButton#btnReset { background-color: transparent; border: none; color: #8b949e; padding: 8px 4px; }"
+        "QPushButton#btnReset:hover { color: #58a6ff; }"
     );
 
     auto *mainLayout = new QVBoxLayout(this);
-    mainLayout->setSpacing(10);
-    mainLayout->setContentsMargins(18, 14, 18, 14);
+    mainLayout->setSpacing(12);
+    mainLayout->setContentsMargins(20, 16, 20, 16);
+    // Let the dialog grow to fit its content at any Windows text scaling.
+    mainLayout->setSizeConstraint(QLayout::SetFixedSize);
 
-    // Header
-    auto *headerLayout = new QVBoxLayout();
-    headerLayout->setSpacing(2);
-    auto *lblTitle = new QLabel(tr("⚡ ตั้งค่าระบบเมดเล่ย์ (Medley Settings)"), this);
+    // ---------- Header ----------
+    auto *lblTitle = new QLabel(tr("ตั้งค่าเมดเลย์"), this);
     lblTitle->setProperty("class", "header");
-    headerLayout->addWidget(lblTitle);
-
-    auto *lblSub = new QLabel(tr("ป้อนรหัสจังหวะและความเร็วเพื่อเล่นเพลงต่อเนื่องอัตโนมัติ (Ctrl+[ หรือ F11)"), this);
+    mainLayout->addWidget(lblTitle);
+    auto *lblSub = new QLabel(tr("เล่นเพลงต่อกันอัตโนมัติ พร้อมจังหวะเชื่อมระหว่างเพลง   •   เปิดหน้านี้: Ctrl+[ หรือ F11"), this);
     lblSub->setProperty("class", "sub");
-    headerLayout->addWidget(lblSub);
-    mainLayout->addLayout(headerLayout);
+    lblSub->setWordWrap(true);
+    mainLayout->addWidget(lblSub);
 
-    // ==========================================
-    // Card 1: จังหวะและความเร็วเพลง (Rhythm & Tempo)
-    // ==========================================
-    auto *card1 = new QFrame(this);
-    card1->setProperty("class", "card");
-    auto *card1Layout = new QVBoxLayout(card1);
-    card1Layout->setSpacing(8);
-    card1Layout->setContentsMargins(12, 10, 12, 10);
+    // ---------- Card 1: rhythm & tempo ----------
+    QVBoxLayout *c1;
+    QFrame *card1 = makeCard(tr("🎵  จังหวะและความเร็ว"), this, &c1);
+    auto *g1 = new QGridLayout();
+    g1->setHorizontalSpacing(12);
+    g1->setVerticalSpacing(10);
+    g1->setColumnStretch(1, 1);
 
-    auto *lblCard1Title = new QLabel(tr("🎵 จังหวะและความเร็วเพลง (Rhythm & Tempo)"), card1);
-    lblCard1Title->setProperty("class", "cardTitle");
-    card1Layout->addWidget(lblCard1Title);
-
-    // Row 1: Rhythm
-    auto *rhythmRow = new QHBoxLayout();
-    rhythmRow->setSpacing(8);
-    auto *lblRhythm = new QLabel(tr("จังหวะ (Rhythm) :"), card1);
-    lblRhythm->setProperty("class", "fieldLabel");
-    lblRhythm->setFixedWidth(115);
-    rhythmRow->addWidget(lblRhythm);
-
+    // Rhythm: code box (type 900/901… quickly) + readable list
+    g1->addWidget(fieldLabel(tr("จังหวะลูกส่ง"), card1), 0, 0);
+    auto *rhythmBox = new QHBoxLayout();
+    rhythmBox->setSpacing(8);
     _spinRhythm = new QSpinBox(card1);
     _spinRhythm->setRange(0, 999);
     _spinRhythm->setAlignment(Qt::AlignCenter);
-    _spinRhythm->setFixedWidth(75);
+    _spinRhythm->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    _spinRhythm->setMinimumWidth(70);
+    _spinRhythm->setToolTip(tr("พิมพ์รหัสจังหวะได้เลย เช่น 900, 901, 903"));
     connect(_spinRhythm, QOverload<int>::of(&QSpinBox::valueChanged), this, &MedleyDialog::onRhythmSpinChanged);
-    rhythmRow->addWidget(_spinRhythm);
+    rhythmBox->addWidget(_spinRhythm);
 
     _comboRhythm = new QComboBox(card1);
-    _comboRhythm->addItem(tr("901 - ลูกส่งลำซิ่ง (Lum-Zing)"), 1);
-    _comboRhythm->addItem(tr("900 - ลูกส่งสามช่า / ลูกทุ่ง (Sam-Cha)"), 0);
-    _comboRhythm->addItem(tr("902 - ลูกส่ง 3ช่าลำซิ่ง (3-Cha Lum-Zing)"), 2);
-    _comboRhythm->addItem(tr("903 - ลูกส่งดิสโก้ (Disco)"), 3);
-    _comboRhythm->addItem(tr("904 - ลูกส่งลำซิ่ง 2 (Lum-Zing 2)"), 4);
-    _comboRhythm->addItem(tr("100 - ลูกส่งมาตรฐาน (Standard Rock/Pop)"), 5);
-    _comboRhythm->addItem(tr("0 - ตามเพลง (ไม่ใช้ลูกส่งเสริม)"), 6);
+    _comboRhythm->addItem(tr("901  ลำซิ่ง"), 1);
+    _comboRhythm->addItem(tr("900  สามช่า / ลูกทุ่ง"), 0);
+    _comboRhythm->addItem(tr("902  สามช่าลำซิ่ง"), 2);
+    _comboRhythm->addItem(tr("903  ดิสโก้"), 3);
+    _comboRhythm->addItem(tr("904  ลำซิ่ง 2"), 4);
+    _comboRhythm->addItem(tr("100  มาตรฐาน (ร็อก/ป๊อป)"), 5);
+    _comboRhythm->addItem(tr("0  สุ่มจังหวะไทย"), 6);
     connect(_comboRhythm, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MedleyDialog::onRhythmComboChanged);
-    rhythmRow->addWidget(_comboRhythm, 1);
+    rhythmBox->addWidget(_comboRhythm, 1);
+    g1->addLayout(rhythmBox, 0, 1);
 
-    card1Layout->addLayout(rhythmRow);
+    // Tempo: two clear choices instead of BPM 0 + a separate mode box
+    g1->addWidget(fieldLabel(tr("ความเร็ว"), card1), 1, 0);
+    auto *tempoChoice = new QHBoxLayout();
+    tempoChoice->setSpacing(6);
+    _btnTempoLock = new QPushButton(tr("ใช้ความเร็วเดียวทุกเพลง"), card1);
+    _btnTempoLock->setProperty("class", "segBtn");
+    connect(_btnTempoLock, &QPushButton::clicked, this, [this]() { updateTempoMode(false); });
+    tempoChoice->addWidget(_btnTempoLock, 1);
+    _btnTempoFollow = new QPushButton(tr("ตามต้นฉบับแต่ละเพลง"), card1);
+    _btnTempoFollow->setProperty("class", "segBtn");
+    connect(_btnTempoFollow, &QPushButton::clicked, this, [this]() { updateTempoMode(true); });
+    tempoChoice->addWidget(_btnTempoFollow, 1);
+    g1->addLayout(tempoChoice, 1, 1);
 
-    // Row 2: Tempo
-    auto *tempoRow = new QHBoxLayout();
-    tempoRow->setSpacing(8);
-    auto *lblTempo = new QLabel(tr("ความเร็ว (Tempo) :"), card1);
-    lblTempo->setProperty("class", "fieldLabel");
-    lblTempo->setFixedWidth(115);
-    tempoRow->addWidget(lblTempo);
+    // Tempo: any value 40-250. Type it, nudge with -5/-1/+1/+5, drag the slider,
+    // or use the 3 quick buttons (right-click a quick button to store the current tempo on it).
+    _bpmChips = new QWidget(card1);     // container for all tempo controls (disabled in "follow" mode)
+    auto *bpmBox = new QVBoxLayout(_bpmChips);
+    bpmBox->setContentsMargins(0, 0, 0, 0);
+    bpmBox->setSpacing(8);
 
-    _spinBpm = new QSpinBox(card1);
-    _spinBpm->setRange(0, 250);
+    auto *bpmRow = new QHBoxLayout();
+    bpmRow->setSpacing(6);
+    auto nudge = [this](const QString &text, int delta) {
+        auto *b = new QPushButton(text, _bpmChips);
+        b->setProperty("class", "quick");
+        b->setCursor(Qt::PointingHandCursor);
+        b->setAutoRepeat(true);             // hold to keep changing
+        b->setAutoRepeatDelay(350);
+        b->setAutoRepeatInterval(70);
+        connect(b, &QPushButton::clicked, this, [this, delta]() { _spinBpm->setValue(_spinBpm->value() + delta); });
+        return b;
+    };
+    bpmRow->addWidget(nudge(QStringLiteral("−5"), -5));
+    bpmRow->addWidget(nudge(QStringLiteral("−1"), -1));
+    _spinBpm = new QSpinBox(_bpmChips);
+    _spinBpm->setRange(40, 250);
     _spinBpm->setAlignment(Qt::AlignCenter);
-    _spinBpm->setSpecialValueText(tr("0 (ตามเพลง)"));
     _spinBpm->setSuffix(" BPM");
-    _spinBpm->setFixedWidth(115);
-    tempoRow->addWidget(_spinBpm);
+    _spinBpm->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    _spinBpm->setKeyboardTracking(false);
+    _spinBpm->setMinimumWidth(120);
+    _spinBpm->setToolTip(tr("พิมพ์ความเร็วได้เลย (40–250) หรือใช้ล้อเมาส์ / ลูกศรขึ้น-ลง"));
+    _spinBpm->setStyleSheet("font-size: 13pt;");
+    bpmRow->addWidget(_spinBpm);
+    bpmRow->addWidget(nudge(QStringLiteral("+1"), +1));
+    bpmRow->addWidget(nudge(QStringLiteral("+5"), +5));
+    auto *slider = new QSlider(Qt::Horizontal, _bpmChips);
+    slider->setRange(40, 250);
+    bpmRow->addWidget(slider, 1);
+    connect(slider, &QSlider::valueChanged, _spinBpm, &QSpinBox::setValue);
+    connect(_spinBpm, QOverload<int>::of(&QSpinBox::valueChanged), slider, [slider](int v) {
+        if (slider->value() != v) slider->setValue(v);
+    });
+    bpmBox->addLayout(bpmRow);
 
-    auto *lblMode = new QLabel(tr("โหมด :"), card1);
-    lblMode->setProperty("class", "fieldLabel");
-    tempoRow->addWidget(lblMode);
-
-    _comboTempoMode = new QComboBox(card1);
-    _comboTempoMode->addItem(tr("Lock (คงที่ทุกเพลง)"), 0);
-    _comboTempoMode->addItem(tr("Auto (ตามเพลงเดิม)"), 1);
-    tempoRow->addWidget(_comboTempoMode, 1);
-
-    card1Layout->addLayout(tempoRow);
-
-    // Row 3: Quick BPM Chips (clearly separated)
+    // Quick buttons: values come from settings so the user can keep their own favourites.
     auto *chipsRow = new QHBoxLayout();
     chipsRow->setSpacing(6);
-    auto *lblChipsPad = new QLabel("", card1);
-    lblChipsPad->setFixedWidth(123);
-    chipsRow->addWidget(lblChipsPad);
-
-    auto addChip = [this, chipsRow, card1](const QString &text, int val) {
-        auto *btn = new QPushButton(text, card1);
+    auto *lblQuick = new QLabel(tr("ปุ่มลัด:"), _bpmChips);
+    lblQuick->setProperty("class", "sub");
+    chipsRow->addWidget(lblQuick);
+    const int defaults[3] = {140, 145, 150};
+    for (int k = 0; k < 3; ++k) {
+        const QString key = QString("Medley/QuickBpm%1").arg(k + 1);
+        auto *btn = new QPushButton(_bpmChips);
         btn->setProperty("class", "quick");
-        connect(btn, &QPushButton::clicked, this, [this, val]() {
-            _spinBpm->setValue(val);
-            _spinBpm->setFocus();
+        btn->setCursor(Qt::PointingHandCursor);
+        btn->setToolTip(tr("คลิก = ใช้ความเร็วนี้\nคลิกขวา = บันทึกความเร็วปัจจุบันลงปุ่มนี้"));
+        btn->setContextMenuPolicy(Qt::CustomContextMenu);
+        auto label = [](int v) {
+            if (v == 145) return QString("145 สามช่า");
+            if (v == 150) return QString("150 ลำซิ่ง");
+            return QString::number(v);
+        };
+        const int v0 = QSettings(Config::CONFIG_APP_FILE_PATH, QSettings::IniFormat).value(key, defaults[k]).toInt();
+        btn->setProperty("bpm", v0);
+        btn->setText(label(v0));
+        connect(btn, &QPushButton::clicked, this, [this, btn]() { _spinBpm->setValue(btn->property("bpm").toInt()); });
+        connect(btn, &QWidget::customContextMenuRequested, this, [this, btn, key, label]() {
+            const int v = _spinBpm->value();
+            btn->setProperty("bpm", v);
+            btn->setText(label(v));
+            QSettings(Config::CONFIG_APP_FILE_PATH, QSettings::IniFormat).setValue(key, v);
         });
         chipsRow->addWidget(btn);
-    };
-
-    addChip(tr("0 ตามเพลง"), 0);
-    addChip("140", 140);
-    addChip(tr("145 สามช่า"), 145);
-    addChip(tr("150 ลำซิ่ง"), 150);
+    }
     chipsRow->addStretch(1);
+    bpmBox->addLayout(chipsRow);
 
-    card1Layout->addLayout(chipsRow);
+    g1->addWidget(_bpmChips, 2, 1);
+
+    _chkKeepFar = new QCheckBox(tr("ไม่บังคับเพลงช้า (เพลงช้าเล่นครึ่งความเร็วนี้ เพลงที่ต่างมากเล่นความเร็วเดิม)"), card1);
+    _chkKeepFar->setToolTip(tr("ติ๊ก: เพลงช้าไม่ถูกเร่งเป็นเพลงเร็ว\nไม่ติ๊ก: ทุกเพลงเล่นที่ความเร็วที่ตั้งไว้พอดี"));
+    g1->addWidget(_chkKeepFar, 3, 1);
+
+    c1->addLayout(g1);
     mainLayout->addWidget(card1);
 
-    // ==========================================
-    // Card 2: ช่วงรอยต่อและการตัดต่อเพลง (Transition & Cues)
-    // ==========================================
-    auto *card2 = new QFrame(this);
-    card2->setProperty("class", "card");
-    auto *card2Layout = new QVBoxLayout(card2);
-    card2Layout->setSpacing(8);
-    card2Layout->setContentsMargins(12, 10, 12, 10);
+    // ---------- Card 2: transition ----------
+    QVBoxLayout *c2;
+    QFrame *card2 = makeCard(tr("🥁  ช่วงรอยต่อระหว่างเพลง"), this, &c2);
 
-    auto *lblCard2Title = new QLabel(tr("🥁 ช่วงรอยต่อและการตัดต่อเพลง (Transition & Cues)"), card2);
-    lblCard2Title->setProperty("class", "cardTitle");
-    card2Layout->addWidget(lblCard2Title);
+    c2->addWidget(fieldLabel(tr("ก่อนเข้าเพลงถัดไป ให้เล่น"), card2));
+    auto *barsGrid = new QGridLayout();
+    barsGrid->setSpacing(6);
+    auto makeBarBtn = [this, card2](const QString &text, int bars) {
+        auto *b = new QPushButton(text, card2);
+        b->setProperty("class", "segBtn");
+        b->setCursor(Qt::PointingHandCursor);
+        connect(b, &QPushButton::clicked, this, [this, bars]() { onBarsButtonClicked(bars); });
+        return b;
+    };
+    _btnBar0 = makeBarBtn(tr("ต่อทันที (ไม่มีลูกส่ง)"), 0);
+    _btnBar1 = makeBarBtn(tr("ลูกส่ง 1 ห้อง"), 1);
+    _btnBar2 = makeBarBtn(tr("จังหวะ 1 + ลูกส่ง 1"), 2);
+    _btnBar4 = makeBarBtn(tr("จังหวะ 3 + ลูกส่ง 1  ★ แนะนำ"), 4);
+    barsGrid->addWidget(_btnBar0, 0, 0);
+    barsGrid->addWidget(_btnBar1, 0, 1);
+    barsGrid->addWidget(_btnBar2, 1, 0);
+    barsGrid->addWidget(_btnBar4, 1, 1);
+    barsGrid->setColumnStretch(0, 1);
+    barsGrid->setColumnStretch(1, 1);
+    c2->addLayout(barsGrid);
 
-    // Transition bars row
-    auto *barsRow = new QHBoxLayout();
-    barsRow->setSpacing(8);
-    auto *lblBars = new QLabel(tr("ลูกส่งช่วงรอยต่อ :"), card2);
-    lblBars->setProperty("class", "fieldLabel");
-    lblBars->setFixedWidth(115);
-    barsRow->addWidget(lblBars);
+    _lblBarsHint = new QLabel(card2);
+    _lblBarsHint->setProperty("class", "hint");
+    _lblBarsHint->setWordWrap(true);
+    c2->addWidget(_lblBarsHint);
 
-    _btnBar0 = new QPushButton(tr("0 ห้อง (ต่อทันที)"), card2);
-    _btnBar0->setProperty("class", "segBtn");
-    connect(_btnBar0, &QPushButton::clicked, this, [this]() { onBarsButtonClicked(0); });
-    barsRow->addWidget(_btnBar0);
-
-    _btnBar1 = new QPushButton(tr("ลูกส่ง 1 ห้อง"), card2);
-    _btnBar1->setProperty("class", "segBtn");
-    connect(_btnBar1, &QPushButton::clicked, this, [this]() { onBarsButtonClicked(1); });
-    barsRow->addWidget(_btnBar1);
-
-    _btnBar2 = new QPushButton(tr("ลูกส่ง 2 ห้อง"), card2);
-    _btnBar2->setProperty("class", "segBtn");
-    connect(_btnBar2, &QPushButton::clicked, this, [this]() { onBarsButtonClicked(2); });
-    barsRow->addWidget(_btnBar2);
-
-    barsRow->addStretch(1);
-    card2Layout->addLayout(barsRow);
-
-    // Volume row
     auto *volRow = new QHBoxLayout();
-    volRow->setSpacing(8);
-    auto *lblVol = new QLabel(tr("ความดังลูกส่ง :"), card2);
-    lblVol->setProperty("class", "fieldLabel");
-    lblVol->setFixedWidth(115);
-    volRow->addWidget(lblVol);
-
+    volRow->setSpacing(10);
+    volRow->addWidget(fieldLabel(tr("ความดังลูกส่ง"), card2));
     _sliderVol = new QSlider(Qt::Horizontal, card2);
     _sliderVol->setRange(80, 130);
     _sliderVol->setValue(110);
     connect(_sliderVol, &QSlider::valueChanged, this, &MedleyDialog::onVolumeSliderChanged);
     volRow->addWidget(_sliderVol, 1);
-
     _lblVolVal = new QLabel("110 %", card2);
-    _lblVolVal->setFixedWidth(50);
-    _lblVolVal->setStyleSheet("font-weight: bold; color: #58a6ff; font-size: 10pt;");
+    _lblVolVal->setMinimumWidth(52);
+    _lblVolVal->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    _lblVolVal->setStyleSheet("font-weight: bold; color: #58a6ff;");
     volRow->addWidget(_lblVolVal);
-
-    card2Layout->addLayout(volRow);
-
-    // Cues: Skip intro & Auto Cut Outro
-    _chkSkipIntro = new QCheckBox(tr("ข้ามท่อนเกริ่น / อินโทรของเพลงถัดไป (Auto Skip Intro)"), card2);
-    card2Layout->addWidget(_chkSkipIntro);
-
-    auto *outroRow = new QHBoxLayout();
-    outroRow->setSpacing(8);
-    _chkAutoCutOutro = new QCheckBox(tr("ตัดหางเพลงเมื่อร้องจบ (Auto Cut Outro)"), card2);
-    outroRow->addWidget(_chkAutoCutOutro);
-
-    outroRow->addStretch(1);
-    auto *lblWait = new QLabel(tr("รอเล่นต่อ :"), card2);
-    lblWait->setStyleSheet("color: #8b949e; font-size: 9pt;");
-    outroRow->addWidget(lblWait);
-
-    _comboWaitBars = new QComboBox(card2);
-    _comboWaitBars->addItem(tr("1 ห้อง (มาตรฐาน)"), 1);
-    _comboWaitBars->addItem(tr("2 ห้อง"), 2);
-    _comboWaitBars->addItem(tr("0 ห้อง (ทันที)"), 0);
-    _comboWaitBars->setFixedWidth(120);
-    outroRow->addWidget(_comboWaitBars);
-
-    card2Layout->addLayout(outroRow);
-
-    _chkQuantize = new QCheckBox(tr("ล็อกการตัดเพลงให้ตรงจังหวะตกต้นห้อง (Quantize to Beat 1 Sync)"), card2);
-    card2Layout->addWidget(_chkQuantize);
+    c2->addLayout(volRow);
 
     mainLayout->addWidget(card2);
 
-    // ==========================================
-    // Footer Action Buttons
-    // ==========================================
+    // ---------- Card 3: cutting songs ----------
+    QVBoxLayout *c3;
+    QFrame *card3 = makeCard(tr("✂️  การตัดต่อเพลง"), this, &c3);
+
+    _chkSkipIntro = new QCheckBox(tr("ข้ามอินโทรของเพลงถัดไป"), card3);
+    _chkSkipIntro->setToolTip(tr("Auto Skip Intro: เริ่มเพลงถัดไปใกล้ท่อนร้อง"));
+    c3->addWidget(_chkSkipIntro);
+
+    auto *outroRow = new QHBoxLayout();
+    outroRow->setSpacing(8);
+    _chkAutoCutOutro = new QCheckBox(tr("ตัดหางเพลงเมื่อร้องจบ  แล้วรออีก"), card3);
+    _chkAutoCutOutro->setToolTip(tr("Auto Cut Outro: ไม่ต้องรอดนตรีท้ายเพลงจนจบ"));
+    outroRow->addWidget(_chkAutoCutOutro);
+    _comboWaitBars = new QComboBox(card3);
+    _comboWaitBars->addItem(tr("0 ห้อง (ทันที)"), 0);
+    _comboWaitBars->addItem(tr("1 ห้อง"), 1);
+    _comboWaitBars->addItem(tr("2 ห้อง"), 2);
+    outroRow->addWidget(_comboWaitBars);
+    outroRow->addStretch(1);
+    connect(_chkAutoCutOutro, &QCheckBox::toggled, _comboWaitBars, &QWidget::setEnabled);
+    c3->addLayout(outroRow);
+
+    _chkQuantize = new QCheckBox(tr("ตัดเพลงให้ตรงจังหวะต้นห้อง"), card3);
+    _chkQuantize->setToolTip(tr("Quantize to Beat 1: ตัดตรงจังหวะที่ 1 ของห้อง ทำให้ต่อเพลงไม่หลุดจังหวะ"));
+    c3->addWidget(_chkQuantize);
+
+    mainLayout->addWidget(card3);
+
+    // ---------- Footer ----------
     auto *footer = new QHBoxLayout();
     footer->setSpacing(8);
 
-    auto *btnReset = new QPushButton(tr("↺ คืนค่า"), this);
+    auto *btnReset = new QPushButton(tr("↺ คืนค่าเริ่มต้น"), this);
     btnReset->setObjectName("btnReset");
-    btnReset->setToolTip(tr("คืนค่าตัวเลือกทั้งหมดกลับเป็นค่ามาตรฐาน"));
+    btnReset->setCursor(Qt::PointingHandCursor);
     connect(btnReset, &QPushButton::clicked, this, &MedleyDialog::onResetClicked);
     footer->addWidget(btnReset);
-
     footer->addStretch(1);
 
-    auto *btnOff = new QPushButton(tr("⛔ ปิดเมดเลย์ (Ctrl+])"), this);
+    auto *btnOff = new QPushButton(tr("ปิดเมดเลย์"), this);
     btnOff->setObjectName("btnOff");
+    btnOff->setToolTip(tr("Ctrl+]"));
     connect(btnOff, &QPushButton::clicked, this, &MedleyDialog::onOffClicked);
     footer->addWidget(btnOff);
 
-    auto *btnCancel = new QPushButton(tr("ยกเลิก (Esc)"), this);
+    auto *btnCancel = new QPushButton(tr("ยกเลิก"), this);
     btnCancel->setObjectName("btnCancel");
+    btnCancel->setToolTip(tr("Esc"));
     connect(btnCancel, &QPushButton::clicked, this, &QDialog::reject);
     footer->addWidget(btnCancel);
 
-    auto *btnOk = new QPushButton(tr("ตกลง (Enter)"), this);
+    auto *btnOk = new QPushButton(tr("ตกลง"), this);
     btnOk->setObjectName("btnOk");
+    btnOk->setToolTip(tr("Enter"));
     btnOk->setDefault(true);
     connect(btnOk, &QPushButton::clicked, this, &MedleyDialog::onOkClicked);
     footer->addWidget(btnOk);
@@ -317,16 +380,40 @@ MedleyDialog::MedleyDialog(QWidget *parent, MidiPlayer *player)
 
 void MedleyDialog::updateBarsSelection(int bars)
 {
+    if (bars != 0 && bars != 1 && bars != 2 && bars != 4)
+        bars = (bars >= 3) ? 4 : 1;
     _selectedBars = bars;
-    _btnBar0->setProperty("active", bars == 0 ? "true" : "false");
-    _btnBar1->setProperty("active", bars == 1 ? "true" : "false");
-    _btnBar2->setProperty("active", bars == 2 ? "true" : "false");
-    _btnBar0->style()->unpolish(_btnBar0);
-    _btnBar0->style()->polish(_btnBar0);
-    _btnBar1->style()->unpolish(_btnBar1);
-    _btnBar1->style()->polish(_btnBar1);
-    _btnBar2->style()->unpolish(_btnBar2);
-    _btnBar2->style()->polish(_btnBar2);
+
+    const QList<QPair<QPushButton*, int>> btns = {
+        {_btnBar0, 0}, {_btnBar1, 1}, {_btnBar2, 2}, {_btnBar4, 4}
+    };
+    for (const auto &p : btns) {
+        p.first->setProperty("active", p.second == bars ? "true" : "false");
+        repolish(p.first);
+    }
+
+    QString hint;
+    switch (bars) {
+    case 0: hint = tr("จบเพลง  →  เข้าเพลงถัดไปทันที"); break;
+    case 1: hint = tr("จบเพลง  →  ลูกส่ง 1 ห้อง  →  เข้าเพลงถัดไป"); break;
+    case 2: hint = tr("จบเพลง  →  จังหวะ 1 ห้อง  →  ลูกส่ง 1 ห้อง  →  เข้าเพลงถัดไป"); break;
+    default: hint = tr("จบเพลง  →  จังหวะ 3 ห้อง  →  ลูกส่ง 1 ห้อง  →  เข้าเพลงถัดไป"); break;
+    }
+    _lblBarsHint->setText(QStringLiteral("▶  ") + hint);
+
+    if (_sliderVol)
+        _sliderVol->setEnabled(bars > 0);
+}
+
+void MedleyDialog::updateTempoMode(bool follow)
+{
+    _tempoFollow = follow;
+    _btnTempoLock->setProperty("active", follow ? "false" : "true");
+    _btnTempoFollow->setProperty("active", follow ? "true" : "false");
+    repolish(_btnTempoLock);
+    repolish(_btnTempoFollow);
+    _bpmChips->setEnabled(!follow);
+    if (_chkKeepFar) _chkKeepFar->setEnabled(!follow);
 }
 
 void MedleyDialog::onBarsButtonClicked(int bars)
@@ -399,14 +486,15 @@ void MedleyDialog::loadFromPlayer()
     bool savedQuantize = settings.value("QuantizeBar", true).toBool();
     settings.endGroup();
 
+    bool follow = (savedTempoMode == 1 || savedBpm == 0);
     if (_player) {
-        if (!_player->isPlayerStopped() && _player->currentBpm() >= 40 && _player->currentBpm() <= 240)
-            savedBpm = _player->currentBpm();
-        else if (_player->medleyBPM() > 0)
+        follow = (_player->medleyTempoMode() == 1 || _player->medleyBPM() == 0);
+        if (_player->medleyBPM() > 0)
             savedBpm = _player->medleyBPM();
+        else if (!_player->isPlayerStopped() && _player->currentBpm() >= 40 && _player->currentBpm() <= 240)
+            savedBpm = _player->currentBpm();
 
         savedPattern = _player->medleyFillPattern();
-        savedTempoMode = _player->medleyTempoMode();
         savedBars = _player->medleyTransitionBars();
         savedVol = _player->medleyFillVolume();
         savedSkipIntro = _player->medleySkipIntro();
@@ -431,13 +519,9 @@ void MedleyDialog::loadFromPlayer()
     _comboRhythm->setCurrentIndex(comboIdx);
     _isSyncing = false;
 
-    _spinBpm->setValue(savedBpm);
-    for (int i = 0; i < _comboTempoMode->count(); ++i) {
-        if (_comboTempoMode->itemData(i).toInt() == savedTempoMode) {
-            _comboTempoMode->setCurrentIndex(i);
-            break;
-        }
-    }
+    _spinBpm->setValue(savedBpm > 0 ? savedBpm : 150);
+    _chkKeepFar->setChecked(_player ? _player->medleyKeepFarSongs() : true);
+    updateTempoMode(follow);
 
     updateBarsSelection(savedBars);
 
@@ -446,6 +530,7 @@ void MedleyDialog::loadFromPlayer()
 
     _chkSkipIntro->setChecked(savedSkipIntro);
     _chkAutoCutOutro->setChecked(savedCutOutro);
+    _comboWaitBars->setEnabled(savedCutOutro);
 
     for (int i = 0; i < _comboWaitBars->count(); ++i) {
         if (_comboWaitBars->itemData(i).toInt() == savedWaitBars) {
@@ -465,15 +550,16 @@ void MedleyDialog::onResetClicked()
     _isSyncing = false;
 
     _spinBpm->setValue(150);
-    _comboTempoMode->setCurrentIndex(0);
+    _chkKeepFar->setChecked(true);
+    updateTempoMode(false);
 
-    updateBarsSelection(1);
+    updateBarsSelection(4);
     _sliderVol->setValue(110);
     _lblVolVal->setText("110 %");
 
     _chkSkipIntro->setChecked(true);
     _chkAutoCutOutro->setChecked(true);
-    _comboWaitBars->setCurrentIndex(0); // 1 bar
+    _comboWaitBars->setCurrentIndex(_comboWaitBars->findData(1));
     _chkQuantize->setChecked(true);
 }
 
@@ -493,6 +579,7 @@ void MedleyDialog::saveToPlayer()
         _player->setMedleyFillPattern(pattern);
         _player->setMedleyTempoMode(tMode);
         _player->setMedleyBPM(bpm);
+        _player->setMedleyKeepFarSongs(_chkKeepFar->isChecked());
         _player->setMedleyTransitionBars(bars);
         _player->setMedleyFillVolume(vol);
         _player->setMedleySkipIntro(sIntro);
@@ -516,6 +603,7 @@ void MedleyDialog::saveToPlayer()
     settings.beginGroup("Medley");
     settings.setValue("Enable", true);
     settings.setValue("BPM", bpm);
+    settings.setValue("KeepFarSongs", _chkKeepFar->isChecked());
     settings.setValue("FillPattern", pattern);
     settings.setValue("TempoMode", tMode);
     settings.setValue("TransitionBars", bars);
@@ -548,12 +636,15 @@ int MedleyDialog::fillPattern() const
 
 int MedleyDialog::tempo() const
 {
+    // 0 BPM = every song keeps its own tempo (read by MidiPlayer::loadNextMedley)
+    if (_tempoFollow)
+        return 0;
     return _spinBpm ? _spinBpm->value() : 150;
 }
 
 int MedleyDialog::tempoMode() const
 {
-    return _comboTempoMode ? _comboTempoMode->currentData().toInt() : 0;
+    return _tempoFollow ? 1 : 0;
 }
 
 int MedleyDialog::transitionBars() const

@@ -1,6 +1,8 @@
 #include "AiVocal.h"
 
 #include <QDir>
+#include <QCoreApplication>
+#include <QTime>
 #include <QFile>
 #include <QFileInfo>
 #include <algorithm>
@@ -169,6 +171,100 @@ private:
     bool onGpu = false;
 };
 
+static std::atomic<int> s_devicePref{0};
+void AiVocalEngine::setDevicePreference(int pref) { s_devicePref.store(pref); }
+int AiVocalEngine::devicePreference() { return s_devicePref.load(); }
+
+// speed-test results etc. go to yt-video.log next to the exe
+// Developer timing logs: only when "debug-logs.txt" is next to the exe.
+static bool timingLogsOn()
+{
+    static const int on = QFile::exists(QCoreApplication::applicationDirPath() + "/debug-logs.txt") ? 1 : 0;
+    return on == 1;
+}
+
+static void aiLog(const QString &line)
+{
+    if (!timingLogsOn())
+        return;
+    QFile f(QCoreApplication::applicationDirPath() + "/yt-video.log");
+    if (f.open(QIODevice::Append | QIODevice::Text))
+        f.write((QTime::currentTime().toString("hh:mm:ss.zzz ") + "AI: " + line + QChar(10)).toUtf8());
+}
+
+// Whole-track separation for files on disk (downloaded video songs). Same model and the
+// same trimmed-window + cross-fade stitching as the live engine, but run ahead of time,
+// so playback later has no delay and the vocal cut switches instantly.
+bool AiVocalEngine::separateTrack(const QString &modelsDir, const QString &key, bool gpu,
+                                  const float *mix, long long frames, std::vector<float> &inst,
+                                  const std::function<void(int)> &progress,
+                                  const std::atomic<bool> *cancel, QString *error)
+{
+    const ModelInfo *mi = model(key);
+    if (!mi) {
+        if (error) *error = QString::fromUtf8("ไม่รู้จักรุ่น AI: %1").arg(key);
+        return false;
+    }
+    const QString path = modelsDir + "/" + mi->file;
+    if (!QFile::exists(path)) {
+        if (error) *error = QString::fromUtf8("ยังไม่มีไฟล์โมเดล AI (%1) เปิดใช้ AI ตัดเสียงร้องกับ YouTube สักครั้งเพื่อดาวน์โหลด").arg(mi->file);
+        return false;
+    }
+    try {
+        const int threads = std::max(4, int(std::thread::hardware_concurrency()) / 2);
+        MdxModel mm(path.toStdWString(), *mi, gpu, gpu ? 0 : threads);
+        const int H = CHUNK - 2 * TRIM - XF;            // output samples per window
+        inst.assign(size_t(frames) * 2, 0.0f);
+        std::vector<float> win(size_t(2) * CHUNK), out(size_t(2) * CHUNK), tail;
+        const long long nWin = (frames + H - 1) / H;
+        for (long long k = 0; k < nWin; ++k) {
+            if (cancel && cancel->load()) {
+                if (error) *error = QString::fromUtf8("ยกเลิกแล้ว");
+                return false;
+            }
+            const long long s = k * H - TRIM;           // window start in the track (may be < 0)
+            float peak = 0.0f;
+            for (int c = 0; c < 2; ++c)
+                for (int i = 0; i < CHUNK; ++i) {
+                    const long long src = s + i;
+                    const float v = (src >= 0 && src < frames) ? mix[size_t(src) * 2 + size_t(c)] : 0.0f;
+                    win[size_t(c) * CHUNK + size_t(i)] = v;
+                    peak = std::max(peak, std::fabs(v));
+                }
+            if (peak < 1e-4f)
+                std::fill(out.begin(), out.end(), 0.0f);
+            else
+                mm.instrumental(win.data(), out.data());
+            for (int c = 0; c < 2; ++c) {
+                const float *oc = &out[size_t(c) * CHUNK];
+                for (int i = 0; i < H; ++i) {
+                    const long long dst = k * H + i;
+                    if (dst >= frames)
+                        break;
+                    float v = oc[TRIM + i];
+                    if (!tail.empty() && i < XF) {
+                        const float r = float(i) / XF;
+                        v = tail[size_t(c) * XF + size_t(i)] * (1.0f - r) + v * r;
+                    }
+                    inst[size_t(dst) * 2 + size_t(c)] = v;
+                }
+            }
+            tail.assign(size_t(2) * XF, 0.0f);          // overlaps the next window's first XF samples
+            for (int c = 0; c < 2; ++c)
+                for (int i = 0; i < XF; ++i)
+                    tail[size_t(c) * XF + size_t(i)] = out[size_t(c) * CHUNK + size_t(TRIM + H + i)];
+            if (progress)
+                progress(int((k + 1) * 100 / nWin));
+        }
+        return true;
+    } catch (const std::exception &e) {
+        if (error) *error = QString::fromLocal8Bit(e.what());
+    } catch (...) {
+        if (error) *error = QString::fromUtf8("AI แยกเสียงไม่สำเร็จ");
+    }
+    return false;
+}
+
 bool AiVocalEngine::separateOnce(const QString &modelFile, const QString &key, bool gpu, const float *mix, float *inst)
 {
     try {
@@ -217,6 +313,21 @@ void AiVocalEngine::selectModel(const QString &key)
     loaderThread = std::thread([this, key]() { loadModel(key); });
 }
 
+void AiVocalEngine::reloadModel()
+{
+    QString key;
+    {
+        std::lock_guard<std::mutex> lock(m);
+        key = wantedKey;
+        if (key.isEmpty())
+            return;
+        loadedKey.clear();
+    }
+    if (loaderThread.joinable())
+        loaderThread.detach();
+    loaderThread = std::thread([this, key]() { loadModel(key); });
+}
+
 void AiVocalEngine::loadModel(QString key)
 {
     isLoading = true;
@@ -249,24 +360,31 @@ void AiVocalEngine::loadModel(QString key)
         std::unique_ptr<MdxModel> best;
         double bestT = 1e9;
         QString bestProv;
-        try {
-            std::unique_ptr<MdxModel> g(new MdxModel(path.toStdWString(), *mi, true, 0));
-            if (g->gpu()) {
-                bestT = timeIt(*g);
-                bestProv = QString::fromUtf8("การ์ดจอ (DirectML)");
-                best = std::move(g);
-            }
-        } catch (...) {}
-        {
+        const int pref = s_devicePref.load();
+        double gpuT = -1, cpuT = -1;
+        if (pref != 1) {
+            try {
+                std::unique_ptr<MdxModel> g(new MdxModel(path.toStdWString(), *mi, true, 0));
+                if (g->gpu()) {
+                    bestT = gpuT = timeIt(*g);
+                    bestProv = QString::fromUtf8("การ์ดจอ (DirectML)");
+                    best = std::move(g);
+                }
+            } catch (...) {}
+        }
+        if (pref != 2 || !best) {
             const int threads = std::max(4, int(std::thread::hardware_concurrency()) / 2);
             std::unique_ptr<MdxModel> c(new MdxModel(path.toStdWString(), *mi, false, threads));
-            const double tc = timeIt(*c);
-            if (!best || tc * 1.8 <= 4.0 || tc < bestT * 0.8) {
+            const double tc = cpuT = timeIt(*c);
+            if (pref == 1 || !best || tc * 1.8 <= 4.0 || tc < bestT * 0.8) {
                 bestT = tc;
                 bestProv = "CPU";
                 best = std::move(c);
             }
         }
+        aiLog(QString("model %1 speed test: GPU %2 s, CPU %3 s per window -> using %4 (preference %5)")
+              .arg(key).arg(gpuT, 0, 'f', 2).arg(cpuT, 0, 'f', 2)
+              .arg(bestProv == "CPU" ? "CPU" : "GPU").arg(pref == 1 ? "CPU" : pref == 2 ? "GPU" : "auto"));
         {
             std::lock_guard<std::mutex> lock(m);
             if (key != wantedKey) { isLoading = false; return; }   // another model was picked meanwhile
@@ -274,7 +392,9 @@ void AiVocalEngine::loadModel(QString key)
             loadedKey = key;
             provider = bestProv;
             computeSec = bestT;
-            hopSec = std::min(6.0, std::max(4.0, std::ceil(bestT * 2.5 / 0.5) * 0.5));
+            // The hop must fit inside one model window (CHUNK minus both trimmed edges and the
+            // cross-fade, ~5.76 s); 6 s overran it and crashed when the model ran slowly (CPU).
+            hopSec = std::min(5.5, std::max(4.0, std::ceil(bestT * 2.5 / 0.5) * 0.5));
             cushion = std::max(1.2, std::round(bestT * 6.0) / 10.0);
             aiError = bestT > 4.5 ? QString::fromUtf8("เครื่องช้าเกินไปสำหรับรุ่นนี้ ลองรุ่นเบา หรือโหมดเร็ว") : QString();
             loadMsg.clear();
@@ -384,7 +504,7 @@ void AiVocalEngine::worker()
                 std::fill(buf.begin(), buf.end(), 0.0f);
                 pending = 0;
                 tailInst.clear();
-                hopSamples = int(hopSec * SR);
+                hopSamples = std::min(int(hopSec * SR), CHUNK - 2 * TRIM - XF);
             }
         }
         // stream the block into the window (planar, newest at the end)
@@ -429,7 +549,9 @@ void AiVocalEngine::runWindow(MdxModel &model)
     }
     std::vector<float> inst(size_t(2) * CHUNK);
     const double t0 = nowSec();
+    isComputing.store(true);
     model.instrumental(buf.data(), inst.data());
+    isComputing.store(false);
     const double dt = nowSec() - t0;
     {
         std::lock_guard<std::mutex> lock(m);
