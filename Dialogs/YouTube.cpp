@@ -1140,6 +1140,8 @@ void YouTubePlayer::playVideo(const QString &videoId, int volume)
     paused = false;
     duration = 0;
     waitedMs = 0;
+    lastPos = -1;
+    stuckMs = 0;
 
     const int clampedVol = qBound(0, volume, 100);
     const QString vq = QSettings().value("YtVideoQuality", "hd720").toString();
@@ -1249,8 +1251,20 @@ void YouTubePlayer::poll()
             duration = d;
             emit durationChanged(d);
         }
-        emit positionChanged(qint64(o.value("t").toDouble() * 1000));
-        if (state == 0) {           // ended
+        const qint64 t = qint64(o.value("t").toDouble() * 1000);
+        emit positionChanged(t);
+
+        // After a jump to (or near) the very end, YouTube's player often stops on the last
+        // frame (paused / buffering) without ever reporting "ended". Not paused by us, near the
+        // end and not moving for 1.5 s = the clip is over.
+        const bool nearEnd = duration > 0 && t >= duration - 1500;
+        if (state != 0 && nearEnd && !paused && qAbs(t - lastPos) < 50)
+            stuckMs += pollTimer.interval();
+        else
+            stuckMs = 0;
+        lastPos = t;
+
+        if (state == 0 || stuckMs >= 1500) {    // ended
             active = false;
             pollTimer.stop();
             emit ended();

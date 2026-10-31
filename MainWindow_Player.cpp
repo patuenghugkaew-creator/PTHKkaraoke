@@ -116,7 +116,11 @@ void MainWindow::onSliderPositionReleased()
     }
 #ifdef PTHK_WEBENGINE
     if (ytActive) {
-        ytPlayer->seek(ui->sliderPosition->value(), true);
+        qint64 to = ui->sliderPosition->value();
+        const qint64 dur = ytPlayer->durationMs();
+        if (dur > 3000 && to > dur - 2000)
+            to = dur - 2000;
+        ytPlayer->seek(to, true);
 #ifdef KM_HAVE_PROCLOOP
         if (ytAudio && ytAudio->aiMode())
             aiEngine->reset();

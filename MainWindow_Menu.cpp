@@ -483,6 +483,9 @@ void MainWindow::showContextMenuAt(const QPoint &globalPos)
     { // Screen
         QMenu *m = menu.addMenu(MenuIcons::make(MenuIcons::Screen), tr("หน้าจอ"));
         m->addAction(&actionFullScreen);
+        // after the menu has closed, so the menu does not stay on screen
+        m->addAction(MenuIcons::make(MenuIcons::Screen), tr("ย่อหน้าต่าง (ซ่อนไว้ที่แถบงาน)"), this,
+                     [this]() { QTimer::singleShot(0, this, [this]() { minimizeWindow(); }); });
         m->addAction(&actionSecond);
         m->addAction(&actionBgVideo);
         m->addSeparator();
@@ -778,7 +781,8 @@ void MainWindow::showVSTDirDialog()
 
 void MainWindow::minimizeWindow()
 {
-    setWindowState(Qt::WindowMinimized);
+    // keep full screen: clicking the taskbar button brings it back full screen
+    setWindowState(windowState() | Qt::WindowMinimized);
 }
 
 void MainWindow::showMapSFDialog()

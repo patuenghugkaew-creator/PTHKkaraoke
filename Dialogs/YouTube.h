@@ -187,6 +187,8 @@ private:
     bool started = false;
     qint64 duration = 0;
     int waitedMs = 0;
+    qint64 lastPos = -1;        // stuck-at-the-end detection (see poll)
+    int stuckMs = 0;
     bool pageReady = false;
     bool subtitlesVisible = false;
 };
