@@ -339,6 +339,9 @@ bool MainWindow::editMedleySet(const QString &name)
     left->addWidget(find);
     QListWidget *results = new QListWidget(&dlg);
     left->addWidget(results, 1);
+    QLabel *legend = new QLabel(tr("สีเขียว = ความเร็วเข้ากับที่ล็อกไว้ (ต่อกันเนียน)"), &dlg);
+    legend->setStyleSheet("color: #15803d;");
+    left->addWidget(legend);
     QPushButton *btnAdd = new QPushButton(tr("เพิ่มเข้าชุด  >>"), &dlg);
     btnAdd->setMinimumHeight(34);
     btnAdd->setStyleSheet("QPushButton{font-weight:bold;color:#16a34a;}");
@@ -364,15 +367,33 @@ bool MainWindow::editMedleySet(const QString &name)
     mid->addLayout(right, 1);
     v->addLayout(mid, 1);
 
+    // tempo / key text of a song, and a green mark when it suits the locked tempo
+    // (same tempo +-8, or half / double time, as the medley plays it)
+    auto tempoText = [](Song &s) {
+        QStringList t;
+        if (s.tempo() > 0) t << QString("%1 BPM").arg(s.tempo());
+        if (!s.key().isEmpty()) t << s.key();
+        return t.isEmpty() ? QString() : "  [" + t.join(", ") + "]";
+    };
+    auto suits = [rLock, spinBpm](Song &s) {
+        if (!rLock->isChecked() || s.tempo() <= 0) return false;
+        const int lock = spinBpm->value();
+        for (double f : { 1.0, 0.5, 2.0 })
+            if (qAbs(s.tempo() * f - lock) <= 8) return true;
+        return false;
+    };
+
     // the set's songs live here (deleted when the dialog closes)
     struct Owned { QList<Song *> list; ~Owned() { qDeleteAll(list); } } owned;
     owned.list = songs;
-    auto showSet = [setList, count, &owned]() {
+    auto showSet = [setList, count, &owned, tempoText, suits]() {
         const int row = setList->currentRow();
         setList->clear();
         for (int i = 0; i < owned.list.size(); ++i) {
             Song *s = owned.list[i];
-            setList->addItem(QString("%1. %2 - %3  (%4)").arg(i + 1).arg(s->name(), s->artist(), s->songType()));
+            QListWidgetItem *it = new QListWidgetItem(QString("%1. %2 - %3  (%4)%5").arg(i + 1)
+                    .arg(s->name(), s->artist(), s->songType(), tempoText(*s)), setList);
+            if (suits(*s)) it->setForeground(QColor("#15803d"));
         }
         setList->setCurrentRow(qMin(row, setList->count() - 1));
         count->setText(QObject::tr("%1 เพลง").arg(owned.list.size()));
@@ -384,11 +405,23 @@ bool MainWindow::editMedleySet(const QString &name)
     debounce->setSingleShot(true);
     debounce->setInterval(300);
     connect(find, &QLineEdit::textChanged, debounce, [debounce]() { debounce->start(); });
-    connect(debounce, &QTimer::timeout, &dlg, [this, find, results, &found]() {
+    auto showFound = [results, &found, tempoText, suits]() {
+        const int row = results->currentRow();
         results->clear();
+        for (Song &s : found) {
+            QListWidgetItem *it = new QListWidgetItem(QString("%1  %2 - %3  (%4)%5")
+                    .arg(s.id(), s.name(), s.artist(), s.songType(), tempoText(s)), results);
+            if (suits(s)) it->setForeground(QColor("#15803d"));
+        }
+        if (row >= 0 && row < results->count())
+            results->setCurrentRow(row);
+    };
+    // the green marks follow the tempo setting
+    connect(rLock, &QRadioButton::toggled, &dlg, [showFound, showSet]() { showFound(); showSet(); });
+    connect(spinBpm, QOverload<int>::of(&QSpinBox::valueChanged), &dlg, [showFound, showSet]() { showFound(); showSet(); });
+    connect(debounce, &QTimer::timeout, &dlg, [this, find, results, &found, showFound]() {
         found = find->text().trimmed().isEmpty() ? QList<Song>() : db->findSongs(find->text().trimmed(), 100);
-        for (Song &s : found)
-            results->addItem(QString("%1  %2 - %3  (%4)").arg(s.id(), s.name(), s.artist(), s.songType()));
+        showFound();
         if (results->count() > 0)
             results->setCurrentRow(0);
     });
