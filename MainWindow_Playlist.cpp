@@ -168,7 +168,7 @@ void MainWindow::loadMedleySet(const QString &name)
     player->saveMedleySettings();
 
     // the queue: everything after the playing song is replaced by the set
-    const bool playing = !player->isPlayerStopped();
+    const bool playing = isSongPlaying();       // any song: MIDI, video, MP3, YouTube
     const int from = playing ? (remove_playlist ? 0 : playingIndex + 1) : 0;
     while (playlist.size() > from)
         delete playlist.takeLast();
@@ -179,7 +179,7 @@ void MainWindow::loadMedleySet(const QString &name)
 
     if (!player->isUseMedley())
         player->setUseMedley(true);
-    if (playing)
+    if (!player->isPlayerStopped())     // a MIDI song plays: it follows the set's tempo
         applyMedleyToPlayingSong();
     if (btnMedley) {
         QSignalBlocker b(btnMedley);
@@ -191,9 +191,12 @@ void MainWindow::loadMedleySet(const QString &name)
     ui->detail->setDetail(tr("ชุดเมดเลย์ ") + name,
                           tr("%1 เพลง, %2, ลูกส่ง %3 ห้อง%4")
                               .arg(songs.size()).arg(bpm).arg(player->medleyTransitionBars())
-                              .arg(playing ? QString() : tr("  -  กดเล่นเพื่อเริ่ม")));
+                              .arg(QString()));
     ui->detail->show();
     detailTimer->start(5000);
+    // stopped: start the set right away (one click on stage)
+    if (!playing && !playlist.isEmpty())
+        QTimer::singleShot(0, this, [this]() { play(0); });
     if (missing > 0)
         QMessageBox::information(dialogParent(), tr("ชุดเมดเลย์"),
                                  tr("ไม่พบไฟล์เพลง %1 เพลง (ข้ามไป):\n%2").arg(missing).arg(missingNames.join("\n")));
