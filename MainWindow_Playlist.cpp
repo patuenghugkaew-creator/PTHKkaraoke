@@ -100,8 +100,7 @@ void MainWindow::saveMedleySet()
     }
     songs << playlist;
     if (songs.isEmpty()) {
-        QMessageBox::information(dialogParent(), tr("ชุดเมดเลย์"),
-                                 tr("ยังไม่มีเพลงในคิว\nเพิ่มเพลงเข้าคิวให้ครบ แล้วค่อยบันทึกเป็นชุด"));
+        editMedleySet(QString());     // empty queue: build the set in the editor
         return;
     }
     bool ok = false;
@@ -200,63 +199,67 @@ void MainWindow::loadMedleySet(const QString &name)
                                  tr("ไม่พบไฟล์เพลง %1 เพลง (ข้ามไป):\n%2").arg(missing).arg(missingNames.join("\n")));
 }
 
+// The list of sets: create, edit, play, delete.
 void MainWindow::manageMedleySets()
 {
     QDialog dlg(dialogParent());
-    dlg.setWindowTitle(tr("จัดการชุดเมดเลย์"));
-    dlg.resize(460, 380);
+    dlg.setWindowTitle(tr("ชุดเมดเลย์"));
+    dlg.resize(520, 420);
     QVBoxLayout *v = new QVBoxLayout(&dlg);
+    QLabel *hint = new QLabel(tr("ชุดเมดเลย์ = รายการเพลงที่จัดไว้ล่วงหน้า พร้อมความเร็วและลูกส่ง\nบนเวทีเลือกจากเมนูคลิกขวา > ชุดเมดเลย์ แล้วกดเล่น"), &dlg);
+    hint->setStyleSheet("color: gray;");
+    v->addWidget(hint);
     QListWidget *list = new QListWidget(&dlg);
     v->addWidget(list, 1);
-    auto refresh = [this, list]() {
+    QLabel *empty = new QLabel(tr("ยังไม่มีชุด  -  กด \"+ สร้างชุดใหม่\""), &dlg);
+    empty->setAlignment(Qt::AlignCenter);
+    v->addWidget(empty);
+    auto refresh = [this, list, empty]() {
         list->clear();
         for (const QString &n : medleySetNames()) {
             QSettings ini(medleySetFileBase(n) + ".ini", QSettings::IniFormat);
             ini.setIniCodec("UTF-8");
             const int bpm = ini.value("BPM", 0).toInt();
-            QListWidgetItem *it = new QListWidgetItem(QString("%1   (%2 เพลง%3)").arg(n)
+            QListWidgetItem *it = new QListWidgetItem(QString("%1   (%2 เพลง, %3, ลูกส่ง %4 ห้อง)").arg(n)
                     .arg(ini.value("Songs", 0).toInt())
-                    .arg(bpm > 0 && ini.value("TempoMode", 0).toInt() != 1 ? QString(", %1 BPM").arg(bpm) : QString()), list);
+                    .arg(bpm > 0 ? QString("%1 BPM").arg(bpm) : tr("ความเร็วตามต้นฉบับ"))
+                    .arg(ini.value("TransitionBars", 1).toInt()), list);
             it->setData(Qt::UserRole, n);
         }
+        empty->setVisible(list->count() == 0);
+        if (list->count() > 0)
+            list->setCurrentRow(0);
     };
     refresh();
+
     QHBoxLayout *row = new QHBoxLayout();
-    QPushButton *btnOpen = new QPushButton(tr("เปิดชุดนี้"), &dlg);
-    QPushButton *btnRename = new QPushButton(tr("เปลี่ยนชื่อ"), &dlg);
+    QPushButton *btnNew = new QPushButton(tr("+ สร้างชุดใหม่"), &dlg);
+    QPushButton *btnEdit = new QPushButton(tr("แก้ไขชุด"), &dlg);
+    QPushButton *btnPlay = new QPushButton(tr("ใช้ชุดนี้"), &dlg);
     QPushButton *btnDelete = new QPushButton(tr("ลบชุด"), &dlg);
     QPushButton *btnClose = new QPushButton(tr("ปิด"), &dlg);
-    for (QPushButton *b : { btnOpen, btnRename, btnDelete })
+    btnNew->setStyleSheet("QPushButton{font-weight:bold;color:#16a34a;}");
+    for (QPushButton *b : { btnNew, btnEdit, btnPlay, btnDelete }) {
+        b->setMinimumHeight(34);
+        b->setAutoDefault(false);
         row->addWidget(b);
+    }
     row->addStretch();
     row->addWidget(btnClose);
     v->addLayout(row);
+
     auto selected = [list]() { return list->currentItem() ? list->currentItem()->data(Qt::UserRole).toString() : QString(); };
-    connect(btnOpen, &QPushButton::clicked, &dlg, [&, selected]() {
+    connect(btnNew, &QPushButton::clicked, &dlg, [&, refresh]() { if (editMedleySet(QString())) refresh(); });
+    connect(btnEdit, &QPushButton::clicked, &dlg, [&, selected, refresh]() {
+        const QString n = selected();
+        if (!n.isEmpty() && editMedleySet(n)) refresh();
+    });
+    connect(list, &QListWidget::itemDoubleClicked, btnEdit, &QPushButton::click);
+    connect(btnPlay, &QPushButton::clicked, &dlg, [&, selected]() {
         const QString n = selected();
         if (n.isEmpty()) return;
         dlg.accept();
         loadMedleySet(n);
-    });
-    connect(list, &QListWidget::itemDoubleClicked, btnOpen, &QPushButton::click);
-    connect(btnRename, &QPushButton::clicked, &dlg, [&, selected, refresh]() {
-        const QString n = selected();
-        if (n.isEmpty()) return;
-        bool ok = false;
-        const QString nn = QInputDialog::getText(&dlg, tr("เปลี่ยนชื่อชุด"), tr("ชื่อใหม่:"), QLineEdit::Normal, n, &ok).trimmed();
-        if (!ok || nn.isEmpty() || nn == n) return;
-        const QString from = medleySetFileBase(n), to = medleySetFileBase(nn);
-        if (QFile::exists(to + ".bmpl")) {
-            QMessageBox::information(&dlg, tr("เปลี่ยนชื่อชุด"), tr("มีชุดชื่อนี้อยู่แล้ว"));
-            return;
-        }
-        QFile::rename(from + ".bmpl", to + ".bmpl");
-        QFile::rename(from + ".ini", to + ".ini");
-        QSettings ini(to + ".ini", QSettings::IniFormat);
-        ini.setIniCodec("UTF-8");
-        ini.setValue("Name", nn);
-        ini.sync();
-        refresh();
     });
     connect(btnDelete, &QPushButton::clicked, &dlg, [&, selected, refresh]() {
         const QString n = selected();
@@ -270,6 +273,214 @@ void MainWindow::manageMedleySets()
     });
     connect(btnClose, &QPushButton::clicked, &dlg, &QDialog::reject);
     dlg.exec();
+}
+
+// Create / edit one set: name, tempo, bridge, and its songs (search the song library on the
+// left, the set on the right).
+bool MainWindow::editMedleySet(const QString &name)
+{
+    QDialog dlg(dialogParent());
+    dlg.setWindowTitle(name.isEmpty() ? tr("สร้างชุดเมดเลย์") : tr("แก้ไขชุดเมดเลย์"));
+    dlg.resize(900, 560);
+    QVBoxLayout *v = new QVBoxLayout(&dlg);
+
+    // name, tempo, bridge
+    QSettings *ini = nullptr;
+    QList<Song *> songs;
+    if (!name.isEmpty()) {
+        Utils::loadPlaylist(medleySetFileBase(name) + ".bmpl", songs);
+        ini = new QSettings(medleySetFileBase(name) + ".ini", QSettings::IniFormat, &dlg);
+        ini->setIniCodec("UTF-8");
+    }
+    QGridLayout *top = new QGridLayout();
+    QLineEdit *nameEdit = new QLineEdit(name, &dlg);
+    nameEdit->setPlaceholderText(tr("เช่น สามช่า 150, ลูกทุ่งรำวง, งานแต่ง"));
+    top->addWidget(new QLabel(tr("ชื่อชุด:"), &dlg), 0, 0);
+    top->addWidget(nameEdit, 0, 1, 1, 3);
+
+    const int savedBpm = ini ? ini->value("BPM", 150).toInt() : (player->medleyBPM() > 0 ? player->medleyBPM() : 150);
+    QRadioButton *rFollow = new QRadioButton(tr("ตามต้นฉบับแต่ละเพลง"), &dlg);
+    QRadioButton *rLock = new QRadioButton(tr("ล็อกทุกเพลงที่"), &dlg);
+    QSpinBox *spinBpm = new QSpinBox(&dlg);
+    spinBpm->setRange(40, 250);
+    spinBpm->setSuffix(" BPM");
+    spinBpm->setValue(savedBpm > 0 ? savedBpm : 150);
+    (savedBpm > 0 ? rLock : rFollow)->setChecked(true);
+    spinBpm->setEnabled(rLock->isChecked());
+    connect(rLock, &QRadioButton::toggled, spinBpm, &QSpinBox::setEnabled);
+    QHBoxLayout *tempoRow = new QHBoxLayout();
+    tempoRow->addWidget(rFollow);
+    tempoRow->addSpacing(12);
+    tempoRow->addWidget(rLock);
+    tempoRow->addWidget(spinBpm);
+    tempoRow->addStretch();
+    top->addWidget(new QLabel(tr("ความเร็ว:"), &dlg), 1, 0);
+    top->addLayout(tempoRow, 1, 1, 1, 3);
+
+    QComboBox *bars = new QComboBox(&dlg);
+    bars->addItem(tr("0 ห้อง (ต่อทันที)"), 0);
+    bars->addItem(tr("1 ห้อง (ลูกส่ง)"), 1);
+    bars->addItem(tr("2 ห้อง (จังหวะ 1 + ลูกส่ง 1)"), 2);
+    bars->addItem(tr("3 ห้อง (จังหวะ 2 + ลูกส่ง 1)"), 3);
+    bars->addItem(tr("4 ห้อง (จังหวะ 3 + ลูกส่ง 1)"), 4);
+    bars->setCurrentIndex(qBound(0, ini ? ini->value("TransitionBars", 2).toInt() : player->medleyTransitionBars(), 4));
+    top->addWidget(new QLabel(tr("ลูกส่งระหว่างเพลง:"), &dlg), 2, 0);
+    top->addWidget(bars, 2, 1);
+    top->setColumnStretch(3, 1);
+    v->addLayout(top);
+
+    // left: find songs / right: the set
+    QHBoxLayout *mid = new QHBoxLayout();
+    QVBoxLayout *left = new QVBoxLayout();
+    left->addWidget(new QLabel(tr("1. ค้นหาเพลง (ชื่อเพลง / ศิลปิน / รหัส)"), &dlg));
+    QLineEdit *find = new QLineEdit(&dlg);
+    find->setPlaceholderText(tr("พิมพ์แล้วรอสักครู่..."));
+    find->setClearButtonEnabled(true);
+    left->addWidget(find);
+    QListWidget *results = new QListWidget(&dlg);
+    left->addWidget(results, 1);
+    QPushButton *btnAdd = new QPushButton(tr("เพิ่มเข้าชุด  >>"), &dlg);
+    btnAdd->setMinimumHeight(34);
+    btnAdd->setStyleSheet("QPushButton{font-weight:bold;color:#16a34a;}");
+    left->addWidget(btnAdd);
+    mid->addLayout(left, 1);
+
+    QVBoxLayout *right = new QVBoxLayout();
+    right->addWidget(new QLabel(tr("2. เพลงในชุด (เรียงตามลำดับที่จะเล่น)"), &dlg));
+    QListWidget *setList = new QListWidget(&dlg);
+    right->addWidget(setList, 1);
+    QHBoxLayout *setBtns = new QHBoxLayout();
+    QPushButton *btnRemove = new QPushButton(tr("ลบ"), &dlg);
+    QPushButton *btnUp = new QPushButton(tr("ขึ้น"), &dlg);
+    QPushButton *btnDown = new QPushButton(tr("ลง"), &dlg);
+    QPushButton *btnFromQueue = new QPushButton(tr("เพิ่มจากคิวตอนนี้"), &dlg);
+    for (QPushButton *b : { btnRemove, btnUp, btnDown, btnFromQueue }) {
+        b->setAutoDefault(false);
+        setBtns->addWidget(b);
+    }
+    right->addLayout(setBtns);
+    QLabel *count = new QLabel(&dlg);
+    right->addWidget(count);
+    mid->addLayout(right, 1);
+    v->addLayout(mid, 1);
+
+    // the set's songs live here (deleted when the dialog closes)
+    struct Owned { QList<Song *> list; ~Owned() { qDeleteAll(list); } } owned;
+    owned.list = songs;
+    auto showSet = [setList, count, &owned]() {
+        const int row = setList->currentRow();
+        setList->clear();
+        for (int i = 0; i < owned.list.size(); ++i) {
+            Song *s = owned.list[i];
+            setList->addItem(QString("%1. %2 - %3  (%4)").arg(i + 1).arg(s->name(), s->artist(), s->songType()));
+        }
+        setList->setCurrentRow(qMin(row, setList->count() - 1));
+        count->setText(QObject::tr("%1 เพลง").arg(owned.list.size()));
+    };
+    showSet();
+
+    QList<Song> found;
+    QTimer *debounce = new QTimer(&dlg);
+    debounce->setSingleShot(true);
+    debounce->setInterval(300);
+    connect(find, &QLineEdit::textChanged, debounce, [debounce]() { debounce->start(); });
+    connect(debounce, &QTimer::timeout, &dlg, [this, find, results, &found]() {
+        results->clear();
+        found = find->text().trimmed().isEmpty() ? QList<Song>() : db->findSongs(find->text().trimmed(), 100);
+        for (Song &s : found)
+            results->addItem(QString("%1  %2 - %3  (%4)").arg(s.id(), s.name(), s.artist(), s.songType()));
+        if (results->count() > 0)
+            results->setCurrentRow(0);
+    });
+    auto addSelected = [results, &found, &owned, showSet, setList]() {
+        const QList<QListWidgetItem *> items = results->selectedItems();
+        for (QListWidgetItem *it : items) {
+            const int r = results->row(it);
+            if (r >= 0 && r < found.size())
+                owned.list << new Song(found[r]);
+        }
+        showSet();
+        setList->setCurrentRow(setList->count() - 1);
+    };
+    results->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    connect(btnAdd, &QPushButton::clicked, &dlg, addSelected);
+    connect(results, &QListWidget::itemDoubleClicked, &dlg, addSelected);
+    connect(find, &QLineEdit::returnPressed, &dlg, [debounce, addSelected, results]() {
+        if (debounce->isActive() || results->count() == 0) return;
+        addSelected();
+    });
+    connect(btnRemove, &QPushButton::clicked, &dlg, [setList, &owned, showSet]() {
+        const int r = setList->currentRow();
+        if (r < 0) return;
+        delete owned.list.takeAt(r);
+        showSet();
+    });
+    auto move = [setList, &owned, showSet](int d) {
+        const int r = setList->currentRow(), t = r + d;
+        if (r < 0 || t < 0 || t >= owned.list.size()) return;
+        owned.list.swapItemsAt(r, t);
+        setList->setCurrentRow(t);
+        showSet();
+        setList->setCurrentRow(t);
+    };
+    connect(btnUp, &QPushButton::clicked, &dlg, [move]() { move(-1); });
+    connect(btnDown, &QPushButton::clicked, &dlg, [move]() { move(1); });
+    connect(btnFromQueue, &QPushButton::clicked, &dlg, [this, &owned, showSet]() {
+        if (remove_playlist && !player->isPlayerStopped() && !playingSong.id().isEmpty())
+            owned.list << new Song(playingSong);
+        for (Song *s : playlist)
+            owned.list << new Song(*s);
+        showSet();
+    });
+
+    QHBoxLayout *bottom = new QHBoxLayout();
+    QPushButton *btnSave = new QPushButton(tr("บันทึกชุด"), &dlg);
+    QPushButton *btnCancel = new QPushButton(tr("ยกเลิก"), &dlg);
+    btnSave->setMinimumSize(140, 38);
+    btnSave->setAutoDefault(false);
+    btnCancel->setAutoDefault(false);
+    bottom->addStretch();
+    bottom->addWidget(btnSave);
+    bottom->addWidget(btnCancel);
+    v->addLayout(bottom);
+    connect(btnCancel, &QPushButton::clicked, &dlg, &QDialog::reject);
+    connect(btnSave, &QPushButton::clicked, &dlg, [&]() {
+        const QString n = nameEdit->text().trimmed();
+        if (n.isEmpty()) {
+            QMessageBox::information(&dlg, dlg.windowTitle(), tr("กรุณาตั้งชื่อชุด"));
+            nameEdit->setFocus();
+            return;
+        }
+        if (owned.list.isEmpty()) {
+            QMessageBox::information(&dlg, dlg.windowTitle(), tr("ยังไม่มีเพลงในชุด\nค้นหาเพลงทางซ้าย แล้วกด \"เพิ่มเข้าชุด\""));
+            find->setFocus();
+            return;
+        }
+        const QString base = medleySetFileBase(n);
+        if (n != name && QFile::exists(base + ".bmpl")
+                && QMessageBox::question(&dlg, dlg.windowTitle(), tr("มีชุด \"%1\" อยู่แล้ว บันทึกทับไหม?").arg(n)) != QMessageBox::Yes)
+            return;
+        if (!Utils::savePlaylist(base + ".bmpl", owned.list)) {
+            QMessageBox::warning(&dlg, dlg.windowTitle(), tr("บันทึกไม่สำเร็จ"));
+            return;
+        }
+        QSettings out(base + ".ini", QSettings::IniFormat);
+        out.setIniCodec("UTF-8");
+        out.setValue("Name", n);
+        out.setValue("BPM", rLock->isChecked() ? spinBpm->value() : 0);
+        out.setValue("TempoMode", rLock->isChecked() ? 0 : 1);
+        out.setValue("TransitionBars", bars->currentData().toInt());
+        out.setValue("FillVolume", ini ? ini->value("FillVolume", player->medleyFillVolume()).toInt() : player->medleyFillVolume());
+        out.setValue("Songs", owned.list.size());
+        out.sync();
+        if (!name.isEmpty() && n != name) {         // renamed: drop the old files
+            QFile::remove(medleySetFileBase(name) + ".bmpl");
+            QFile::remove(medleySetFileBase(name) + ".ini");
+        }
+        dlg.accept();
+    });
+    nameEdit->setFocus();
+    return dlg.exec() == QDialog::Accepted;
 }
 
 void MainWindow::turnOffMedley()

@@ -72,6 +72,7 @@ public:
     void saveMedleySet();
     void loadMedleySet(const QString &name);
     void manageMedleySets();
+    bool editMedleySet(const QString &name);    // empty name = a new set; true when saved
     void applyMedleyToPlayingSong();
     void applySlideshowFromSettings(Background *bg);
     void setBackgroundVideoFolder(const QString &dir);   // video background on both screens
