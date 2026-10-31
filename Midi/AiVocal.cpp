@@ -16,6 +16,9 @@
 #include <urlmon.h>
 #pragma comment(lib, "urlmon.lib")
 
+#include <d3d12.h>
+#include <DirectML.h>
+#pragma comment(lib, "d3d12.lib")
 #include <onnxruntime_cxx_api.h>
 #include <dml_provider_factory.h>
 #include "pocketfft_hdronly.h"
@@ -70,11 +73,23 @@ public:
             if (dml) {
                 opts.DisableMemPattern();
                 opts.SetExecutionMode(ORT_SEQUENTIAL);
-                OrtStatus *st = dml->SessionOptionsAppendExecutionProvider_DML(opts, 0);
-                if (st)
-                    Ort::GetApi().ReleaseStatus(st);
-                else
-                    onGpu = true;
+                // Own COMPUTE queue: the work runs beside the screen's drawing instead of in
+                // the same queue (an integrated GPU then held the picture for ~0.2 s per window).
+                // Same speed. Falls back to DirectML's default queue.
+                if (createComputeQueue()) {
+                    OrtStatus *st = dml->SessionOptionsAppendExecutionProvider_DML1(opts, dmlDev, queue);
+                    if (st)
+                        Ort::GetApi().ReleaseStatus(st);
+                    else
+                        onGpu = true;
+                }
+                if (!onGpu) {
+                    OrtStatus *st = dml->SessionOptionsAppendExecutionProvider_DML(opts, 0);
+                    if (st)
+                        Ort::GetApi().ReleaseStatus(st);
+                    else
+                        onGpu = true;
+                }
             }
         }
         session.reset(new Ort::Session(env, path.c_str(), opts));
@@ -162,9 +177,34 @@ public:
         }
     }
 
+    ~MdxModel()
+    {
+        session.reset();                // before the device / queue it uses
+        if (dmlDev) dmlDev->Release();
+        if (queue) queue->Release();
+        if (d3d) d3d->Release();
+    }
+
 private:
+    bool createComputeQueue()
+    {
+        if (FAILED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&d3d))))
+            return false;
+        D3D12_COMMAND_QUEUE_DESC qd = {};
+        qd.Type = D3D12_COMMAND_LIST_TYPE_COMPUTE;
+        if (FAILED(d3d->CreateCommandQueue(&qd, IID_PPV_ARGS(&queue))))
+            return false;
+        typedef HRESULT (WINAPI *CreateFn)(ID3D12Device *, DML_CREATE_DEVICE_FLAGS, REFIID, void **);
+        HMODULE h = LoadLibraryW(L"DirectML.dll");      // the copy next to the program
+        CreateFn create = h ? reinterpret_cast<CreateFn>(GetProcAddress(h, "DMLCreateDevice")) : nullptr;
+        return create && SUCCEEDED(create(d3d, DML_CREATE_DEVICE_FLAG_NONE, IID_PPV_ARGS(&dmlDev)));
+    }
+
     AiVocalEngine::ModelInfo cfg;
     Ort::Env env;
+    ID3D12Device *d3d = nullptr;
+    ID3D12CommandQueue *queue = nullptr;
+    IDMLDevice *dmlDev = nullptr;
     std::unique_ptr<Ort::Session> session;
     std::string inName, outName;
     std::vector<float> win;
@@ -211,7 +251,7 @@ bool AiVocalEngine::separateTrack(const QString &modelsDir, const QString &key, 
         return false;
     }
     try {
-        const int threads = std::max(4, int(std::thread::hardware_concurrency()) / 2);
+        const int threads = std::max(4, int(std::thread::hardware_concurrency()) * 3 / 4);
         MdxModel mm(path.toStdWString(), *mi, gpu, gpu ? 0 : threads);
         const int H = CHUNK - 2 * TRIM - XF;            // output samples per window
         inst.assign(size_t(frames) * 2, 0.0f);
@@ -373,7 +413,7 @@ void AiVocalEngine::loadModel(QString key)
             } catch (...) {}
         }
         if (pref != 2 || !best) {
-            const int threads = std::max(4, int(std::thread::hardware_concurrency()) / 2);
+            const int threads = std::max(4, int(std::thread::hardware_concurrency()) * 3 / 4);
             std::unique_ptr<MdxModel> c(new MdxModel(path.toStdWString(), *mi, false, threads));
             const double tc = cpuT = timeIt(*c);
             if (pref == 1 || !best || tc * 1.8 <= 4.0 || tc < bestT * 0.8) {

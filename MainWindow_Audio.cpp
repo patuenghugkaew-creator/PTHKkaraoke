@@ -216,9 +216,9 @@ void MainWindow::showYtVocalDialog()
     form->addRow(tr("รุ่น AI:"), model);
 
     QComboBox *aiDev = new QComboBox(&dlg);
-    aiDev->addItem(tr("อัตโนมัติ (เลือกตัวที่เร็วกว่า)"), 0);
-    aiDev->addItem(tr("CPU (ภาพไม่กระตุก แต่เสียงช้ากว่าเดิมเล็กน้อย)"), 1);
-    aiDev->addItem(tr("การ์ดจอ"), 2);
+    aiDev->addItem(tr("อัตโนมัติ (แนะนำ - ใช้การ์ดจอถ้าเร็วกว่า)"), 0);
+    aiDev->addItem(tr("CPU (ช้า - รุ่น hq อาจตามไม่ทัน)"), 1);
+    aiDev->addItem(tr("การ์ดจอ (เร็ว ภาพไม่กระตุก)"), 2);
     aiDev->setCurrentIndex(qBound(0, settings->value("YtAiDevice", 0).toInt(), 2));
     connect(aiDev, QOverload<int>::of(&QComboBox::currentIndexChanged), &dlg, [this, aiDev]() {
         const int pref = aiDev->currentData().toInt();
