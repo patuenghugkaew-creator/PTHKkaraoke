@@ -60,3 +60,5 @@ BASS/*-linux/
 BASS/*.chm
 # design files
 *.psd
+# licence issuing tool (owner only, not part of the program)
+license-tools/
