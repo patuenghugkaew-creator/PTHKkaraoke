@@ -51,6 +51,7 @@
 #include <QDialog>
 #include <QClipboard>
 #include <QListWidget>
+#include <QImageReader>
 #include <QDesktopServices>
 #include <QUrl>
 #include <QTextCodec>

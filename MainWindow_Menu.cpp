@@ -488,7 +488,7 @@ void MainWindow::showContextMenuAt(const QPoint &globalPos)
                      [this]() { QTimer::singleShot(0, this, [this]() { minimizeWindow(); }); });
         m->addAction(&actionSecond);
         m->addAction(&actionBgVideo);
-        m->addAction(MenuIcons::make(MenuIcons::Screen), tr("พื้นหลังสไลด์ภาพ..."), this,
+        m->addAction(MenuIcons::make(MenuIcons::Screen), tr("ภาพพื้นหลัง (สไลด์ภาพ)..."), this,
                      [this]() { QTimer::singleShot(0, this, [this]() { showSlideshowDialog(); }); });
         m->addSeparator();
         m->addAction(&actionShowMixer);
@@ -784,160 +784,179 @@ void MainWindow::showVSTDirDialog()
 void MainWindow::applySlideshowFromSettings(Background *bg)
 {
     Background::SlideshowOptions o;
+    for (const QString &f : settings->value("Slideshow/Files").toStringList())
+        o.files << Config::relocatePath(f);
     o.dir = Config::relocatePath(settings->value("Slideshow/Dir", "").toString());
-    o.intervalSec = settings->value("Slideshow/IntervalSec", 10).toInt();
-    o.transition = settings->value("Slideshow/Transition", 0).toInt();
-    o.transitionMs = settings->value("Slideshow/TransitionMs", 1200).toInt();
-    o.shuffle = settings->value("Slideshow/Shuffle", true).toBool();
+    o.intervalSec = settings->value("Slideshow/IntervalSec", 15).toInt();
+    o.transition = settings->value("Slideshow/Effect", true).toBool() ? 3 : 4;   // random effect / none
+    o.transitionMs = 1200;
+    o.shuffle = settings->value("Slideshow/Shuffle", false).toBool();
     o.fill = settings->value("Slideshow/Fill", true).toBool();
     bg->setSlideshow(o);
 }
 
-// Background slideshow: folder, time per picture, transition, its speed.
+// Background pictures: a list of pictures that change every few seconds (simple, like other
+// karaoke players): add / remove / clear / move up / down, effect, random order, full screen, delay.
 void MainWindow::showSlideshowDialog()
 {
     QDialog dlg(dialogParent());
-    dlg.setWindowTitle(tr("พื้นหลังสไลด์ภาพ"));
-    dlg.setMinimumWidth(520);
+    dlg.setWindowTitle(tr("ภาพพื้นหลัง (สไลด์ภาพ)"));
+    dlg.resize(620, 480);
     QVBoxLayout *v = new QVBoxLayout(&dlg);
-    QFormLayout *form = new QFormLayout();
-    v->addLayout(form);
 
-    Background::SlideshowOptions o = bgWidget->slideshow();
-    if (o.dir.isEmpty()) {
-        o.dir = Config::relocatePath(settings->value("Slideshow/Dir", "").toString());
-        o.intervalSec = settings->value("Slideshow/IntervalSec", 10).toInt();
-        o.transition = settings->value("Slideshow/Transition", 0).toInt();
-        o.transitionMs = settings->value("Slideshow/TransitionMs", 1200).toInt();
-        o.shuffle = settings->value("Slideshow/Shuffle", true).toBool();
-        o.fill = settings->value("Slideshow/Fill", true).toBool();
-    }
+    // top row: three ticks + delay, then the list buttons
+    QHBoxLayout *top = new QHBoxLayout();
+    QVBoxLayout *ticks = new QVBoxLayout();
+    QCheckBox *chkEffect = new QCheckBox(tr("เปลี่ยนภาพแบบมีเอฟเฟกต์"), &dlg);
+    QCheckBox *chkRandom = new QCheckBox(tr("สุ่มภาพ"), &dlg);
+    QCheckBox *chkFull = new QCheckBox(tr("เต็มจอ"), &dlg);
+    chkEffect->setChecked(settings->value("Slideshow/Effect", true).toBool());
+    chkRandom->setChecked(settings->value("Slideshow/Shuffle", false).toBool());
+    chkFull->setChecked(settings->value("Slideshow/Fill", true).toBool());
+    ticks->addWidget(chkEffect);
+    ticks->addWidget(chkRandom);
+    ticks->addWidget(chkFull);
+    top->addLayout(ticks);
 
-    // folder
-    QLineEdit *dirEdit = new QLineEdit(QDir::toNativeSeparators(o.dir), &dlg);
-    dirEdit->setReadOnly(true);
-    QPushButton *btnDir = new QPushButton(tr("เลือกโฟลเดอร์..."), &dlg);
-    QHBoxLayout *dirRow = new QHBoxLayout();
-    dirRow->addWidget(dirEdit, 1);
-    dirRow->addWidget(btnDir);
-    form->addRow(tr("โฟลเดอร์ภาพ:"), dirRow);
-    QLabel *found = new QLabel(&dlg);
-    found->setWordWrap(true);
-    form->addRow(QString(), found);
-    QStringList exts = Background::imageExtensions();
-    exts.sort();
-    QLabel *fmts = new QLabel(tr("รองรับ: ") + exts.join(", ").toUpper() + tr("  (รวมโฟลเดอร์ย่อย)"), &dlg);
-    fmts->setWordWrap(true);
-    fmts->setStyleSheet("color: gray;");
-    form->addRow(QString(), fmts);
-    QString dir = o.dir;
-    auto countPics = [&]() {
-        const int n = Background::slideshowImages(dir).count();
-        found->setText(dir.isEmpty() ? tr("ยังไม่ได้เลือกโฟลเดอร์")
-                                     : (n > 0 ? tr("พบภาพ %1 ภาพ").arg(n) : tr("ไม่พบไฟล์ภาพในโฟลเดอร์นี้")));
-        return n;
-    };
-    countPics();
-    connect(btnDir, &QPushButton::clicked, &dlg, [&]() {
-        const QString p = QFileDialog::getExistingDirectory(&dlg, tr("เลือกโฟลเดอร์ภาพพื้นหลัง"),
-                                                            dir.isEmpty() ? Utils::LAST_OPEN_DIR : dir,
-                                                            QFileDialog::ShowDirsOnly);
-        if (p.isEmpty())
-            return;
-        dir = QDir::fromNativeSeparators(p);
-        dirEdit->setText(QDir::toNativeSeparators(dir));
-        countPics();
-    });
+    QVBoxLayout *delayBox = new QVBoxLayout();
+    delayBox->addWidget(new QLabel(tr("เปลี่ยนภาพทุก (วินาที)"), &dlg));
+    QSpinBox *spinDelay = new QSpinBox(&dlg);
+    spinDelay->setRange(2, 3600);
+    spinDelay->setValue(settings->value("Slideshow/IntervalSec", 15).toInt());
+    spinDelay->setMinimumWidth(80);
+    delayBox->addWidget(spinDelay);
+    delayBox->addStretch();
+    top->addSpacing(16);
+    top->addLayout(delayBox);
+    top->addStretch();
 
-    // time per picture: spin box + quick buttons
-    QSpinBox *spinSec = new QSpinBox(&dlg);
-    spinSec->setRange(2, 3600);
-    spinSec->setSuffix(tr(" วินาที"));
-    spinSec->setValue(qBound(2, o.intervalSec, 3600));
-    QHBoxLayout *secRow = new QHBoxLayout();
-    secRow->addWidget(spinSec);
-    for (int sec : { 5, 10, 20, 30, 60 }) {
-        QPushButton *b = new QPushButton(sec < 60 ? tr("%1 วิ").arg(sec) : tr("1 นาที"), &dlg);
+    auto mkBtn = [&dlg](const QString &text, const QString &tip) {
+        QPushButton *b = new QPushButton(text, &dlg);
+        b->setToolTip(tip);
         b->setAutoDefault(false);
-        b->setFixedWidth(64);
-        connect(b, &QPushButton::clicked, spinSec, [spinSec, sec]() { spinSec->setValue(sec); });
-        secRow->addWidget(b);
-    }
-    secRow->addStretch();
-    form->addRow(tr("เปลี่ยนภาพทุก:"), secRow);
-
-    // transition
-    QComboBox *trans = new QComboBox(&dlg);
-    trans->addItem(tr("เฟด (ค่อยๆ จางเปลี่ยน)"), 0);
-    trans->addItem(tr("เลื่อน (ภาพใหม่ดันภาพเก่าออก)"), 1);
-    trans->addItem(tr("ซูม (ภาพใหม่ค่อยๆ ซูมเข้า)"), 2);
-    trans->addItem(tr("สุ่มแบบ"), 3);
-    trans->addItem(tr("ไม่มี (เปลี่ยนทันที)"), 4);
-    trans->setCurrentIndex(qMax(0, trans->findData(o.transition)));
-    form->addRow(tr("ทรานซิชัน:"), trans);
-
-    QSlider *speed = new QSlider(Qt::Horizontal, &dlg);
-    speed->setRange(2, 30);                 // x 100 ms
-    speed->setValue(qBound(2, o.transitionMs / 100, 30));
-    QLabel *speedLbl = new QLabel(&dlg);
-    speedLbl->setMinimumWidth(70);
-    auto showSpeed = [=]() { speedLbl->setText(tr("%1 วินาที").arg(speed->value() / 10.0, 0, 'f', 1)); };
-    showSpeed();
-    connect(speed, &QSlider::valueChanged, &dlg, showSpeed);
-    connect(trans, QOverload<int>::of(&QComboBox::currentIndexChanged), &dlg, [=]() {
-        speed->setEnabled(trans->currentData().toInt() != 4);
-    });
-    speed->setEnabled(o.transition != 4);
-    QHBoxLayout *spRow = new QHBoxLayout();
-    spRow->addWidget(speed, 1);
-    spRow->addWidget(speedLbl);
-    form->addRow(tr("ความยาวทรานซิชัน:"), spRow);
-
-    QCheckBox *chkShuffle = new QCheckBox(tr("สุ่มลำดับภาพ"), &dlg);
-    chkShuffle->setChecked(o.shuffle);
-    form->addRow(QString(), chkShuffle);
-    QCheckBox *chkFill = new QCheckBox(tr("ภาพเต็มจอ (ตัดขอบที่เกิน)  -  ไม่ติ๊ก: เห็นภาพทั้งภาพ มีขอบดำ"), &dlg);
-    chkFill->setChecked(o.fill);
-    form->addRow(QString(), chkFill);
-
-    QDialogButtonBox *bb = new QDialogButtonBox(&dlg);
-    QPushButton *btnUse = bb->addButton(tr("ใช้สไลด์ภาพ"), QDialogButtonBox::AcceptRole);
-    QPushButton *btnTry = bb->addButton(tr("ลองดู"), QDialogButtonBox::ApplyRole);
-    bb->addButton(tr("ปิด"), QDialogButtonBox::RejectRole);
-    btnUse->setDefault(true);
-    v->addWidget(bb);
-
-    auto apply = [&]() -> bool {
-        if (countPics() == 0) {
-            QMessageBox::information(&dlg, tr("พื้นหลังสไลด์ภาพ"), tr("กรุณาเลือกโฟลเดอร์ที่มีไฟล์ภาพ"));
-            return false;
-        }
-        Background::SlideshowOptions n;
-        n.dir = dir;
-        n.intervalSec = spinSec->value();
-        n.transition = trans->currentData().toInt();
-        n.transitionMs = speed->value() * 100;
-        n.shuffle = chkShuffle->isChecked();
-        n.fill = chkFill->isChecked();
-        settings->setValue("Slideshow/Dir", n.dir);
-        settings->setValue("Slideshow/IntervalSec", n.intervalSec);
-        settings->setValue("Slideshow/Transition", n.transition);
-        settings->setValue("Slideshow/TransitionMs", n.transitionMs);
-        settings->setValue("Slideshow/Shuffle", n.shuffle);
-        settings->setValue("Slideshow/Fill", n.fill);
-        settings->setValue("BackgroundType", int(Background::Slideshow));
-        bgWidget->setSlideshow(n);
-        bgWidget->setBackgroundType(Background::Slideshow);
-        if (secondMonitor != nullptr && secondLyr != nullptr) {
-            secondMonitor->backgroundWidget()->setSlideshow(n);
-            secondMonitor->backgroundWidget()->setBackgroundType(Background::Slideshow);
-        }
-        return true;
+        b->setMinimumHeight(36);
+        return b;
     };
-    connect(btnTry, &QPushButton::clicked, &dlg, [&]() { apply(); });
-    connect(bb, &QDialogButtonBox::accepted, &dlg, [&]() { if (apply()) dlg.accept(); });
-    connect(bb, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-    dlg.exec();
+    QPushButton *btnAdd = mkBtn(tr("+ เพิ่มภาพ"), tr("เลือกไฟล์ภาพ (เลือกได้ทีละหลายไฟล์)"));
+    QPushButton *btnRemove = mkBtn(tr("- ลบ"), tr("ลบภาพที่เลือกออกจากรายการ (ไฟล์จริงไม่ถูกลบ)"));
+    QPushButton *btnClear = mkBtn(tr("ล้างทั้งหมด"), tr("เอาภาพทั้งหมดออกจากรายการ"));
+    QPushButton *btnDown = mkBtn(tr("ลง"), tr("เลื่อนภาพที่เลือกลง"));
+    QPushButton *btnUp = mkBtn(tr("ขึ้น"), tr("เลื่อนภาพที่เลือกขึ้น"));
+    btnAdd->setStyleSheet("QPushButton{font-weight:bold;color:#16a34a;}");
+    btnRemove->setStyleSheet("QPushButton{font-weight:bold;color:#dc2626;}");
+    for (QPushButton *b : { btnAdd, btnRemove, btnClear, btnDown, btnUp })
+        top->addWidget(b);
+    v->addLayout(top);
+
+    // the list, with small pictures
+    QListWidget *list = new QListWidget(&dlg);
+    list->setIconSize(QSize(96, 54));
+    list->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    list->setSpacing(2);
+    v->addWidget(list, 1);
+    QLabel *info = new QLabel(&dlg);
+    info->setStyleSheet("color: gray;");
+    v->addWidget(info);
+
+    auto refreshInfo = [=]() {
+        info->setText(list->count() == 0
+                      ? tr("ยังไม่มีภาพ  -  กด \"+ เพิ่มภาพ\" (รองรับ JPG, PNG, BMP, GIF, WEBP, TIFF)")
+                      : tr("มีภาพ %1 ภาพ  -  เลือกแล้วกด ขึ้น/ลง เพื่อเรียงลำดับ").arg(list->count()));
+    };
+    auto addFile = [=](const QString &f) {
+        QListWidgetItem *it = new QListWidgetItem(QFileInfo(f).fileName(), list);
+        it->setData(Qt::UserRole, f);
+        it->setToolTip(QDir::toNativeSeparators(f));
+        QImageReader r(f);          // small picture for the list (read already reduced)
+        r.setAutoTransform(true);
+        const QSize sz = r.size();
+        if (sz.isValid())
+            r.setScaledSize(sz.scaled(QSize(96, 54), Qt::KeepAspectRatio));
+        const QImage thumb = r.read();
+        if (!thumb.isNull())
+            it->setIcon(QIcon(QPixmap::fromImage(thumb)));
+    };
+    for (const QString &f : settings->value("Slideshow/Files").toStringList()) {
+        const QString path = Config::relocatePath(f);
+        if (QFile::exists(path))
+            addFile(path);
+    }
+    refreshInfo();
+
+    connect(btnAdd, &QPushButton::clicked, &dlg, [&, addFile, refreshInfo]() {
+        QStringList pats;
+        for (const QString &e : Background::imageExtensions())
+            pats << "*." + e;
+        const QStringList files = QFileDialog::getOpenFileNames(&dlg, tr("เลือกภาพพื้นหลัง"), Utils::LAST_OPEN_DIR,
+                                                                tr("ไฟล์ภาพ (%1)").arg(pats.join(' ')));
+        if (files.isEmpty())
+            return;
+        Utils::LAST_OPEN_DIR = QFileInfo(files.first()).absolutePath();
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+        for (const QString &f : files)
+            addFile(QDir::fromNativeSeparators(f));
+        QApplication::restoreOverrideCursor();
+        refreshInfo();
+    });
+    connect(btnRemove, &QPushButton::clicked, &dlg, [=]() {
+        for (QListWidgetItem *it : list->selectedItems())
+            delete it;
+        refreshInfo();
+    });
+    connect(btnClear, &QPushButton::clicked, &dlg, [=]() {
+        list->clear();
+        refreshInfo();
+    });
+    auto move = [=](int dir) {
+        const int row = list->currentRow();
+        const int to = row + dir;
+        if (row < 0 || to < 0 || to >= list->count())
+            return;
+        QListWidgetItem *it = list->takeItem(row);
+        list->insertItem(to, it);
+        list->setCurrentRow(to);
+    };
+    connect(btnUp, &QPushButton::clicked, &dlg, [=]() { move(-1); });
+    connect(btnDown, &QPushButton::clicked, &dlg, [=]() { move(1); });
+
+    QHBoxLayout *okRow = new QHBoxLayout();
+    QPushButton *btnOk = new QPushButton(tr("ตกลง"), &dlg);
+    btnOk->setMinimumSize(140, 40);
+    btnOk->setDefault(true);
+    okRow->addStretch();
+    okRow->addWidget(btnOk);
+    okRow->addStretch();
+    v->addLayout(okRow);
+    connect(btnOk, &QPushButton::clicked, &dlg, &QDialog::accept);
+
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+
+    QStringList files;
+    for (int i = 0; i < list->count(); ++i)
+        files << list->item(i)->data(Qt::UserRole).toString();
+    settings->setValue("Slideshow/Files", files);
+    settings->setValue("Slideshow/Effect", chkEffect->isChecked());
+    settings->setValue("Slideshow/Shuffle", chkRandom->isChecked());
+    settings->setValue("Slideshow/Fill", chkFull->isChecked());
+    settings->setValue("Slideshow/IntervalSec", spinDelay->value());
+
+    Background::BackgroundType type;
+    if (!files.isEmpty()) {
+        type = Background::Slideshow;
+    } else {                    // no pictures: back to the single background picture
+        type = Background::Image;
+        settings->remove("Slideshow/Dir");
+    }
+    settings->setValue("BackgroundType", int(type));
+    QList<Background *> bgs { bgWidget };
+    if (secondMonitor != nullptr && secondLyr != nullptr)
+        bgs << secondMonitor->backgroundWidget();
+    for (Background *bg : bgs) {
+        if (type == Background::Slideshow)
+            applySlideshowFromSettings(bg);
+        bg->setBackgroundType(type);
+    }
 }
 
 void MainWindow::minimizeWindow()

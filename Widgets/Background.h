@@ -23,7 +23,8 @@ public:
 
     // Slideshow type: the pictures of a folder, one after another, with a transition
     struct SlideshowOptions {
-        QString dir;
+        QStringList files;          // the pictures, in this order (used when not empty)
+        QString dir;                // or every picture of a folder
         int intervalSec = 10;       // time each picture stays
         int transition = 0;         // 0 fade, 1 slide, 2 zoom, 3 random, 4 none
         int transitionMs = 1200;    // length of the transition

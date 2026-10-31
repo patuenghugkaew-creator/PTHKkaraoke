@@ -9,6 +9,7 @@
 #include <QVideoSurfaceFormat>
 #include <functional>
 #include <QImageReader>
+#include <QFile>
 #include <QPointer>
 #include <QApplication>
 #include <QResizeEvent>
@@ -170,13 +171,21 @@ QStringList Background::slideshowImages(const QString &dir)
 
 int Background::setSlideshow(const SlideshowOptions &o)
 {
-    const bool sameDir = (o.dir == _slideOpt.dir) && o.shuffle == _slideOpt.shuffle && !_slides.isEmpty();
+    const bool sameDir = (o.dir == _slideOpt.dir) && (o.files == _slideOpt.files)
+                         && o.shuffle == _slideOpt.shuffle && !_slides.isEmpty();
     const bool sameLook = o.fill == _slideOpt.fill;
     _slideOpt = o;
     _slideOpt.intervalSec = qBound(2, o.intervalSec, 3600);
     _slideOpt.transitionMs = qBound(0, o.transitionMs, 5000);
     if (!sameDir) {
-        _slides = slideshowImages(o.dir);
+        if (!o.files.isEmpty()) {
+            _slides.clear();
+            for (const QString &f : o.files)
+                if (QFile::exists(f))
+                    _slides << f;
+        } else {
+            _slides = slideshowImages(o.dir);
+        }
         if (o.shuffle)
             std::shuffle(_slides.begin(), _slides.end(), std::mt19937(std::random_device{}()));
         _slideIndex = -1;
