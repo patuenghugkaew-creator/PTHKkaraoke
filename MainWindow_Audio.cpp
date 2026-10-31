@@ -100,9 +100,10 @@ void MainWindow::applyYtVocalCut()
     ytAudio->setLevels(settings->value("YtVocalLevel", 0).toInt() / 100.0f,
                        settings->value("YtMusicLevel", 100).toInt() / 100.0f);
     const bool wasLatched = ytAiLatched;
+    const bool preStart = settings->value("YtAiPreStart", true).toBool();
     if (!ai)
         ytAiLatched = false;
-    else if (cut)
+    else if (cut || preStart)
         ytAiLatched = true;
     if (ai && ytAiLatched && !wasLatched && aiEngine && aiEngine->ready()) {
         // First switch-on in this song: picture holds and sound is silent until the AI's
@@ -157,6 +158,11 @@ void MainWindow::showYtVocalDialog()
     showLevels();
     QCheckBox *delayPic = new QCheckBox(tr("หน่วงภาพให้ตรงกับเสียง (โหมด AI)"), &dlg);
     delayPic->setChecked(settings->value("YtDelayPicture", true).toBool());
+    QCheckBox *preStart = new QCheckBox(tr("เตรียม AI ตั้งแต่เริ่มเพลง (รอครั้งเดียวตอนต้นเพลง กดตัดเสียงร้องแล้วได้ทันที)"), &dlg);
+    preStart->setToolTip(tr("ติ๊ก: AI เริ่มทำงานตั้งแต่เพลง YouTube เริ่ม ภาพรอ 5-6 วินาทีตอนต้นเพลงแทนกลางเพลง\n"
+                            "การ์ดจอ/CPU จะทำงานตลอดทุกเพลง YouTube แม้ไม่ได้กดตัดเสียงร้อง\n"
+                            "ไม่ติ๊ก: AI เริ่มเมื่อกดตัดเสียงร้องครั้งแรก (ภาพรอตอนนั้น)"));
+    preStart->setChecked(settings->value("YtAiPreStart", true).toBool());
     QLabel *status = new QLabel(&dlg);
     status->setWordWrap(true);
     status->setStyleSheet("color: gray;");
@@ -168,6 +174,7 @@ void MainWindow::showYtVocalDialog()
         settings->setValue("YtVocalLevel", voc->value());
         settings->setValue("YtMusicLevel", mus->value());
         settings->setValue("YtDelayPicture", delayPic->isChecked());
+        settings->setValue("YtAiPreStart", preStart->isChecked());
         showLevels();
         applyYtVocalCut();
     };
@@ -177,6 +184,7 @@ void MainWindow::showYtVocalDialog()
     connect(voc, &QSlider::valueChanged, &dlg, apply);
     connect(mus, &QSlider::valueChanged, &dlg, apply);
     connect(delayPic, &QCheckBox::toggled, &dlg, apply);
+    connect(preStart, &QCheckBox::toggled, &dlg, apply);
 
     auto refresh = [=]() {
         QString t;
@@ -259,6 +267,7 @@ void MainWindow::showYtVocalDialog()
     hm->addWidget(musL);
     form->addRow(tr("ดนตรี:"), hm);
     form->addRow(delayPic);
+    form->addRow(preStart);
 
     QDialogButtonBox *bb = new QDialogButtonBox(QDialogButtonBox::Close, &dlg);
     connect(bb, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
