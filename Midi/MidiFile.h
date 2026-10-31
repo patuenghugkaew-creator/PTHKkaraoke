@@ -34,12 +34,12 @@ public:
     QString lyrics() { return fLyrics; }
     QVector<long> lyricsCursor() { return fLyricscursor; }
 
-    QVector<MidiEvent*> events() { return fEvents; }
-    QVector<MidiEvent*> tempoEvents() { return fTempoEvents; }
-    QVector<MidiEvent*> lyricsEvents() { return fLyricsEvents; }
-    QVector<MidiEvent*> controllerEvents() { return fControllerEvents; }
-    QVector<MidiEvent*> programChangeEvents() { return fProgramChangeEvents; }
-    QVector<MidiEvent*> timeSignatureEvents() { return fTimeSignatureEvents; }
+    const QVector<MidiEvent*> &events() const { return fEvents; }
+    const QVector<MidiEvent*> &tempoEvents() const { return fTempoEvents; }
+    const QVector<MidiEvent*> &lyricsEvents() const { return fLyricsEvents; }
+    const QVector<MidiEvent*> &controllerEvents() const { return fControllerEvents; }
+    const QVector<MidiEvent*> &programChangeEvents() const { return fProgramChangeEvents; }
+    const QVector<MidiEvent*> &timeSignatureEvents() const { return fTimeSignatureEvents; }
     QVector<MidiEvent*> controllerAndProgramEvents();
 
     MidiEvent* createMidiEvent(int track, uint32_t tick, uint32_t delta, MidiEventType evType, int ch, int data1, int data2);
