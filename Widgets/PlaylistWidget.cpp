@@ -28,6 +28,9 @@ PlaylistWidget::PlaylistWidget(QWidget *parent) :
     header->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     header->setSectionResizeMode(2, QHeaderView::Stretch);
     header->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+
+    connect(ui->tableWidget, &QTableWidget::cellClicked, this, [this](int row, int) { emit rowClicked(row); });
+    connect(ui->tableWidget, &QTableWidget::cellDoubleClicked, this, [this](int row, int) { emit rowDoubleClicked(row); });
 }
 
 // one colour per kind of song, so the queue can be read at a glance

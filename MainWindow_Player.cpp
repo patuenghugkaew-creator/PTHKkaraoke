@@ -338,7 +338,15 @@ void MainWindow::onDbUpdateChanged(int v)
 void MainWindow::onDetailTimerTimeout()
 {
      ui->detail->hide();
-     ui->lcdTime->show();
+     if (settings->value("ShowClock", true).toBool())
+         ui->lcdTime->show();
+}
+
+// clock and beat box at the top right: as chosen in the menu (หน้าจอ)
+void MainWindow::applyCornerDisplay()
+{
+    ui->lcdTime->setVisible(settings->value("ShowClock", true).toBool() && !ui->detail->isVisible());
+    ui->rhmWidget->setVisible(settings->value("ShowRhythm", true).toBool());
 }
 
 void MainWindow::addBpmSpeed(int speed)

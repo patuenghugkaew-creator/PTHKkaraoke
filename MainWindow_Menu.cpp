@@ -481,6 +481,22 @@ void MainWindow::showContextMenuAt(const QPoint &globalPos)
         m->addAction(&actionSecond);
         m->addAction(MenuIcons::make(MenuIcons::Screen), tr("พื้นหลัง (สี / รูปภาพ / สไลด์ภาพ / วิดีโอ)..."), this,
                      [this]() { QTimer::singleShot(0, this, [this]() { showSettingsDialog(); }); });
+        {   // clock and beat box (top right): shown or not
+            QAction *clock = m->addAction(tr("แสดงนาฬิกา"));
+            clock->setCheckable(true);
+            clock->setChecked(settings->value("ShowClock", true).toBool());
+            connect(clock, &QAction::triggered, this, [this](bool on) {
+                settings->setValue("ShowClock", on);
+                applyCornerDisplay();
+            });
+            QAction *beat = m->addAction(tr("แสดงจังหวะเพลง (ความเร็ว / ห้องดนตรี)"));
+            beat->setCheckable(true);
+            beat->setChecked(settings->value("ShowRhythm", true).toBool());
+            connect(beat, &QAction::triggered, this, [this](bool on) {
+                settings->setValue("ShowRhythm", on);
+                applyCornerDisplay();
+            });
+        }
         m->addSeparator();
         m->addAction(&actionShowMixer);
         m->addAction(&actionMixerAtStart);

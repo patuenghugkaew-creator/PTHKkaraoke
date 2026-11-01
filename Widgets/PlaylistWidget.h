@@ -31,6 +31,10 @@ public:
     void removeRow(int row);
     void swapRow(int row, int toRow);
 
+signals:
+    void rowClicked(int row);
+    void rowDoubleClicked(int row);             // play this song
+
 private:
     Ui::PlaylistWidget *ui;
 };

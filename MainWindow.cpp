@@ -605,6 +605,18 @@ MainWindow::MainWindow(QWidget *parent) :
         QTimer::singleShot(15000, this, [this]() { startSibBackfill(); });
         // downloaded clips whose AI vocal separation was not finished: go on (see AiStems.h)
         QTimer::singleShot(20000, this, [this]() { resumeAiStems(); });
+        applyCornerDisplay();
+        // the queue: a click keeps it open, a double-click plays that song (like Enter)
+        connect(ui->playlistWidget, &PlaylistWidget::rowClicked, this, [this](int) {
+            timer2->start(playlist_timeout);
+        });
+        connect(ui->playlistWidget, &PlaylistWidget::rowDoubleClicked, this, [this](int row) {
+            if (row < 0 || row >= playlist.size())
+                return;
+            ui->playlistWidget->hide();
+            play(row);
+            setFocus();
+        });
         {   // automatic update check (settings: Update/Auto, Update/IntervalHours)
             QTimer *upd = new QTimer(this);
             upd->setInterval(30 * 60 * 1000);

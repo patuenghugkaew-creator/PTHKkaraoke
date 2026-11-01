@@ -127,6 +127,7 @@ public:
     int ytFetchPct = 0;                         // download progress of that copy
     bool aiPrepareVideo() const;                // the AI separates the playing video song now
     void updateCutButton();                     // the cut button shows whether the AI cut is ready
+    void applyCornerDisplay();                  // clock / beat box shown or hidden (settings)
     void startSibBackfill();
     // automatic update (GitHub Releases)
     void checkForUpdate(bool manual);

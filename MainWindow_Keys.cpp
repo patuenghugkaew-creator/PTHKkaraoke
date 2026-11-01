@@ -646,6 +646,16 @@ QString MainWindow::searchWithThaiFallback(const QString &text)
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
+    if (event->type() == QEvent::MouseButtonDblClick && ui->frameSearch->isVisible()) {
+        // double-click on the song found = Enter (into the queue / play)
+        QWidget *w = qobject_cast<QWidget *>(watched);
+        if (w && (w == ui->frameSearch || ui->frameSearch->isAncestorOf(w))) {
+            QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+            keyPressEvent(&enter);
+            setFocus();
+            return true;
+        }
+    }
     if (watched == ui->frameControl && event->type() == QEvent::Resize && !fitBarQueued) {
         fitBarQueued = true;        // once the resize is over
         QTimer::singleShot(0, this, [this]() { fitBarQueued = false; fitControlBar(); });
