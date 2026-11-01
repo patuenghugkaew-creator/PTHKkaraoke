@@ -477,6 +477,13 @@ void MainWindow::stop()
         videoWidget->hide();
         bgWidget->setVideoPaused(false);
 #ifdef KM_HAVE_PROCLOOP
+        // The AI holds several seconds of processed sound: drop it, or the song plays on after Stop
+        if (ytAudio) {
+            ytAudio->setInputOpen(false);   // reopened when the next clip really plays (mirror timer)
+            if (ytAudio->aiMode() && aiEngine)
+                aiEngine->reset();
+        }
+        ytInputGateOpen = false;
         delayedFrames.clear();
 #endif
     }

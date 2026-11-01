@@ -5,6 +5,8 @@
 #include <QTime>
 #include <QFile>
 #include <QFileInfo>
+#include <QSettings>
+#include <QSysInfo>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -232,6 +234,20 @@ static void aiLog(const QString &line)
         f.write((QTime::currentTime().toString("hh:mm:ss.zzz ") + "AI: " + line + QChar(10)).toUtf8());
 }
 
+// Speed-test results, kept in <models dir>/speedtest.ini. Measured once per model and device:
+// running the test again (CPU at full load for seconds) while a song plays made the picture stutter.
+static std::mutex s_speedMx;
+static double cachedSpeed(const QString &dir, const QString &name)
+{
+    std::lock_guard<std::mutex> lock(s_speedMx);
+    return QSettings(dir + "/speedtest.ini", QSettings::IniFormat).value(name, -1.0).toDouble();
+}
+static void storeSpeed(const QString &dir, const QString &name, double sec)
+{
+    std::lock_guard<std::mutex> lock(s_speedMx);
+    QSettings(dir + "/speedtest.ini", QSettings::IniFormat).setValue(name, sec);
+}
+
 // Whole-track separation for files on disk (downloaded video songs). Same model and the
 // same trimmed-window + cross-fade stitching as the live engine, but run ahead of time,
 // so playback later has no delay and the vocal cut switches instantly.
@@ -401,29 +417,50 @@ void AiVocalEngine::loadModel(QString key)
         double bestT = 1e9;
         QString bestProv;
         const int pref = s_devicePref.load();
-        double gpuT = -1, cpuT = -1;
+        const int threads = std::max(4, int(std::thread::hardware_concurrency()) * 3 / 4);
+        // per computer (Windows machine id): a portable copy on another PC measures its own speed
+        const QString pc = QString::fromLatin1(QSysInfo::machineUniqueId().toHex().left(16));
+        const QString gpuName = pc + "/" + key + "-gpu", cpuName = pc + "/" + key + QString("-cpu%1").arg(threads);
+        double gpuT = cachedSpeed(dir, gpuName), cpuT = cachedSpeed(dir, cpuName);
+        bool measured = false;
         if (pref != 1) {
             try {
                 std::unique_ptr<MdxModel> g(new MdxModel(path.toStdWString(), *mi, true, 0));
                 if (g->gpu()) {
-                    bestT = gpuT = timeIt(*g);
+                    if (gpuT <= 0) {
+                        gpuT = timeIt(*g);
+                        storeSpeed(dir, gpuName, gpuT);
+                        measured = true;
+                    } else {
+                        g->instrumental(test.data(), outv.data());      // warm-up only
+                    }
+                    bestT = gpuT;
                     bestProv = QString::fromUtf8("การ์ดจอ (DirectML)");
                     best = std::move(g);
                 }
             } catch (...) {}
         }
+        if (!best)
+            gpuT = -1;
         if (pref != 2 || !best) {
-            const int threads = std::max(4, int(std::thread::hardware_concurrency()) * 3 / 4);
-            std::unique_ptr<MdxModel> c(new MdxModel(path.toStdWString(), *mi, false, threads));
-            const double tc = cpuT = timeIt(*c);
-            if (pref == 1 || !best || tc * 1.8 <= 4.0 || tc < bestT * 0.8) {
-                bestT = tc;
+            std::unique_ptr<MdxModel> c;
+            if (cpuT <= 0) {
+                c.reset(new MdxModel(path.toStdWString(), *mi, false, threads));
+                cpuT = timeIt(*c);
+                storeSpeed(dir, cpuName, cpuT);
+                measured = true;
+            }
+            if (pref == 1 || !best || cpuT * 1.8 <= 4.0 || cpuT < bestT * 0.8) {
+                if (!c)
+                    c.reset(new MdxModel(path.toStdWString(), *mi, false, threads));
+                bestT = cpuT;
                 bestProv = "CPU";
                 best = std::move(c);
             }
         }
-        aiLog(QString("model %1 speed test: GPU %2 s, CPU %3 s per window -> using %4 (preference %5)")
-              .arg(key).arg(gpuT, 0, 'f', 2).arg(cpuT, 0, 'f', 2)
+        aiLog(QString("model %1 speed %2: GPU %3 s, CPU %4 s per window -> using %5 (preference %6)")
+              .arg(key).arg(measured ? "test" : "from speedtest.ini")
+              .arg(gpuT, 0, 'f', 2).arg(cpuT, 0, 'f', 2)
               .arg(bestProv == "CPU" ? "CPU" : "GPU").arg(pref == 1 ? "CPU" : pref == 2 ? "GPU" : "auto"));
         {
             std::lock_guard<std::mutex> lock(m);

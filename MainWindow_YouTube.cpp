@@ -40,17 +40,17 @@ void MainWindow::addYouTubeToQueue(const YtItem &item, bool playNow)
             base.chop(1);
         if (rel.startsWith(base, Qt::CaseInsensitive))
             rel = rel.mid(base.length());
-        QString id = db->songIdFor("VIDEO", rel);
-        if (id.isEmpty()) {
-            const QStringList ids = importSongs({ file }, true);
-            id = ids.isEmpty() ? QString() : ids.first();
+        // Look the song up by its file, not with db->search(): that follows the search mode picked
+        // in the search box (name, artist...) and missed the code when the mode was not "code".
+        Song found;
+        if (!db->songByPath("VIDEO", rel, &found)) {
+            importSongs({ file }, true);
+            if (!db->songByPath("VIDEO", rel, &found)) {
+                QMessageBox::warning(dialogParent(), tr("เล่นวิดีโอไม่ได้"), tr("ไม่พบเพลงนี้ในคลังเพลง: ") + file);
+                return;
+            }
         }
-        Song *found = id.isEmpty() ? nullptr : db->search(id);
-        if (!found || found->id() != id) {
-            QMessageBox::warning(dialogParent(), tr("เล่นวิดีโอไม่ได้"), tr("ไม่พบเพลงนี้ในคลังเพลง: ") + file);
-            return;
-        }
-        addToPlaylist(found);
+        addToPlaylist(&found);
         if (!isSongPlaying() && (playNow || auto_playnext))
             play(playlist.count() - 1);
         else {
@@ -195,7 +195,18 @@ void MainWindow::playYouTube()
 #ifdef KM_HAVE_PROCLOOP
                 static bool delayedPrimed = false;
                 static bool firstFrameShown = false;
-                const double d = (ytAudio && settings->value("YtDelayPicture", true).toBool()) ? ytAudio->delaySeconds() : 0.0;
+                // The measured AI delay jitters a little on every audio block. Following it frame by
+                // frame made some ticks show no picture and others skip one (judder). Keep the
+                // picture delay steady: follow slowly (2 ms per frame), jump only on a big change.
+                static double steadyD = 0;
+                const double rawD = (ytAudio && settings->value("YtDelayPicture", true).toBool()) ? ytAudio->delaySeconds() : 0.0;
+                if (rawD <= 0.15)
+                    steadyD = 0;
+                else if (steadyD <= 0 || delayedFrames.empty() || std::fabs(rawD - steadyD) > 0.5)
+                    steadyD = rawD;
+                else
+                    steadyD += qBound(-0.002, rawD - steadyD, 0.002);
+                const double d = steadyD;
                 if (d > 0.15) {
                     if (!frameClock.isValid())
                         frameClock.start();

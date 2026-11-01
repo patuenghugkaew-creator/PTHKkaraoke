@@ -776,6 +776,16 @@ void MainWindow::applyVideoVocalCut()
     if (videoVocalRemover) {
         const bool cut = ui->chMix->isMuteVoice();
         videoVocalRemover->setEnabled(cut);
+        // The fast cut removes only the centre voice; its reverb stays. No AI stems yet (e.g. the
+        // separation after a download was stopped when the program closed): make them now, once.
+        if (cut && videoActive && playingSong.songType() == "VIDEO" && !playingSong.path().isEmpty()) {
+            static QString asked;
+            const QString video = db->videoPath() + playingSong.path();
+            if (video != asked && QFileInfo::exists(video)) {
+                asked = video;
+                enqueueAiStems(video);
+            }
+        }
     }
 }
 
