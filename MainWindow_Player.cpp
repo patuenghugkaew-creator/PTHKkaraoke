@@ -769,27 +769,63 @@ void MainWindow::applyVideoVocalCut()
     if (!videoStemMixer)
         return;
     const bool cut = ui->chMix->isMuteVoice();
+    const bool aiMode = settings->value("YtCutAi", false).toBool();
     videoStemMixer->setLevels(settings->value("YtVocalLevel", 0).toInt() / 100.0f,
                               settings->value("YtMusicLevel", 100).toInt() / 100.0f);
+    videoStemMixer->setFallbackFast(!aiMode);   // AI mode: the voice stays until the AI is ready (no echo)
     videoStemMixer->setCut(cut);
     if (audioMeter)
         audioMeter->setStemVocalGain(1.0f);
     ensureAiStems();                            // takes a newly chosen model for new work
-    if (!cut) {
-        aiStems->clearFocus();                  // no AI work for this song while the cut is off
+    if (!aiPrepareVideo()) {
+        aiStems->clearFocus();                  // no AI work for this song
         return;
     }
-    if (videoStemMixer->stems()->complete.load())
+    // the windows from the play position on are made first (the cut button shows how far it is)
+    if (!videoStemMixer->stems()->complete.load())
+        aiStems->setFocus(videoAudioFile, videoAudioPositionMs() / 1000.0);
+    updateCutButton();
+}
+
+// The AI separates the playing video / MP3 song: AI mode, and the cut is on or "prepare from the
+// start of the song" is set (then the cut is ready by the time it is wanted).
+bool MainWindow::aiPrepareVideo() const
+{
+    return videoStemMixer && settings->value("YtCutAi", false).toBool()
+           && (ui->chMix->isMuteVoice() || settings->value("YtAiPreStart", true).toBool());
+}
+
+// The cut button tells whether the AI cut is ready: "รอ AI 45%" while downloading / separating,
+// "ตัดเสียงร้อง ✓" when the AI sound is there at the play position.
+void MainWindow::updateCutButton()
+{
+    if (!btnMuteVocal)
         return;
-    // the windows from here on are made first; the fast cut is heard until they are there
-    aiStems->setFocus(videoAudioFile, videoAudioPositionMs() / 1000.0);
-    if (!aiCutNoticeShown) {
-        aiCutNoticeShown = true;
-        ui->detail->setDetail(tr("AI กำลังแยกเสียงร้อง"),
-                              tr("อีกไม่กี่วินาทีเสียงจะสะอาดขึ้น ระหว่างนี้ใช้ตัดเสียงแบบเร็ว"));
-        ui->detail->show();
-        detailTimer->start(5000);
+    QString text = tr("ตัดเสียงร้อง");
+    QString tip = tr("ปิด / เปิด เสียงร้องนำ (*)");
+    if (ytActive && ytFetchOnline) {
+        text = tr("รอ AI %1%").arg(ytFetchPct);
+        tip = tr("กำลังโหลดเพลงลงเครื่องเพื่อตัดเสียงร้องด้วย AI (%1%)\n"
+                 "กดไว้ได้เลย: เมื่อพร้อมจะตัดเสียงร้องให้เอง").arg(ytFetchPct);
+    } else if (videoStemMixer && settings->value("YtCutAi", false).toBool()) {
+        const std::shared_ptr<StemTrack> t = videoStemMixer->stems();
+        BASS_CHANNELINFO ci;
+        const double rate = (videoAudioStream && BASS_ChannelGetInfo(videoAudioStream, &ci) && ci.freq) ? ci.freq : 44100.0;
+        const long long f = (long long)(videoStemMixer->position() * AiVocalEngine::SR / rate);
+        if (t->complete.load() || (t->frameReady(f) && t->frameReady(f + 3LL * AiVocalEngine::SR))) {
+            text = tr("ตัดเสียงร้อง ✓");
+            tip = tr("AI พร้อมตัดเสียงร้องตรงนี้แล้ว (*)");
+        } else if (aiPrepareVideo()) {
+            const int pct = (t->ready.load() && t->nWin > 0) ? t->doneCount.load() * 100 / t->nWin : 0;
+            text = tr("รอ AI %1%").arg(pct);
+            tip = tr("AI กำลังแยกเสียงร้อง (ทำไปแล้ว %1% ของเพลง)\n"
+                     "กดไว้ได้เลย: เมื่อ AI พร้อมตรงที่เล่นอยู่จะตัดเสียงร้องให้เอง").arg(pct);
+        }
     }
+    if (btnMuteVocal->text() != text)
+        btnMuteVocal->setText(text);
+    if (btnMuteVocal->toolTip() != tip)
+        btnMuteVocal->setToolTip(tip);
 }
 
 void MainWindow::setVideoAudioVolume()

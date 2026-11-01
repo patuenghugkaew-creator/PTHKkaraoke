@@ -93,7 +93,8 @@ void MainWindow::applyYtVocalCut()
     if (!ytAudio)
         return;
     const bool cut = ui->chMix->isMuteVoice();
-    const bool ai = settings->value("YtCutAi", false).toBool();
+    // while the copy for the AI downloads, the online song is not cut (it is, with the AI, from the copy)
+    const bool ai = settings->value("YtCutAi", false).toBool() && !ytFetchOnline;
     AiVocalEngine::setDevicePreference(settings->value("YtAiDevice", 0).toInt());
     if (ai)
         aiEngine->selectModel(settings->value("YtAiModel", "light").toString());
@@ -113,7 +114,7 @@ void MainWindow::applyYtVocalCut()
         ui->detail->show();
         detailTimer->start(int(aiEngine->delaySeconds() * 1000));
     }
-    ytAudio->setVocalCut(cut);
+    ytAudio->setVocalCut(cut && !ytFetchOnline);
     ytAudio->setAiMode(ai && ytAiLatched);
     if (!(ai && ytAiLatched))
         delayedFrames.clear();
@@ -272,7 +273,7 @@ void MainWindow::showYtVocalDialog()
     form->addRow(tr("ดนตรี:"), hm);
     form->addRow(delayPic);
     form->addRow(preStart);
-    QCheckBox *dlFirst = new QCheckBox(tr("โหมด AI: โหลดเพลง YouTube ลงเครื่องก่อนเล่น (ภาพไม่ต้องรอ ไม่กระตุก เพลงที่เคยโหลดแล้วเล่นทันที)"), &dlg);
+    QCheckBox *dlFirst = new QCheckBox(tr("โหมด AI: โหลดเพลง YouTube ลงเครื่องระหว่างเล่น แล้วตัดเสียงร้องด้วย AI จากไฟล์ (ภาพไม่ต้องรอ ไม่กระตุก ครั้งต่อไปเล่นจากเครื่องทันที)"), &dlg);
     dlFirst->setChecked(settings->value("YtDownloadFirst", true).toBool());
     connect(dlFirst, &QCheckBox::toggled, &dlg, [this](bool on) { settings->setValue("YtDownloadFirst", on); });
     form->addRow(dlFirst);

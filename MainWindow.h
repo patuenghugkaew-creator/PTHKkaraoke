@@ -119,10 +119,14 @@ public:
     void updateAiStemsBackground();             // background separation only while no video / YouTube plays
     void resumeAiStems();                       // at start: go on with downloaded clips not separated yet
     bool playYouTubeDownloaded();               // AI cut + "download first": play a local copy of the YouTube song
-    void playLocalCopy(const QString &file);
+    void playLocalCopy(const QString &file, qint64 atMs = 0, bool paused = false);
     void cancelYtFetch();
     class QProcess *ytFetch = nullptr;          // downloading the YouTube song about to play
-    bool ytOnlineOnce = false;                  // the download failed: play this one online
+    QString ytFetchId;                          // the YouTube song being downloaded
+    bool ytFetchOnline = false;                 // playing online while its copy downloads (no cut until the AI is ready)
+    int ytFetchPct = 0;                         // download progress of that copy
+    bool aiPrepareVideo() const;                // the AI separates the playing video song now
+    void updateCutButton();                     // the cut button shows whether the AI cut is ready
     void startSibBackfill();
     // automatic update (GitHub Releases)
     void checkForUpdate(bool manual);

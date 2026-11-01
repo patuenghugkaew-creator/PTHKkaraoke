@@ -4,6 +4,7 @@
 #include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QTemporaryFile>
+#include <memory>
 
 // any song type is loaded: MIDI (playing or paused), video, MP3 or YouTube
 bool MainWindow::isSongPlaying()
@@ -80,10 +81,11 @@ void MainWindow::addYouTubeToQueue(const YtItem &item, bool playNow)
     }
 }
 
-// ---- "download first" (AI vocal cut): YouTube songs played from a copy on disk -------------------
+// ---- AI vocal cut for YouTube songs: played from a copy on disk -----------------------------------
 // Online, the AI needs the sound before it can separate it, so the picture waits 6-9 s. A copy on
 // disk is separated ahead of the play position instead (AiStems.h): no waiting picture, no
-// stutter. Copies are remembered by video id (youtube-local.json) and play at once next time.
+// stutter. The first time, the song plays online while the copy downloads, then goes on from the
+// copy. Copies are remembered by video id (youtube-local.json) and play at once next time.
 
 static QString ytLocalMapFile()
 {
@@ -125,7 +127,8 @@ void MainWindow::cancelYtFetch()
 
 // Play a downloaded copy as a video song: the library's entry when it has one, otherwise the YouTube
 // song's own name (not imported here: adding to a large library froze the window for seconds).
-void MainWindow::playLocalCopy(const QString &file)
+// atMs > 0: from there (switching from the online song), paused if it was.
+void MainWindow::playLocalCopy(const QString &file, qint64 atMs, bool paused)
 {
     QString rel = QDir::fromNativeSeparators(file);
     QString base = QDir::fromNativeSeparators(db->videoPath());
@@ -140,16 +143,43 @@ void MainWindow::playLocalCopy(const QString &file)
         playingSong.setSongType("VIDEO");
         playingSong.setPath(rel);
     }
+    const QString path = playingSong.path();
     playVideo(file);
+    if (atMs <= 1000 && !paused)
+        return;
+    // Go on from where the online song was (the sound follows the picture: see positionChanged).
+    // A jump asked for while the file is still opening can be ignored, so it is asked again until
+    // the picture is really there: when the file becomes seekable, and a few times after.
+    auto pausedDone = std::make_shared<bool>(false);
+    auto jump = [this, pausedDone, atMs, paused, path]() {
+        if (!videoActive || playingSong.path() != path || !videoPlayer->isSeekable())
+            return;
+        if (atMs > 1000 && videoPlayer->position() < atMs - 2000)
+            videoPlayer->setPosition(atMs);
+        if (paused && !*pausedDone) {
+            *pausedDone = true;
+            pause();
+        }
+    };
+    jump();
+    auto once = std::make_shared<QMetaObject::Connection>();
+    *once = connect(videoPlayer, &QMediaPlayer::seekableChanged, this, [once, jump](bool can) {
+        if (!can)
+            return;
+        QObject::disconnect(*once);
+        jump();
+    });
+    for (int ms : { 200, 500, 1000, 1500, 2500, 4000 })
+        QTimer::singleShot(ms, this, jump);
 }
 
-// true when it took over (playing a copy, or downloading one to play)
+// With the AI vocal cut, a YouTube song is played from a copy on disk. A copy already there: true,
+// it plays. Otherwise the song plays online at once (not cut yet, no waiting picture) while the
+// copy downloads; when it is there, playing goes on from the copy at the same place, with the AI.
+// The cut button shows the progress; a cut pressed meanwhile is done once the AI is ready.
 bool MainWindow::playYouTubeDownloaded()
 {
-    if (ytOnlineOnce) {
-        ytOnlineOnce = false;
-        return false;
-    }
+    ytFetchOnline = false;
     if (!settings->value("YtCutAi", false).toBool() || !settings->value("YtDownloadFirst", true).toBool())
         return false;
     const QString id = playingSong.path();
@@ -161,14 +191,18 @@ bool MainWindow::playYouTubeDownloaded()
         return true;
     }
     if (YtTools::ytdlpPath().isEmpty() || YtTools::ffmpegPath().isEmpty())
-        return false;                           // tools not downloaded yet: online as before
+        return false;                           // tools not downloaded yet: online only
+    if (ytFetch && ytFetchId == id) {           // already downloading this one
+        ytFetchOnline = true;
+        return false;
+    }
     QString dir = QDir::fromNativeSeparators(db->videoPath());
     while (dir.endsWith('/'))
         dir.chop(1);
     dir += "/YouTube";
     QDir().mkpath(dir);
 
-    cancelYtFetch();
+    cancelYtFetch();                            // the previous song's download (if any) is not needed now
     QString printFile;
     {
         QTemporaryFile tf(QDir::tempPath() + "/pthk-ytplay-XXXXXX.txt");
@@ -176,10 +210,8 @@ bool MainWindow::playYouTubeDownloaded()
         tf.open();
         printFile = tf.fileName();
     }
-    const QString title = playingSong.name();
-    ui->detail->setDetail(tr("กำลังโหลดเพลงลงเครื่อง (ตัดเสียงร้องด้วย AI)"), title);
-    ui->detail->show();
-    detailTimer->start(4000);
+    ytFetchOnline = true;
+    ytFetchId = id;
 
     QProcess *p = new QProcess(this);
     ytFetch = p;
@@ -188,21 +220,30 @@ bool MainWindow::playYouTubeDownloaded()
     env.insert("PYTHONUTF8", "1");
     p->setProcessEnvironment(env);
     p->setProcessChannelMode(QProcess::MergedChannels);
-    connect(p, &QProcess::readyRead, this, [this, p, title]() {
+    ytFetchPct = 0;
+    connect(p, &QProcess::readyRead, this, [this, p]() {
+        // progress for the cut button: the picture is fetched first (~90 %), then the sound
         static const QRegularExpression pct("\\[PCT\\]\\s*(\\d+(?:\\.\\d+)?)%");
+        static int part = 0, last = 0;
+        if (ytFetchPct == 0)
+            part = last = 0;
         while (p->canReadLine()) {
             const QRegularExpressionMatch m = pct.match(QString::fromUtf8(p->readLine()));
-            if (m.hasMatch()) {
-                ui->detail->setDetail(tr("กำลังโหลดเพลงลงเครื่อง %1%").arg(int(m.captured(1).toDouble())), title);
-                ui->detail->show();
-                detailTimer->start(4000);
-            }
+            if (!m.hasMatch())
+                continue;
+            const int v = int(m.captured(1).toDouble());
+            if (v + 50 < last)
+                ++part;
+            last = v;
+            ytFetchPct = qBound(1, part == 0 ? v * 9 / 10 : 90 + v / 10, 99);
         }
     });
     connect(p, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
             [this, p, id, printFile](int code, QProcess::ExitStatus st) {
-        if (ytFetch == p)
+        if (ytFetch == p) {
             ytFetch = nullptr;
+            ytFetchId.clear();
+        }
         p->deleteLater();
         QString file;
         QFile pf(printFile);
@@ -213,22 +254,25 @@ bool MainWindow::playYouTubeDownloaded()
             pf.close();
         }
         QFile::remove(printFile);
-        const bool stillWanted = playingSong.path() == id && !isSongPlaying();
-        if (st == QProcess::NormalExit && code == 0 && !file.isEmpty() && QFile::exists(file)) {
-            ytRememberCopy(id, file);
-            enqueueAiStems(file);       // the rest is separated later in the background
-            if (stillWanted)
-                playLocalCopy(file);
-            return;
+        if (!(st == QProcess::NormalExit && code == 0 && !file.isEmpty() && QFile::exists(file))) {
+            uiLog(QString("YouTube download for the AI cut failed (exit %1)").arg(code));
+            return;                             // it goes on online with the fast cut
         }
-        uiLog(QString("YouTube download for play failed (exit %1)").arg(code));
-        if (stillWanted) {
-            ui->detail->setDetail(tr("โหลดเพลงไม่สำเร็จ"), tr("เล่นแบบออนไลน์แทน"));
+        ytRememberCopy(id, file);
+        // still the song playing online: go on from the copy, at the same place, with the AI
+#ifdef PTHK_WEBENGINE
+        if (ytActive && playingSong.path() == id) {
+            const qint64 at = ui->sliderPosition->value();
+            const bool paused = ytPlayer && ytPlayer->isPaused();
+            stop();
+            playLocalCopy(file, at, paused);
+            ui->detail->setDetail(tr("ตัดเสียงร้องด้วย AI พร้อมแล้ว"), tr("เล่นต่อจากไฟล์ในเครื่อง"));
             ui->detail->show();
             detailTimer->start(4000);
-            ytOnlineOnce = true;
-            playYouTube();
+            return;
         }
+#endif
+        enqueueAiStems(file);                   // another song plays: separated later, in the background
     });
     const QString ffmpegDir = QDir::toNativeSeparators(QFileInfo(YtTools::ffmpegPath()).absolutePath());
     p->start(YtTools::ytdlpPath(), {
@@ -242,7 +286,10 @@ bool MainWindow::playYouTubeDownloaded()
         "-o", QDir::toNativeSeparators(dir) + "\\%(title).120s.%(ext)s",
         "https://www.youtube.com/watch?v=" + id
     });
-    return true;
+    ui->detail->setDetail(tr("เล่นออนไลน์ไปก่อน"), tr("กำลังเตรียมตัดเสียงร้องด้วย AI (ดูที่ปุ่ม \"ตัดเสียงร้อง\")"));
+    ui->detail->show();
+    detailTimer->start(4000);
+    return false;                               // plays online now
 }
 
 // YouTube songs play online with YouTube's own embedded player, in place of the video

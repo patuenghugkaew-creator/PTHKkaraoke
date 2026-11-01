@@ -703,6 +703,8 @@ public:
     }
 
     void setCut(bool on) { cut.store(on); }
+    // where the AI sound is not made yet: the fast cut (true) or the plain sound, waiting (false)
+    void setFallbackFast(bool on) { fallbackFast.store(on); }
     void setLevels(float vocals, float music) { gV.store(vocals); gM.store(music); }
     // the source was moved (BASS_SYNC_SETPOS): its new position in frames
     void setPosition(long long frame)
@@ -727,7 +729,7 @@ public:
             w = 0.0f;
         }
         const bool on = cut.load();
-        fast.setEnabled(on);
+        fast.setEnabled(on && fallbackFast.load());
         const long long p0 = pos.fetch_add(n);
         dry.assign(s, s + size_t(n) * 2);
         fast.process(s, size_t(n));             // s = fast cut (or the plain sound), `lat` late
@@ -833,7 +835,7 @@ private:
     StemFile file;
     DWORD lastTry = 0;
     float w = 0.0f, rampStep = 0.001f;
-    std::atomic<bool> cut{false};
+    std::atomic<bool> cut{false}, fallbackFast{false};
     std::atomic<float> gV{0.0f}, gM{1.0f};
     std::atomic<long long> pos{0};
 };

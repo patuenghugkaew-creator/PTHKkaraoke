@@ -406,7 +406,7 @@ MainWindow::MainWindow(QWidget *parent) :
                     }
                 }
                 // vocal cut on: the AI separates from the play position on (see AiStems.h)
-                if (aiStems && videoStemMixer && ui->chMix->isMuteVoice() && !videoStemMixer->stems()->complete.load())
+                if (aiStems && aiPrepareVideo() && !videoStemMixer->stems()->complete.load())
                     aiStems->setFocus(videoAudioFile, p / 1000.0);
                 if (videoStemMixer && timingLogsOn()) {    // diagnostics: the stems follow the sound
                     static QElapsedTimer every;
@@ -846,6 +846,17 @@ MainWindow::MainWindow(QWidget *parent) :
 
             btnMuteVocal = addBarButton(tr("ตัดเสียงร้อง"), tr("ปิด / เปิด เสียงร้องนำ (*)"));
             btnMuteVocal->setCheckable(true);
+            {   // the label changes ("รอ AI 45%", "ตัดเสียงร้อง ✓"): keep its width, so the bar does not move
+                const QFontMetrics fm(btnMuteVocal->font());
+                int w = 0;
+                for (const QString &s : { tr("ตัดเสียงร้อง ✓"), tr("รอ AI 100%") })
+                    w = qMax(w, fm.horizontalAdvance(s));
+                btnMuteVocal->setMinimumWidth(qMax(btnMuteVocal->sizeHint().width(), w + 24));
+                QTimer *cutStatus = new QTimer(this);
+                cutStatus->setInterval(500);
+                connect(cutStatus, &QTimer::timeout, this, [this]() { updateCutButton(); });
+                cutStatus->start();
+            }
             connect(btnMuteVocal, &QPushButton::toggled, this, [this](bool on) {
                 if (ui->chMix->isMuteVoice() != on)
                     ui->chMix->setMuteVoice(on);
@@ -853,6 +864,13 @@ MainWindow::MainWindow(QWidget *parent) :
                 applyYtVocalCut();
 #endif
                 applyVideoVocalCut();
+                updateCutButton();
+                if (on && btnMuteVocal->text().startsWith(tr("รอ AI"))) {
+                    ui->detail->setDetail(tr("รอตัดเสียงร้องด้วย AI"), tr("%1 - พร้อมแล้วจะตัดให้เอง").arg(btnMuteVocal->text()));
+                    ui->detail->show();
+                    detailTimer->start(3000);
+                    return;
+                }
                 ui->detail->setDetail(tr("เสียงร้อง "), on ? tr("ปิด") : tr("เปิด"));
                 ui->detail->show();
                 detailTimer->start(3000);

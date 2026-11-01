@@ -38,7 +38,7 @@ Notes:
 | `MainWindow_Import.cpp` | Adding songs: import, .zip/.rar archives (`unpackArchive`), drag & drop |
 | `MainWindow_Audio.cpp` | Volume, YouTube audio and AI vocal cut, fades, ending a song smoothly (`checkEndAfterLyrics`), transitions |
 | `MainWindow_Remote.cpp` | Song requests from phones, artist codes |
-| `MainWindow_YouTube.cpp` | YouTube search, queue, `playYouTube()`; with the AI cut, YouTube songs are downloaded and played from disk first (`playYouTubeDownloaded`, `youtube-local.json`) |
+| `MainWindow_YouTube.cpp` | YouTube search, queue, `playYouTube()`; with the AI cut, a YouTube song plays online while a copy downloads, then goes on from the copy (`playYouTubeDownloaded`, `youtube-local.json`) |
 | `MainWindow_Playback.cpp` | Video/MP3 playback, pause/resume/stop, next/previous, recording, score, DMX, window events |
 | `MainWindow_Keys.cpp` | Keyboard shortcuts (`keyPressEvent`), search (`searchWithThaiFallback`, fuzzy), event filter |
 | `MainWindow_Playlist.cpp` | Medley dialogs, playlist editing, on-screen frames |

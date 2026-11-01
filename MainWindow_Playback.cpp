@@ -453,7 +453,7 @@ void MainWindow::resume()
 
 void MainWindow::stop()
 {
-    cancelYtFetch();            // a YouTube song still downloading to play is not wanted any more
+    ytFetchOnline = false;      // (a copy still downloading goes on: it plays from disk next time)
     if (!endingSong) {          // the fade-out that ends a song calls stop() itself
         fadeTimer->stop();
         fadeDone = nullptr;
