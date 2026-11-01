@@ -163,22 +163,11 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
                 else
                     this->sendDrumPads(event, true);
                 break;
-        case Qt::Key_Delete:
-            if (ui->frameSearch->isVisible()) {
-                DeleteSongDialog dlg(this);
-                dlg.setModal(true);
-                dlg.adjustSize();
-                dlg.setFixedSize(dlg.size());
-                dlg.exec();
-
-                if (dlg.removeConfirmed()) {
-                    db->removeCurrentSong(dlg.removeFromStorage());
-                    setFrameSearch( db->searchNext() );
-                    if (ui->frameSearch->isVisible()) {
-                        timer2->start(search_timeout);
-                    }
-                }
-            }
+        case Qt::Key_Delete:            // delete a song: the one in the search bar, or the one playing
+            if (ui->frameSearch->isVisible())
+                deleteSearchSong();
+            else if (!ui->playlistWidget->isVisible())
+                deletePlayingSong();
             break;
             default:
                 this->sendDrumPads(event, true);

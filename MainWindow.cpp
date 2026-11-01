@@ -1171,6 +1171,178 @@ void MainWindow::songUnplayable(const QString &reason)
     detailTimer->start(3000);
 }
 
+// ---- Deleting a song (a wrong copy among same-named songs) ----
+
+bool MainWindow::songLoaded()
+{
+    if (playingSong.path().isEmpty())
+        return false;
+    return videoActive || ytActive || mp3Stream || !player->isPlayerStopped();
+}
+
+// The file a song in the list plays from, found the way play() looks for it ("" if not found)
+QString MainWindow::songFilePath(Song s)
+{
+    const QString t = s.songType(), p = s.path();
+    QStringList c;
+    auto in = [&](const QString &dir) {
+        if (!dir.isEmpty())
+            c << dir + p << dir + "/" + p;
+    };
+    if (t == "NCN")
+        in(db->ncnPath());
+    else if (t == "EMK") {
+        c << p;
+        in(db->hnkPath());
+        if (!db->ncnPath().isEmpty())
+            c << QFileInfo(db->ncnPath()).dir().absoluteFilePath("EMK") + p;
+        in(db->emkPath());
+        in(db->ncnPath());
+    } else if (t == "SIB") {
+        c << p;
+        in(db->sibPath());
+        if (!db->sibPath().isEmpty())
+            c << QDir(db->sibPath()).absoluteFilePath(s.id() + ".sib");
+    } else if (t == "HNK")
+        in(db->hnkPath());
+    else if (t == "KAR")
+        in(db->karPath());
+    else if (t == "VIDEO")
+        in(db->videoPath());
+    else if (t == "MP3")
+        in(db->mp3Path());
+    for (const QString &f : c) {
+        const QFileInfo fi(f);
+        if (!f.isEmpty() && fi.isAbsolute() && fi.isFile())
+            return fi.absoluteFilePath();
+    }
+    return QString();
+}
+
+// Which song, which file: shown before anything is deleted (same-named songs look alike)
+bool MainWindow::confirmDeleteSong(Song s, const QString &file, bool *toTrash)
+{
+    const bool yt = s.songType() == "YOUTUBE";
+    QString info = QString("%1  %2").arg(s.id(), s.name()).trimmed();
+    if (!s.artist().isEmpty())
+        info += " - " + s.artist();
+    info += tr("\nชนิด: %1").arg(s.songType());
+    info += file.isEmpty() ? tr("\nไฟล์: ไม่พบในเครื่อง")
+                           : tr("\nไฟล์: %1").arg(QDir::toNativeSeparators(file));
+
+    QMessageBox box(QMessageBox::Question, tr("ลบเพลง"), tr("ลบเพลงนี้?"), QMessageBox::NoButton, dialogParent());
+    box.setInformativeText(info);
+    QPushButton *del = box.addButton(yt ? tr("เอาออกจากคิว") : tr("ลบออกจากรายการเพลง"), QMessageBox::DestructiveRole);
+    box.addButton(tr("ยกเลิก"), QMessageBox::RejectRole);
+    box.setDefaultButton(del);
+    QCheckBox *chk = new QCheckBox(yt ? tr("ย้ายไฟล์ที่ดาวน์โหลดไว้ไปถังขยะด้วย (กู้คืนได้)")
+                                      : tr("ย้ายไฟล์เพลงไปถังขยะด้วย (กู้คืนได้)"));
+    chk->setEnabled(!file.isEmpty());
+    box.setCheckBox(chk);
+    box.exec();
+    if (box.clickedButton() != del)
+        return false;
+    *toTrash = chk->isChecked() && !file.isEmpty();
+    return true;
+}
+
+// The song file, its NCN cursor / lyrics files and its AI stems, to the Recycle Bin
+void MainWindow::trashSongFiles(Song s, const QString &file)
+{
+    if (file.isEmpty())
+        return;
+    if (aiStems)
+        aiStems->forget(file);                  // the AI maker lets go of the song and its stems files
+    QStringList files { file };
+    if (s.songType() == "NCN")
+        files << SongDatabase::getCurFilePath(file) << SongDatabase::getLyrFilePath(file);
+    files << AiStemMaker::stemPath(file) << AiStemMaker::partPath(file) << AiStemMaker::mapPath(file);
+    QStringList left;
+    for (const QString &f : files)
+        if (!f.isEmpty() && QFile::exists(f) && !left.contains(f))
+            left << f;
+    trashFilesRetry(left, 0);
+}
+
+// The player may hold the file a moment after stopping: try again for a few seconds
+void MainWindow::trashFilesRetry(QStringList left, int tries)
+{
+    for (int i = left.size() - 1; i >= 0; --i)
+        if (!QFile::exists(left[i]) || QFile::moveToTrash(left[i]))
+            left.removeAt(i);
+    if (left.isEmpty())
+        return;
+    if (tries < 15) {
+        QTimer::singleShot(300, this, [this, left, tries]() { trashFilesRetry(left, tries + 1); });
+        return;
+    }
+    for (QString &f : left)
+        f = QDir::toNativeSeparators(f);
+    QMessageBox::warning(dialogParent(), tr("ลบเพลง"),
+                         tr("ย้ายไฟล์ไปถังขยะไม่ได้ (ไฟล์อาจถูกใช้งานอยู่):\n") + left.join("\n"));
+}
+
+void MainWindow::deletePlayingSong()
+{
+    if (!songLoaded()) {
+        ui->detail->setDetail(tr("ลบเพลง"), tr("ไม่มีเพลงที่กำลังเล่น"));
+        ui->detail->show();
+        detailTimer->start(3000);
+        return;
+    }
+    Song gone(playingSong);
+    const bool yt = gone.songType() == "YOUTUBE";
+    const QString file = yt ? ytCopyOf(gone.path()) : songFilePath(gone);
+    bool toTrash = false;
+    if (!confirmDeleteSong(gone, file, &toTrash))
+        return;
+
+    if (yt && ytFetch && ytFetchId == gone.path())
+        cancelYtFetch();
+    stop();
+    for (int i = playlist.size() - 1; i >= 0; --i) {     // every copy of it in the queue
+        if (playlist[i]->id() == gone.id() && playlist[i]->songType() == gone.songType()
+            && playlist[i]->path() == gone.path()) {
+            removeFromPlaylist(i);
+            if (i <= playingIndex)
+                playingIndex--;                         // the song after it plays next
+        }
+    }
+    if (!yt)
+        db->removeSong(gone);
+    if (toTrash) {
+        if (yt)
+            ytForgetCopy(gone.path());
+        trashSongFiles(gone, file);
+    }
+    playingSong = Song();
+    ui->detail->setDetail(tr("ลบเพลงแล้ว"), QString("%1  %2").arg(gone.id(), gone.name()).trimmed());
+    ui->detail->show();
+    detailTimer->start(3000);
+    playNext();
+}
+
+void MainWindow::deleteSearchSong()
+{
+    Song *cur = db->currentSong();
+    if (!cur || cur->id().isEmpty())
+        return;
+    Song s(*cur);
+    const QString file = songFilePath(s);
+    bool toTrash = false;
+    timer2->stop();                             // the search bar stays while the question is open
+    if (!confirmDeleteSong(s, file, &toTrash)) {
+        timer2->start(search_timeout);
+        return;
+    }
+    db->removeCurrentSong(false);
+    if (toTrash)
+        trashSongFiles(s, file);
+    setFrameSearch(db->searchNext());
+    if (ui->frameSearch->isVisible())
+        timer2->start(search_timeout);
+}
+
 void MainWindow::play(int index, int position)
 {
     const bool targetIsMidi = (index >= 0 && index < playlist.size() &&
@@ -1585,6 +1757,7 @@ void MainWindow::showHelpDialog()
         "<tr><td class=k>Enter</td><td>เพิ่มเพลงเข้าคิว (ถ้ายังไม่มีเพลงเล่นอยู่ จะเล่นทันที)</td></tr>"
         "<tr><td class=k>↑ ↓</td><td>เปิดคิวเพลง / เลือกเพลงในคิว แล้วกด Enter เพื่อเล่น</td></tr>"
         "<tr><td class=k>Esc</td><td>ปิดช่องค้นหา / คิวเพลง</td></tr>"
+        "<tr><td class=k>Ctrl + Delete</td><td>ลบเพลงที่แสดงในช่องค้นหาออกจากรายการเพลง (เลือกย้ายไฟล์ไปถังขยะได้)</td></tr>"
         "</table>"
 
         "<h3>ระหว่างเล่นเพลง</h3>"
@@ -1601,6 +1774,7 @@ void MainWindow::showHelpDialog()
         "<tr><td class=k>F4</td><td>เปิด / ปิด โหมดเมดเลย์ (เล่นต่อเนื่อง)</td></tr>"
         "<tr><td class=k>Ctrl + D / Pause</td><td>ค้างจังหวะกลอง: ดนตรีหยุดที่ต้นห้องถัดไป เหลือกลองตีรอ (เนื้อร้องรอด้วย) กดอีกครั้ง = ลูกส่งแล้วเข้าเพลงต่อพอดีจังหวะ (เพลง MIDI)</td></tr>"
         "<tr><td class=k>PageUp / PageDown</td><td>เพิ่ม / ลดความเร็วเพลงที่เล่นอยู่ (กด Shift ด้วย = ทีละ 5) — ในเมดเลย์ เพลงถัดไปจะใช้ความเร็วใหม่นี้ด้วย</td></tr>"
+        "<tr><td class=k>Ctrl + Delete</td><td>ลบเพลงที่กำลังเล่น (เช่น เพลงซ้ำตัวที่ไม่ดี) ออกจากรายการเพลงและคิว แล้วเล่นเพลงถัดไป เลือกย้ายไฟล์ไปถังขยะได้ (เมนูคลิกขวาก็มี)</td></tr>"
         "</table>"
 
         "<h3>คิวเพลง (กด ↑ ↓ เพื่อเปิด)</h3>"
@@ -1618,7 +1792,7 @@ void MainWindow::showHelpDialog()
         "<tr><td class=k>F10</td><td>ค้นหาเพลงจาก YouTube แล้วเล่นสด หรือเพิ่มเข้าคิว (ต้องต่ออินเทอร์เน็ต)</td></tr>"
         "<tr><td class=k>F12</td><td>บันทึกเสียงร้อง (ดนตรี + ไมค์) เป็นไฟล์ WAV ใน Music\\PTHK Karaoke Recordings</td></tr>"
         "<tr><td class=k>F1</td><td>คู่มือนี้</td></tr>"
-        "<tr><td class=k>คลิกขวา</td><td>เมนูทั้งหมด (หน้าจอ, คลังเพลง, เสียงและเอฟเฟกต์, อุปกรณ์เสริม, ตั้งค่า)</td></tr>"
+        "<tr><td class=k>คลิกขวา</td><td>เมนูทั้งหมด (เพลง, YouTube, เมดเลย์, เสียงและมิกเซอร์, หน้าจอ, มือถือและไฟเวที, ตั้งค่า)</td></tr>"
         "</table>"
 
         "<h3>เพิ่มเพลง</h3>"

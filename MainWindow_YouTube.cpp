@@ -115,6 +115,29 @@ static void ytRememberCopy(const QString &id, const QString &file)
         f.write(QJsonDocument(o).toJson(QJsonDocument::Compact));
 }
 
+QString MainWindow::ytCopyOf(const QString &id)
+{
+    return id.isEmpty() ? QString() : ytLocalCopy(id);
+}
+
+// the copy is being deleted: the song plays online (and downloads again) next time
+void MainWindow::ytForgetCopy(const QString &id)
+{
+    QJsonObject o;
+    {
+        QFile f(ytLocalMapFile());
+        if (!f.open(QIODevice::ReadOnly))
+            return;
+        o = QJsonDocument::fromJson(f.readAll()).object();
+    }
+    if (!o.contains(id))
+        return;
+    o.remove(id);
+    QFile f(ytLocalMapFile());
+    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        f.write(QJsonDocument(o).toJson(QJsonDocument::Compact));
+}
+
 void MainWindow::cancelYtFetch()
 {
     if (!ytFetch)

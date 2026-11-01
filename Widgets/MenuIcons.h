@@ -21,7 +21,7 @@ enum Kind {
     Soundfont, Reset, Save, Open, Language, Theme, About, Exit, Phone,
     AddSong, YouTube, Star, MicRecord, Screen, Fullscreen, Video,
     Search, Book, Download, AiSparkle, Lock, DmxLight, Trophy,
-    Transition, Help, QrCode, Drum
+    Transition, Help, QrCode, Drum, Trash
 };
 
 inline bool isDark()
@@ -85,6 +85,7 @@ inline QColor defaultAccent(Kind kind)
     case About:      return QColor("#4f46e5"); // Indigo info
     case Exit:       return QColor("#ef4444"); // Power red
     case Drum:       return QColor("#e11d48"); // Rose drum
+    case Trash:      return QColor("#ef4444"); // Red bin
     }
     return normalColor();
 }
@@ -274,6 +275,17 @@ inline QIcon make(Kind kind, const QColor &customColor)
         p.drawArc(QRectF(3.5, 12.6, 13.0, 4.0), 180 * 16, 180 * 16);
         p.drawLine(QPointF(6.5, 8.2), QPointF(9.4, 2.6));
         p.drawLine(QPointF(13.5, 8.2), QPointF(10.6, 2.6));
+        break;
+    }
+    case Trash: {
+        // Bin: lid with handle, body, two ribs
+        p.drawLine(QPointF(3.8, 5.6), QPointF(16.2, 5.6));
+        p.drawRoundedRect(QRectF(8.0, 3.0, 4.0, 2.6), 0.8, 0.8);
+        p.drawLine(QPointF(5.4, 5.6), QPointF(6.4, 16.4));
+        p.drawLine(QPointF(14.6, 5.6), QPointF(13.6, 16.4));
+        p.drawLine(QPointF(6.4, 16.4), QPointF(13.6, 16.4));
+        p.drawLine(QPointF(8.6, 8.4), QPointF(8.9, 13.8));
+        p.drawLine(QPointF(11.4, 8.4), QPointF(11.1, 13.8));
         break;
     }
     case QrCode: {

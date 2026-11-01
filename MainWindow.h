@@ -152,6 +152,17 @@ public:
     void fitControlBar();
     void toggleDrumHold();
     void songUnplayable(const QString &reason);
+    // deleting a song (a wrong copy among same-named songs): out of the song list and the queue,
+    // its files to the Recycle Bin if asked
+    void deletePlayingSong();                   // the song playing (right-click menu, Ctrl+Delete); the next one plays
+    void deleteSearchSong();                    // the song shown in the search bar (Ctrl+Delete)
+    bool songLoaded();                          // a song is playing or paused
+    QString songFilePath(Song s);               // the file a song in the list plays from ("" if not found)
+    bool confirmDeleteSong(Song s, const QString &file, bool *toTrash);
+    void trashSongFiles(Song s, const QString &file);
+    void trashFilesRetry(QStringList left, int tries);
+    QString ytCopyOf(const QString &id);        // the downloaded copy of a YouTube song ("" if none)
+    void ytForgetCopy(const QString &id);
     void changeVideoKey(int step);
     qint64 videoAudioPositionMs();
     static void CALLBACK videoVocalDspCallback(HDSP handle, DWORD channel, void *buffer, DWORD length, void *user);

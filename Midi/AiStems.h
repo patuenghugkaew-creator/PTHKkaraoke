@@ -221,6 +221,43 @@ public:
     }
     bool yieldingToVideo() const { return yielding.load(); }
 
+    // The song file is about to be deleted: stop work on it and close its stems files. A window being
+    // made is cancelled; waits up to 6 s for the maker to let go. False if it still holds the song.
+    bool forget(const QString &file)
+    {
+        const QString id = QFileInfo(file).absoluteFilePath().toLower();
+        std::shared_ptr<Job> j;
+        {
+            std::lock_guard<std::mutex> lock(m);
+            j = jobs.take(id);
+            if (!j)
+                return true;
+            j->dropped.store(true);
+            background.removeAll(j);
+            if (focus == j)
+                focus.reset();
+            if (working == j) {
+                std::lock_guard<std::mutex> l(liveMx);
+                if (live)
+                    live->cancel();
+            }
+        }
+        cv.notify_all();
+        for (int i = 0; i < 120; ++i) {
+            {
+                std::lock_guard<std::mutex> lock(m);
+                if (working != j) {             // the maker does not touch it any more
+                    release(*j);
+                    j->wav.close();
+                    j->map.close();
+                    return true;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        return false;
+    }
+
     void setBackgroundAllowed(bool on)
     {
         backgroundOn.store(on);
@@ -245,6 +282,7 @@ private:
         std::shared_ptr<StemTrack> t = std::make_shared<StemTrack>();
         bool failed = false;
         bool opened = false;
+        std::atomic<bool> dropped{false};       // forget(): the song is being deleted
         QString key;                            // model of this song's windows
         // maker thread only:
         StemFile wav, map;
@@ -335,6 +373,10 @@ private:
                 cv.wait_for(lock, std::chrono::milliseconds(300));
                 continue;
             }
+            if (job->dropped.load()) {
+                drop(job);
+                continue;
+            }
             const int threads = backgroundOn.load() ? (std::max)(2, cores * 3 / 4) : (std::max)(2, cores / 4);
             QString err;
             QElapsedTimer openClock;
@@ -364,6 +406,10 @@ private:
                     continue;
                 }
             }
+            if (job->dropped.load()) {
+                drop(job);
+                continue;
+            }
             if (want >= 0)
                 want = focusFrame.load();       // where the song is now (opening / loading took time)
             const int k = pickWindow(*job, want);
@@ -374,7 +420,12 @@ private:
             QElapsedTimer winClock;
             winClock.start();
             const long long decodedBefore = job->decoded;
-            if (!makeWindow(*job, k, *sep, win, out, err)) {
+            const bool made = makeWindow(*job, k, *sep, win, out, err);
+            if (job->dropped.load()) {
+                drop(job);
+                continue;
+            }
+            if (!made) {
                 if (yielding.load() || quit.load())
                     continue;                   // stopped for the picture: not an error
                 fail(job, err);
@@ -395,6 +446,19 @@ private:
         std::lock_guard<std::mutex> lock(m);
         if (working)
             release(*working);
+    }
+
+    // forget() was called for the song being worked on: let it go
+    void drop(const std::shared_ptr<Job> &job)
+    {
+        release(*job);
+        job->wav.close();
+        job->map.close();
+        std::lock_guard<std::mutex> lock(m);
+        if (working == job)
+            working.reset();
+        if (onLog)
+            onLog(QString("AI maker: dropped %1 (deleted)").arg(QFileInfo(job->t->file).fileName()));
     }
 
     void fail(const std::shared_ptr<Job> &job, const QString &err)
