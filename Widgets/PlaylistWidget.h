@@ -31,6 +31,11 @@ public:
     void removeRow(int row);
     void swapRow(int row, int toRow);
 
+    // see-through and rounded over the video (like the song search bar)
+    void applyOverlayStyle();
+    // the height that shows every song (up to `maxHeight`)
+    int fittingHeight(int maxHeight) const;
+
 signals:
     void rowClicked(int row);
     void rowDoubleClicked(int row);             // play this song

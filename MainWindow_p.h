@@ -4,6 +4,7 @@
 #define MAINWINDOW_P_H
 
 #include "Midi/VocalRemover.h"
+#include "Widgets/BarButton.h"
 #include <QMouseEvent>
 #include "MainWindow.h"
 #include "ui_MainWindow.h"

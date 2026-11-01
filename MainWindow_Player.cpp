@@ -628,6 +628,8 @@ void MainWindow::ensureAiStems()
 {
     if (!aiStems) {
         aiStems = new AiStemMaker();
+        if (timingLogsOn())
+            aiStems->onLog = [](const QString &line) { uiLog(line); };
         aiStems->onDone = [this](const QString &f, bool ok, const QString &err) {
             QMetaObject::invokeMethod(this, [this, f, ok, err]() {
                 const QString name = QFileInfo(f).completeBaseName();
@@ -714,8 +716,12 @@ bool MainWindow::startVideoAudioStream(const QString &path)
     if (info.chans == 2) {
         // on the song's own sound (before the key change), which knows its position: the AI parts
         // are read from the stems file at the same place
+        QElapsedTimer t;
+        t.start();
         ensureAiStems();
+        const qint64 tEnsure = t.restart();
         videoStemMixer = new StemMixer(aiStems->track(path), freq);
+        uiLog(QString("video sound: AI ready %1 ms, stems track %2 ms").arg(tEnsure).arg(t.elapsed()));
         BASS_ChannelSetDSP(videoAudioStream, &MainWindow::videoVocalDspCallback, this, 0);
         BASS_ChannelSetSync(videoAudioStream, BASS_SYNC_SETPOS | BASS_SYNC_MIXTIME, 0, &MainWindow::videoSetPosSync, this);
     }
@@ -803,16 +809,16 @@ bool MainWindow::aiPrepareVideo() const
            && (ui->chMix->isMuteVoice() || settings->value("YtAiPreStart", true).toBool());
 }
 
-// The cut button tells whether the AI cut is ready: "รอ AI 45%" while downloading / separating,
-// "ตัดเสียงร้อง ✓" when the AI sound is there at the play position.
+// The cut button tells whether the AI cut is ready: a ring around its icon fills up while the
+// copy downloads / the AI separates (with the percent), and is full when the AI sound is there.
 void MainWindow::updateCutButton()
 {
     if (!btnMuteVocal)
         return;
-    QString text = tr("ตัดเสียงร้อง");
+    int ring = -1;
     QString tip = tr("ปิด / เปิด เสียงร้องนำ (*)");
     if (ytActive && ytFetchOnline) {
-        text = tr("รอ AI %1%").arg(ytFetchPct);
+        ring = qBound(0, ytFetchPct, 99);
         tip = tr("กำลังโหลดเพลงลงเครื่องเพื่อตัดเสียงร้องด้วย AI (%1%)\n"
                  "กดไว้ได้เลย: เมื่อพร้อมจะตัดเสียงร้องให้เอง").arg(ytFetchPct);
     } else if (videoStemMixer && settings->value("YtCutAi", false).toBool()) {
@@ -821,19 +827,99 @@ void MainWindow::updateCutButton()
         const double rate = (videoAudioStream && BASS_ChannelGetInfo(videoAudioStream, &ci) && ci.freq) ? ci.freq : 44100.0;
         const long long f = (long long)(videoStemMixer->position() * AiVocalEngine::SR / rate);
         if (t->complete.load() || (t->frameReady(f) && t->frameReady(f + 3LL * AiVocalEngine::SR))) {
-            text = tr("ตัดเสียงร้อง ✓");
+            ring = 100;
             tip = tr("AI พร้อมตัดเสียงร้องตรงนี้แล้ว (*)");
         } else if (aiPrepareVideo()) {
-            const int pct = (t->ready.load() && t->nWin > 0) ? t->doneCount.load() * 100 / t->nWin : 0;
-            text = tr("รอ AI %1%").arg(pct);
+            ring = (t->ready.load() && t->nWin > 0) ? qBound(0, t->doneCount.load() * 100 / t->nWin, 99) : 0;
             tip = tr("AI กำลังแยกเสียงร้อง (ทำไปแล้ว %1% ของเพลง)\n"
-                     "กดไว้ได้เลย: เมื่อ AI พร้อมตรงที่เล่นอยู่จะตัดเสียงร้องให้เอง").arg(pct);
+                     "กดไว้ได้เลย: เมื่อ AI พร้อมตรงที่เล่นอยู่จะตัดเสียงร้องให้เอง").arg(ring);
         }
     }
-    if (btnMuteVocal->text() != text)
-        btnMuteVocal->setText(text);
+    cutWaiting = ring >= 0 && ring < 100;
+    btnMuteVocal->setRing(ring);
+    btnMuteVocal->setIconFn(BarIcons::byName(btnMuteVocal->isChecked() ? "micOff" : "mic"));
     if (btnMuteVocal->toolTip() != tip)
         btnMuteVocal->setToolTip(tip);
+}
+
+bool MainWindow::songIsRunning()
+{
+    if (mp3Stream)
+        return mp3Timer->isActive();
+    if (videoActive)
+        return videoPlayer->state() == QMediaPlayer::PlayingState;
+#ifdef PTHK_WEBENGINE
+    if (ytActive)
+        return ytPlayer && !ytPlayer->isPaused();
+#endif
+    return player->isPlayerPlaying() && !player->isPlayerPaused();
+}
+
+// key down / up for any kind of song (the same as the Delete / Insert keys while playing)
+void MainWindow::changeSongKey(int step)
+{
+    if (ytActive) {
+        changeYtKey(step);
+        return;
+    }
+    if (videoActive && videoAudioTempo) {
+        changeVideoKey(step);
+        return;
+    }
+    playingSong.setTranspose(player->transpose() + step);
+    player->setTranspose(player->transpose() + step);
+    const int trp = player->transpose();
+    ui->songDetail->setDetail(&playingSong);
+    ui->songDetail->adjustSize();
+    ui->detail->setDetail(tr("คีย์เพลง "), trp > 0 ? "+" + QString::number(trp) : QString::number(trp));
+    ui->detail->show();
+    detailTimer->start(3000);
+}
+
+// the bar: the song line, play / pause, key, drum hold (MIDI songs only), the AI ring
+void MainWindow::updateBarStatus()
+{
+    if (!btnPlayPause)
+        return;
+    const bool running = songIsRunning();
+    btnPlayPause->setIconFn(BarIcons::byName(running ? "pause" : "play"));
+    const QString pl = running ? tr("พัก") : tr("เล่น");
+    if (btnPlayPause->text() != pl)
+        btnPlayPause->setText(pl);
+
+    int key = player->transpose();
+    if (videoActive)
+        key = videoPitch;
+#ifdef KM_HAVE_PROCLOOP
+    if (ytActive && ytAudio)
+        key = ytAudio->pitch();
+#endif
+    keyControl->setValue(key);
+
+    // drum hold: any MIDI song while it plays (medley or not); always clickable (it says why not)
+
+    QString title, meta;
+    if (isSongPlaying() && !playingSong.name().isEmpty()) {
+        title = playingSong.id().isEmpty() || playingSong.id() == "YT" ? playingSong.name()
+                                                                       : playingSong.id() + "  " + playingSong.name();
+        if (!playingSong.artist().isEmpty())
+            title += "  ·  " + playingSong.artist();
+        const QString type = ytActive ? QString("YouTube") : playingSong.songType();
+        meta = type;
+        if (playingIndex + 1 >= 0 && playingIndex + 1 < playlist.size())
+            meta += "   " + tr("ถัดไป: %1").arg(playlist[playingIndex + 1]->name());
+    } else {
+        title = tr("พร้อมเล่น · พิมพ์รหัสหรือชื่อเพลง แล้วกด Enter");
+        if (!playlist.isEmpty())
+            meta = tr("ในคิว %1 เพลง").arg(playlist.size());
+    }
+    const QString shown = barTitle->fontMetrics().elidedText(title, Qt::ElideRight, qMax(80, barTitle->width()));
+    if (barTitle->text() != shown)
+        barTitle->setText(shown);
+    if (barMeta->text() != meta)
+        barMeta->setText(meta);
+
+    updateCutButton();
 }
 
 void MainWindow::setVideoAudioVolume()

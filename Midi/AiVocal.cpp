@@ -16,6 +16,8 @@
 #define NOMINMAX
 #include <windows.h>
 #include <urlmon.h>
+#include <tlhelp32.h>
+#include <set>
 #pragma comment(lib, "urlmon.lib")
 
 #include <d3d12.h>
@@ -107,6 +109,7 @@ public:
     }
 
     bool gpu() const { return onGpu; }
+    void terminate(bool on) { if (on) runOpts.SetTerminate(); else runOpts.UnsetTerminate(); }
 
     void instrumental(const float *mix, float *inst)
     {
@@ -150,7 +153,7 @@ public:
         Ort::Value in = Ort::Value::CreateTensor<float>(mem, x.data(), x.size(), shape, 4);
         const char *inNames[] = { inName.c_str() };
         const char *outNames[] = { outName.c_str() };
-        std::vector<Ort::Value> out = session->Run(Ort::RunOptions{ nullptr }, inNames, &in, 1, outNames, 1);
+        std::vector<Ort::Value> out = session->Run(runOpts, inNames, &in, 1, outNames, 1);
         const float *y = out[0].GetTensorData<float>();
 
         // iSTFT with window-square normalisation
@@ -211,6 +214,7 @@ private:
     ID3D12CommandQueue *queue = nullptr;
     IDMLDevice *dmlDev = nullptr;
     std::unique_ptr<Ort::Session> session;
+    Ort::RunOptions runOpts;                     // terminate() stops a run from another thread
     std::string inName, outName;
     std::vector<float> win;
     bool onGpu = false;
@@ -329,6 +333,26 @@ bool AiVocalEngine::separateTrack(const QString &modelsDir, const QString &key, 
 static_assert(AiWindowSeparator::CHUNK == CHUNK && AiWindowSeparator::TRIM == TRIM && AiWindowSeparator::XF == XF,
               "AiWindowSeparator constants must match the engine");
 
+// the threads of this program now (to find the ones a model has just made)
+static std::set<DWORD> processThreads()
+{
+    std::set<DWORD> ids;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE)
+        return ids;
+    THREADENTRY32 te;
+    te.dwSize = sizeof(te);
+    const DWORD pid = GetCurrentProcessId();
+    if (Thread32First(snap, &te)) {
+        do {
+            if (te.th32OwnerProcessID == pid)
+                ids.insert(te.th32ThreadID);
+        } while (Thread32Next(snap, &te));
+    }
+    CloseHandle(snap);
+    return ids;
+}
+
 AiWindowSeparator::AiWindowSeparator(const QString &modelsDir, const QString &key, bool gpu, int threads)
 {
     const AiVocalEngine::ModelInfo *mi = AiVocalEngine::model(key);
@@ -338,7 +362,24 @@ AiWindowSeparator::AiWindowSeparator(const QString &modelsDir, const QString &ke
         return;
     }
     try {
+        const std::set<DWORD> before = processThreads();
         mm = new MdxModel(path.toStdWString(), *mi, gpu, gpu ? 0 : threads);
+        // The model's worker threads (made with the session) run below normal priority, like the
+        // thread that calls it: the video picture and the sound always come first. At normal
+        // priority, 12 busy threads made the picture of a video song fall behind its sound.
+        int lowered = 0;
+        for (DWORD id : processThreads()) {
+            if (before.count(id))
+                continue;
+            HANDLE h = OpenThread(THREAD_SET_INFORMATION | THREAD_QUERY_INFORMATION, FALSE, id);
+            if (h) {
+                if (SetThreadPriority(h, THREAD_PRIORITY_BELOW_NORMAL))
+                    ++lowered;
+                CloseHandle(h);
+            }
+        }
+        aiLog(QString("stems model %1 (%2): %3 worker threads set below normal priority")
+              .arg(key).arg(gpu ? "GPU" : "CPU").arg(lowered));
     } catch (const std::exception &e) {
         err = QString::fromLocal8Bit(e.what());
     } catch (...) {
@@ -351,10 +392,17 @@ AiWindowSeparator::~AiWindowSeparator()
     delete mm;
 }
 
+void AiWindowSeparator::cancel()
+{
+    if (mm)
+        mm->terminate(true);
+}
+
 bool AiWindowSeparator::separate(const float *mix, float *inst)
 {
     if (!mm)
         return false;
+    mm->terminate(false);
     try {
         mm->instrumental(mix, inst);
         return true;

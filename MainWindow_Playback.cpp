@@ -242,7 +242,11 @@ void MainWindow::playVideo(const QString &path, bool isVideo)
     } else {
         // Video songs (e.g. downloaded YouTube MP4s): route audio through BASS main mixer
         // to enable Vocal Cut (VocalRemover DSP), pitch/key transpose, and master EQ!
+        QElapsedTimer stepClock;
+        stepClock.start();
+        videoWidget->newSong();
         const bool bassAudio = startVideoAudioStream(path);
+        const qint64 tAudio = stepClock.restart();
         if (bassAudio) {
             videoPlayer->setMuted(true);
             videoPlayer->setVolume(0);
@@ -251,7 +255,10 @@ void MainWindow::playVideo(const QString &path, bool isVideo)
             videoPlayer->setVolume(effectiveVolume());
         }
         videoPlayer->setMedia(QUrl::fromLocalFile(path));
+        const qint64 tMedia = stepClock.restart();
         videoPlayer->play();
+        uiLog(QString("video start: sound %1 ms, open picture %2 ms, play %3 ms (%4)")
+              .arg(tAudio).arg(tMedia).arg(stepClock.elapsed()).arg(QFileInfo(path).fileName()));
     }
     db->addHistory(&playingSong);
     dmxLights->setPlaying(true);
@@ -584,6 +591,8 @@ void MainWindow::resizeEvent(QResizeEvent *event)
         ytPlayer->resize(854, 480); // 854x480 reduces GPU readback bandwidth by >55%
 #endif
     lyrWidget->resize(ui->centralWidget->size());
+    fitSearchBar();
+    fitQueue();
     updateDetail->move(width() - 260, 70);
     if (reqToast && reqToast->isVisible())
         reqToast->move(width() - reqToast->width() - 16, 16);

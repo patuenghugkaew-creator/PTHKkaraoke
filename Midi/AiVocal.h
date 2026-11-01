@@ -138,6 +138,7 @@ public:
     QString error() const { return err; }
     // planar 2 x CHUNK at 44.1 kHz in, planar 2 x CHUNK instrumental out
     bool separate(const float *mix, float *inst);
+    void cancel();                              // from another thread: the running separate() stops (returns false)
 
 private:
     AiWindowSeparator(const AiWindowSeparator &) = delete;

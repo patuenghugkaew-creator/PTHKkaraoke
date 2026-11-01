@@ -33,6 +33,36 @@ PlaylistWidget::PlaylistWidget(QWidget *parent) :
     connect(ui->tableWidget, &QTableWidget::cellDoubleClicked, this, [this](int row, int) { emit rowDoubleClicked(row); });
 }
 
+void PlaylistWidget::applyOverlayStyle()
+{
+    ui->framePlaylist->setStyleSheet(
+        "#framePlaylist { border: none; border-radius: 12px; background-color: rgba(16, 18, 24, 160); }");
+    ui->frame->setStyleSheet(
+        "#frame { border: none; border-radius: 8px; background-color: rgba(0, 129, 194, 190); }"
+        "#frame QLabel { background: transparent; color: rgb(255, 244, 110); }");
+    ui->tableWidget->setStyleSheet(
+        "QTableView { color: rgb(240, 240, 240); border: none; background: transparent;"
+        " gridline-color: rgba(255, 255, 255, 35); }"
+        "QTableView::item { padding: 0 6px; background: transparent; }"
+        "QTableView::item:selected { background-color: rgba(255, 255, 255, 210); color: rgb(40, 40, 40); }");
+    ui->tableWidget->viewport()->setAutoFillBackground(false);
+    ui->tableWidget->setAutoFillBackground(false);
+}
+
+int PlaylistWidget::fittingHeight(int maxHeight) const
+{
+    const QTableWidget *t = ui->tableWidget;
+    int rows = 0;
+    for (int r = 0; r < t->rowCount(); ++r)
+        rows += t->rowHeight(r);
+    if (t->rowCount() == 0)
+        rows = t->verticalHeader()->defaultSectionSize();
+    const QMargins m = ui->framePlaylist->layout() ? ui->framePlaylist->layout()->contentsMargins() : QMargins();
+    const int spacing = ui->framePlaylist->layout() ? ui->framePlaylist->layout()->spacing() : 0;
+    const int h = ui->frame->sizeHint().height() + spacing + rows + t->frameWidth() * 2 + m.top() + m.bottom() + 6;
+    return qMin(h, maxHeight);
+}
+
 // one colour per kind of song, so the queue can be read at a glance
 QColor PlaylistWidget::typeColor(const QString &type)
 {

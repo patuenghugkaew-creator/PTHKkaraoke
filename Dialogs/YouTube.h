@@ -128,6 +128,8 @@ private:
     QListWidgetItem *addSong(const YtItem &it, const QString &extra = QString());
     void loadThumb(const QString &id);
     void pumpThumbs();
+    QString localThumbFile(const QString &video) const;   // cached picture of a clip on disk
+    void pumpLocalThumbs();                               // made from the clip itself (ffmpeg)
     QProcess *startYtdlp(const QStringList &args);
 
     QLineEdit *edSearch;
@@ -144,6 +146,7 @@ private:
     bool homeMode = false;
     QString localDir;
     QStringList pendingThumbs;
+    QStringList pendingLocalThumbs;             // clips on disk still without a picture
     int activeThumbs = 0;
 };
 

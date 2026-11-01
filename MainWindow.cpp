@@ -390,6 +390,23 @@ MainWindow::MainWindow(QWidget *parent) :
         connect(videoPlayer, &QMediaPlayer::positionChanged, this, [this](qint64 p) {
             if (!videoActive)
                 return;
+            videoWidget->frameSurface()->setClock(p);
+            if (aiStems) {
+                // the picture comes first: behind the sound for over a second while playing -> the
+                // AI stops for this song. A moment behind (a song starting part way in shows its
+                // first frame, then jumps) is not counted.
+                const qint64 shownMs = videoWidget->shownTimeUs() / 1000;
+                const qint64 behind = shownMs >= 0 ? p - shownMs : 0;
+                static QElapsedTimer lagging;
+                if (behind > 120 && behind < 5000 && videoPlayer->state() == QMediaPlayer::PlayingState) {
+                    if (!lagging.isValid())
+                        lagging.start();
+                    else if (lagging.elapsed() > 1000)
+                        aiStems->yieldToVideo();
+                } else {
+                    lagging.invalidate();
+                }
+            }
             if (videoAudioTempo) {
                 DWORD flags = BASS_Mixer_ChannelFlags(videoAudioTempo, 0, 0);
                 if (flags & BASS_MIXER_CHAN_PAUSE) {
@@ -414,9 +431,15 @@ MainWindow::MainWindow(QWidget *parent) :
                         every.restart();
                         BASS_CHANNELINFO ci;
                         const double rate = BASS_ChannelGetInfo(videoAudioStream, &ci) && ci.freq ? ci.freq : 44100.0;
-                        uiLog(QString("video %1 ms, sound %2 ms, stems reader %3 ms, AI heard %4")
+                        const qint64 shown = videoWidget->shownTimeUs();
+                        uiLog(QString("video %1 ms, sound %2 ms, stems reader %3 ms, AI heard %4 | picture on screen %5 ms"
+                                      " (behind %6 ms), frames shown %7 dropped %8 | cut %9")
                               .arg(p).arg(videoAudioPositionMs()).arg(qint64(videoStemMixer->position() * 1000.0 / rate))
-                              .arg(videoStemMixer->aiHeard() ? "yes" : "no"));
+                              .arg(videoStemMixer->aiHeard() ? "yes" : "no")
+                              .arg(shown / 1000).arg(shown >= 0 ? p - shown / 1000 : -1)
+                              .arg(videoWidget->takeShown()).arg(videoWidget->takeDropped())
+                              .arg(ui->chMix->isMuteVoice() ? "on" : "off")
+                              + QString(", late frames skipped %1").arg(videoWidget->takeSkippedLate()));
                     }
                 }
             }
@@ -606,6 +629,7 @@ MainWindow::MainWindow(QWidget *parent) :
         // downloaded clips whose AI vocal separation was not finished: go on (see AiStems.h)
         QTimer::singleShot(20000, this, [this]() { resumeAiStems(); });
         applyCornerDisplay();
+        styleSearchBar();
         // the queue: a click keeps it open, a double-click plays that song (like Enter)
         connect(ui->playlistWidget, &PlaylistWidget::rowClicked, this, [this](int) {
             timer2->start(playlist_timeout);
@@ -793,83 +817,75 @@ MainWindow::MainWindow(QWidget *parent) :
 
         timer1->start(1000);
 
-        { // Extra buttons on the playback bar (same as the Home / End / * keys and the menu)
-            auto addBarButton = [this](const QString &text, const QString &tip) {
-                QPushButton *b = new QPushButton(text, this);
-                b->setFocusPolicy(Qt::NoFocus);     // typing still goes to the song search
+        { // Playback bar (see BarButton.h): the song, its position, and three groups of buttons:
+          // playing, karaoke tools, songs and the program. Each button does what its key does.
+            QFrame *bar = ui->frameControl;
+            const double s = BarButton::scale();
+            // the ui's transport buttons are replaced by bar buttons; its layouts by the ones below
+            for (QWidget *w : std::initializer_list<QWidget *>{ ui->btnPlay, ui->btnPause, ui->btnStop, ui->btnPrevious, ui->btnNext })
+                w->hide();
+            ui->label_4->hide();
+            delete bar->layout();               // its nested layouts go too; the widgets stay
+
+            auto mk = [this, bar](const QString &label, const char *icon, const QString &tip) {
+                BarButton *b = new BarButton(label, BarIcons::byName(icon), bar);
                 b->setToolTip(tip);
-                b->setCursor(Qt::PointingHandCursor);
-                b->setStyleSheet("QPushButton { color: white; background-color: #2b2f36; border: 1px solid #4a5060;"
-                                 " border-radius: 4px; padding: 2px 8px; }"
-                                 "QPushButton:hover { background-color: #3a7bd5; }"
-                                 "QPushButton:checked { background-color: #d9534f; border-color: #ff8a80; }"
-                                 "QPushButton::menu-indicator { width: 0px; }");
-                b->setMinimumWidth(b->sizeHint().width());   // never cut the label; the position slider gives way
-                ui->horizontalLayout_8->addWidget(b);
-                barButtons << b;
                 return b;
             };
+            auto sep = [bar, s]() {
+                QFrame *f = new QFrame(bar);
+                f->setFixedWidth(1);
+                f->setMinimumHeight(int(36 * s));
+                f->setStyleSheet("background-color: rgba(255, 255, 255, 38); border: none;");
+                return f;
+            };
 
-            QPushButton *addSongs = addBarButton(tr("+ เพิ่มเพลง"), tr("เพิ่มเพลง NCN / วิดีโอ / MP3 / KAR เข้าคลังเพลงทันที เลือกทั้งโฟลเดอร์ได้ (ลากไฟล์หรือโฟลเดอร์มาวางบนจอก็ได้)"));
-            connect(addSongs, &QPushButton::clicked, this, [this]() { showImportDialog(); });
+            // song line
+            barTitle = new QLabel(bar);
+            barMeta = new QLabel(bar);
+            barTitle->setStyleSheet("color: #f5f6fa; background: transparent;");
+            barMeta->setStyleSheet("color: #aab0bd; background: transparent;");
+            {
+                QFont f = barTitle->font();
+                f.setPointSizeF(10.5 * s);
+                f.setBold(true);
+                barTitle->setFont(f);
+                f.setBold(false);
+                f.setPointSizeF(9.5 * s);
+                barMeta->setFont(f);
+            }
+            barTitle->setTextFormat(Qt::PlainText);
+            barTitle->setMinimumWidth(80);
+            barTitle->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
 
-            QPushButton *yt = addBarButton(tr("YouTube"), tr("ค้นหาเพลงจาก YouTube แล้วเล่นสด หรือเพิ่มเข้าคิว (F10)"));
-            connect(yt, &QPushButton::clicked, this, [this]() { showYouTubeSearch(); });
-
-            QPushButton *home = addBarButton(tr("เริ่มใหม่"), tr("เล่นเพลงนี้ใหม่ตั้งแต่ต้น (Home)"));
-            connect(home, &QPushButton::clicked, this, [this]() {
+            // playing
+            BarButton *prev = mk(tr("ก่อนหน้า"), "prev", tr("เพลงก่อนหน้า (F8)"));
+            connect(prev, &QAbstractButton::clicked, this, [this]() { playPrevious(); });
+            btnPlayPause = mk(tr("เล่น"), "play", tr("เล่น / พัก (F5 / F6)"));
+            btnPlayPause->setBig(true);
+            connect(btnPlayPause, &QAbstractButton::clicked, this, [this]() {
+                if (songIsRunning())
+                    pause();
+                else
+                    on_btnPlay_clicked();
+                updateBarStatus();
+            });
+            BarButton *stopBtn = mk(tr("หยุด"), "stop", tr("หยุด (F7)"));
+            connect(stopBtn, &QAbstractButton::clicked, this, [this]() { stop(); });
+            BarButton *nextBtn = mk(tr("ถัดไป"), "next", tr("เพลงถัดไป (F9)"));
+            connect(nextBtn, &QAbstractButton::clicked, this, [this]() { playNext(); });
+            BarButton *end = mk(tr("จบเพลง"), "end", tr("จบเพลงนี้แบบค่อย ๆ เบาลง แล้วไปเพลงถัดไป (End)"));
+            connect(end, &QAbstractButton::clicked, this, [this]() { endSongSmoothly(); });
+            BarButton *restartBtn = mk(tr("เริ่มใหม่"), "restart", tr("เล่นเพลงนี้ใหม่ตั้งแต่ต้น (Home)"));
+            connect(restartBtn, &QAbstractButton::clicked, this, [this]() {
                 if (playingSong.id() != "")
                     play(-1);
             });
 
-            QPushButton *end = addBarButton(tr("จบเพลง"), tr("จบเพลงนี้ ไปเพลงถัดไป (End)"));
-            connect(end, &QPushButton::clicked, this, [this]() { endSongSmoothly(); });
-
-            btnMedley = addBarButton(tr("เมดเลย์"), tr("เปิด / ปิด โหมดเมดเลย์ ต่อเพลงเนียนตามจังหวะห้องดนตรี (F4)"));
-            btnMedley->setCheckable(true);
-            connect(btnMedley, &QPushButton::clicked, this, [this]() {
-                QKeyEvent ev(QEvent::KeyPress, Qt::Key_F4, Qt::NoModifier);
-                keyPressEvent(&ev);
-                QSignalBlocker b(btnMedley);
-                btnMedley->setChecked(player->isUseMedley());
-            });
-
-            QPushButton *btnMedleySettings = addBarButton(tr("ตั้งค่าเมดเลย์"), tr("ตั้งค่าเมดเลย์: BPM, จำนวนห้องลูกส่งรอ, ลายกลองส่ง"));
-            connect(btnMedleySettings, &QPushButton::clicked, this, [this]() { openMedleySettings(); });
-
-            // Drum hold: click once = the band stops at the next bar and the drums keep the beat;
-            // click again = drum fill, then the song carries on (same as Ctrl+D / Pause)
-            QPushButton *btnDrumHold = addBarButton(tr("ค้างกลอง"),
-                tr("ค้างจังหวะกลอง: ดนตรีหยุดที่ต้นห้องถัดไป เหลือกลองตีรอ (เนื้อร้องรอด้วย)\n"
-                   "กดอีกครั้ง = ลูกส่ง แล้วเข้าเพลงต่อพอดีจังหวะ (Ctrl+D) - เพลง MIDI"));
-            btnDrumHold->setCheckable(true);
-            connect(btnDrumHold, &QPushButton::clicked, this, [this, btnDrumHold]() {
-                toggleDrumHold();
-                QSignalBlocker b(btnDrumHold);
-                btnDrumHold->setChecked(player->isDrumHoldOn());
-            });
-            connect(player, &MidiPlayer::drumHoldChanged, btnDrumHold, [btnDrumHold](int st) {
-                static const char *labels[] = { "ค้างกลอง", "ค้างกลอง…", "▶ ส่งเข้าเพลง", "ลูกส่ง…" };
-                QSignalBlocker b(btnDrumHold);
-                btnDrumHold->setText(QObject::tr(labels[qBound(0, st, 3)]));
-                btnDrumHold->setChecked(st != 0);
-                btnDrumHold->setMinimumWidth(btnDrumHold->sizeHint().width());
-            });
-
-            btnMuteVocal = addBarButton(tr("ตัดเสียงร้อง"), tr("ปิด / เปิด เสียงร้องนำ (*)"));
+            // karaoke tools
+            btnMuteVocal = mk(tr("ตัดเสียงร้อง"), "mic", tr("ปิด / เปิด เสียงร้องนำ (*)"));
             btnMuteVocal->setCheckable(true);
-            {   // the label changes ("รอ AI 45%", "ตัดเสียงร้อง ✓"): keep its width, so the bar does not move
-                const QFontMetrics fm(btnMuteVocal->font());
-                int w = 0;
-                for (const QString &s : { tr("ตัดเสียงร้อง ✓"), tr("รอ AI 100%") })
-                    w = qMax(w, fm.horizontalAdvance(s));
-                btnMuteVocal->setMinimumWidth(qMax(btnMuteVocal->sizeHint().width(), w + 24));
-                QTimer *cutStatus = new QTimer(this);
-                cutStatus->setInterval(500);
-                connect(cutStatus, &QTimer::timeout, this, [this]() { updateCutButton(); });
-                cutStatus->start();
-            }
-            connect(btnMuteVocal, &QPushButton::toggled, this, [this](bool on) {
+            connect(btnMuteVocal, &QAbstractButton::toggled, this, [this](bool on) {
                 if (ui->chMix->isMuteVoice() != on)
                     ui->chMix->setMuteVoice(on);
 #ifdef KM_HAVE_PROCLOOP
@@ -877,8 +893,8 @@ MainWindow::MainWindow(QWidget *parent) :
 #endif
                 applyVideoVocalCut();
                 updateCutButton();
-                if (on && btnMuteVocal->text().startsWith(tr("รอ AI"))) {
-                    ui->detail->setDetail(tr("รอตัดเสียงร้องด้วย AI"), tr("%1 - พร้อมแล้วจะตัดให้เอง").arg(btnMuteVocal->text()));
+                if (on && cutWaiting) {
+                    ui->detail->setDetail(tr("รอตัดเสียงร้องด้วย AI"), tr("พร้อมแล้วจะตัดให้เอง (ดูวงรอบปุ่ม)"));
                     ui->detail->show();
                     detailTimer->start(3000);
                     return;
@@ -896,10 +912,52 @@ MainWindow::MainWindow(QWidget *parent) :
                 applyYtVocalCut();
 #endif
                 applyVideoVocalCut();
+                updateCutButton();
             });
 
-            QPushButton *btnMixer = addBarButton(tr("มิกเซอร์"), tr("เปิด / ปิด มิกเซอร์ปรับแต่งเสียงหลัก"));
-            connect(btnMixer, &QPushButton::clicked, this, [this]() {
+            keyControl = new KeyControl(bar);
+            keyControl->onStep = [this](int step) { changeSongKey(step); updateBarStatus(); };
+
+            btnMedley = mk(tr("เมดเลย์"), "medley", tr("เปิด / ปิด โหมดเมดเลย์ ต่อเพลงเนียนตามจังหวะ (F4)\n"
+                                                        "ลูกศรด้านขวา: ตั้งค่าเมดเลย์"));
+            btnMedley->setCheckable(true);
+            connect(btnMedley, &QAbstractButton::clicked, this, [this]() {
+                QKeyEvent ev(QEvent::KeyPress, Qt::Key_F4, Qt::NoModifier);
+                keyPressEvent(&ev);
+                QSignalBlocker b(btnMedley);
+                btnMedley->setChecked(player->isUseMedley());
+            });
+            btnMedley->setArrow([this]() { openMedleySettings(); });
+
+            // drum hold (MIDI songs): click = the band stops at the next bar, drums keep the beat;
+            // click again = drum fill, then the song carries on (same as Ctrl+D / Pause)
+            btnDrumHold = mk(tr("ค้างกลอง"), "drum",
+                tr("ค้างจังหวะกลอง: ดนตรีหยุดที่ต้นห้องถัดไป เหลือกลองตีรอ (เนื้อร้องรอด้วย)\n"
+                   "กดอีกครั้ง = ลูกส่ง แล้วเข้าเพลงต่อพอดีจังหวะ (Ctrl+D) - เพลง MIDI"));
+            btnDrumHold->setCheckable(true);
+            connect(btnDrumHold, &QAbstractButton::clicked, this, [this]() {
+                toggleDrumHold();
+                QSignalBlocker b(btnDrumHold);
+                btnDrumHold->setChecked(player->isDrumHoldOn());
+            });
+            connect(player, &MidiPlayer::drumHoldChanged, btnDrumHold, [this](int st) {
+                static const char *labels[] = { "ค้างกลอง", "ค้างกลอง…", "ส่งเข้าเพลง", "ลูกส่ง…" };
+                QSignalBlocker b(btnDrumHold);
+                btnDrumHold->setText(QObject::tr(labels[qBound(0, st, 3)]));
+                btnDrumHold->setChecked(st != 0);
+                fitControlBar();
+            });
+
+            // songs and the program
+            BarButton *lists = mk(tr("รายการเพลง"), "songs", tr("เพลงโปรด / เล่นล่าสุด / เพลงฮิต (F3)"));
+            connect(lists, &QAbstractButton::clicked, this, [this]() {
+                QKeyEvent ev(QEvent::KeyPress, Qt::Key_F3, Qt::NoModifier);
+                keyPressEvent(&ev);
+            });
+            BarButton *yt = mk(tr("YouTube"), "youtube", tr("ค้นหาเพลงจาก YouTube แล้วเล่น หรือเพิ่มเข้าคิว (F10)"));
+            connect(yt, &QAbstractButton::clicked, this, [this]() { showYouTubeSearch(); });
+            BarButton *mixerBtn = mk(tr("มิกเซอร์"), "mixer", tr("เปิด / ปิด มิกเซอร์ปรับแต่งเสียงหลัก"));
+            connect(mixerBtn, &QAbstractButton::clicked, this, [this]() {
                 if (synthMix->isVisible() && !synthMix->isMinimized()) {
                     synthMix->hide();
                 } else {
@@ -909,15 +967,18 @@ MainWindow::MainWindow(QWidget *parent) :
                 }
             });
 
-            btnSecondScreen = addBarButton(tr("จอที่ 2"), tr("เปิด / ปิด หน้าจอเนื้อร้องบนจอที่สอง (คลิกขวาบนจอที่ 2 เพื่อปรับ)"));
+            BarButton *addSongBtn = mk(tr("เพิ่มเพลง"), "addSong",
+                tr("เพิ่มเพลง NCN / วิดีโอ / MP3 / KAR เข้าคลังเพลงทันที เลือกทั้งโฟลเดอร์ได้ (ลากไฟล์หรือโฟลเดอร์มาวางบนจอก็ได้)"));
+            connect(addSongBtn, &QAbstractButton::clicked, this, [this]() { showImportDialog(); });
+            btnSecondScreen = mk(tr("จอที่ 2"), "screen2", tr("เปิด / ปิด หน้าจอเนื้อร้องบนจอที่สอง (คลิกขวาบนจอที่ 2 เพื่อปรับ)"));
             btnSecondScreen->setCheckable(true);
-            connect(btnSecondScreen, &QPushButton::clicked, this, [this]() { showSecondMonitor(); });
-
-            btnSubtitles = addBarButton(tr("ซับไตเติล"), tr("เปิด / ปิด ซับไตเติล YouTube (CC)"));
+            connect(btnSecondScreen, &QAbstractButton::clicked, this, [this]() { showSecondMonitor(); });
+            BarButton *fullBtn = mk(tr("เต็มจอ"), "fullscreen", tr("เต็มจอ / หน้าต่างปกติ (ดับเบิลคลิกบนจอก็ได้)"));
+            connect(fullBtn, &QAbstractButton::clicked, this, [this]() { showFullScreenOrNormal(); });
+            btnSubtitles = mk(tr("ซับไตเติล"), "subtitles", tr("เปิด / ปิด ซับไตเติล YouTube (CC)"));
             btnSubtitles->setCheckable(true);
-            const bool showCc = settings->value("YtShowSubtitles", false).toBool();
-            btnSubtitles->setChecked(showCc);
-            connect(btnSubtitles, &QPushButton::toggled, this, [this](bool on) {
+            btnSubtitles->setChecked(settings->value("YtShowSubtitles", false).toBool());
+            connect(btnSubtitles, &QAbstractButton::toggled, this, [this](bool on) {
                 settings->setValue("YtShowSubtitles", on);
 #ifdef PTHK_WEBENGINE
                 if (ytPlayer)
@@ -927,20 +988,15 @@ MainWindow::MainWindow(QWidget *parent) :
                 ui->detail->show();
                 detailTimer->start(3000);
             });
-
-            QPushButton *full = addBarButton(tr("เต็มจอ"), tr("เต็มจอ / หน้าต่างปกติ"));
-            connect(full, &QPushButton::clicked, this, [this]() { showFullScreenOrNormal(); });
-
-            // small window: the buttons that do not fit are in this menu (see fitControlBar)
-            btnBarMore = addBarButton(tr("เพิ่มเติม..."), tr("ปุ่มที่ไม่พอที่บนแถบ"));
-            barButtons.removeAll(btnBarMore);
+            // shown only when the window is too narrow for every button (see fitControlBar)
+            btnBarMore = mk(tr("อื่น ๆ"), "more", tr("ปุ่มที่ไม่พอที่บนแถบ"));
             btnBarMore->hide();
-            connect(btnBarMore, &QPushButton::clicked, this, [this]() {
+            connect(btnBarMore, &QAbstractButton::clicked, this, [this]() {
                 QMenu m(this);
-                for (QPushButton *b : barButtons) {
+                for (QAbstractButton *b : barButtons) {        // buttons that did not fit on the bar
                     if (!b->property("barOverflow").toBool())
                         continue;
-                    QAction *a = m.addAction(b->text().trimmed());
+                    QAction *a = m.addAction(b->text());
                     a->setToolTip(b->toolTip());
                     if (b->isCheckable()) {
                         a->setCheckable(true);
@@ -950,6 +1006,51 @@ MainWindow::MainWindow(QWidget *parent) :
                 }
                 m.exec(btnBarMore->mapToGlobal(QPoint(0, 0)) - QPoint(0, m.sizeHint().height()));
             });
+
+            // order on the bar narrowing down: these go into "more" first
+            barButtons = { btnSubtitles, btnSecondScreen, addSongBtn, lists, mixerBtn, restartBtn, end, fullBtn, yt, prev };
+
+            QVBoxLayout *v = new QVBoxLayout(bar);
+            v->setContentsMargins(int(12 * s), int(5 * s), int(12 * s), int(5 * s));
+            v->setSpacing(int(3 * s));
+            QHBoxLayout *info = new QHBoxLayout();
+            info->setSpacing(int(12 * s));
+            info->addWidget(barTitle, 1);
+            info->addWidget(barMeta);
+            QHBoxLayout *seek = new QHBoxLayout();
+            seek->setSpacing(int(10 * s));
+            seek->addWidget(ui->lbPosition);
+            seek->addWidget(ui->sliderPosition, 1);
+            seek->addWidget(ui->lbDuration);
+            QHBoxLayout *row = new QHBoxLayout();
+            row->setSpacing(int(2 * s));
+            for (QWidget *w : std::initializer_list<QWidget *>{ prev, btnPlayPause, stopBtn, nextBtn, restartBtn, end })
+                row->addWidget(w);
+            row->addSpacing(int(6 * s));
+            row->addWidget(sep());
+            row->addSpacing(int(6 * s));
+            for (QWidget *w : std::initializer_list<QWidget *>{ btnMuteVocal, btnDrumHold, keyControl, btnMedley })
+                row->addWidget(w);
+            row->addStretch(1);
+            for (QWidget *w : std::initializer_list<QWidget *>{ addSongBtn, lists, yt, btnSubtitles, mixerBtn,
+                                                                 btnSecondScreen, fullBtn, btnBarMore })
+                row->addWidget(w);
+            row->addSpacing(int(6 * s));
+            row->addWidget(sep());
+            row->addSpacing(int(6 * s));
+            row->addWidget(ui->btnVolumeMute);
+            row->addWidget(ui->sliderVolume);
+            v->addLayout(info);
+            v->addLayout(seek);
+            v->addLayout(row);
+
+            // the bar shows what is playing; the cut button whether the AI is ready (twice a second)
+            QTimer *status = new QTimer(this);
+            status->setInterval(500);
+            connect(status, &QTimer::timeout, this, [this]() { updateBarStatus(); });
+            status->start();
+            updateBarStatus();
+
             ui->frameControl->installEventFilter(this);
             QTimer::singleShot(0, this, [this]() { fitControlBar(); });
         }

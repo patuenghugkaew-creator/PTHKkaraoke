@@ -134,6 +134,7 @@ HEADERS  += Widgets/PanKnob.h \
     Midi/AiVocal.h \
     Midi/YtAudio.h \
     Midi/VocalRemover.h \
+    Widgets/BarButton.h \
     Dmx/DmxLights.h \
     MedleyLoader.h \
     SettingsDialog.h \

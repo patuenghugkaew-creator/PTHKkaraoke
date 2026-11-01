@@ -471,7 +471,7 @@ void MainWindow::showContextMenuAt(const QPoint &globalPos)
                 a->setCheckable(true);
                 a->setChecked(Theme::menuSize() == i);
                 connect(a, &QAction::triggered, this, [this, i]() {
-                    QTimer::singleShot(0, this, [i]() { Theme::setMenuSize(i); });
+                    QTimer::singleShot(0, this, [this, i]() { Theme::setMenuSize(i); fitControlBar(); });
                 });
             }
         }
@@ -996,44 +996,35 @@ void MainWindow::setBackgroundVideoFolder(const QString &dir)
 
 void MainWindow::fitControlBar()
 {
-    if (!btnBarMore || barButtons.isEmpty() || !ui->frameControl->layout())
-        return;
     QLayout *bar = ui->frameControl->layout();
-    auto need = [&]() {
-        ui->horizontalLayout_8->invalidate();
-        bar->invalidate();
-        return bar->minimumSize().width();
-    };
-    for (QPushButton *b : barButtons) {
-        b->ensurePolished();
-        b->setMinimumWidth(b->sizeHint().width());
+    if (!btnBarMore || !bar)
+        return;
+    // sizes follow the menu size; buttons that do not fit go into "more" (in barButtons order)
+    for (QWidget *w : ui->frameControl->findChildren<QWidget *>())
+        w->updateGeometry();
+    for (QAbstractButton *b : barButtons) {
         b->setProperty("barOverflow", false);
         b->show();
     }
-    btnBarMore->ensurePolished();
-    btnBarMore->setMinimumWidth(btnBarMore->sizeHint().width());
     btnBarMore->hide();
+    auto need = [&]() {
+        bar->invalidate();
+        bar->activate();
+        return bar->minimumSize().width();
+    };
     const int avail = ui->frameControl->width();
-    if (need() <= avail) {
-        uiLog(QString("control bar: width %1, needs %2, all buttons fit").arg(avail).arg(need()));
-        return;
-    }
-    btnBarMore->show();
-    // creation order: เพิ่มเพลง, YouTube, เริ่มใหม่, จบเพลง, เมดเลย์, ตั้งค่าเมดเลย์, ค้างกลอง,
-    // ตัดเสียงร้อง, มิกเซอร์, จอที่ 2, ซับไตเติล, เต็มจอ  ->  hide first: subtitles, 2nd screen...
-    static const int order[] = { 10, 9, 5, 2, 8, 0, 1, 11, 3, 4, 6, 7 };
-    for (int idx : order) {
-        if (idx >= barButtons.size())
-            continue;
-        QPushButton *b = barButtons[idx];
-        b->hide();
-        b->setProperty("barOverflow", true);
-        if (need() <= avail)
-            break;
-    }
     int hidden = 0;
-    for (QPushButton *b : barButtons)
-        if (b->property("barOverflow").toBool()) ++hidden;
+    if (need() > avail) {
+        btnBarMore->show();
+        for (QAbstractButton *b : barButtons) {
+            if (need() <= avail)
+                break;
+            b->hide();
+            b->setProperty("barOverflow", true);
+            ++hidden;
+        }
+    }
+    ui->frameControl->setFixedHeight(bar->sizeHint().height());
     uiLog(QString("control bar: width %1, needs %2, %3 button(s) in the more menu").arg(avail).arg(need()).arg(hidden));
 }
 

@@ -646,6 +646,18 @@ QString MainWindow::searchWithThaiFallback(const QString &text)
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
+    if (event->type() == QEvent::MouseButtonDblClick) {
+        // double-click on the screen (picture, video, lyrics): full screen on / off. Not on the bar,
+        // the song search, the queue or the channel mixer, which use double-clicks themselves.
+        QWidget *w = qobject_cast<QWidget *>(watched);
+        auto inside = [w](QWidget *area) { return area && (w == area || area->isAncestorOf(w)); };
+        if (w && w->window() == this && static_cast<QMouseEvent *>(event)->button() == Qt::LeftButton
+                && !inside(ui->frameControl) && !inside(ui->frameSearch) && !inside(ui->playlistWidget)
+                && !inside(ui->chMix) && !inside(ui->songMedley)) {
+            showFullScreenOrNormal();
+            return true;
+        }
+    }
     if (event->type() == QEvent::MouseButtonDblClick && ui->frameSearch->isVisible()) {
         // double-click on the song found = Enter (into the queue / play)
         QWidget *w = qobject_cast<QWidget *>(watched);

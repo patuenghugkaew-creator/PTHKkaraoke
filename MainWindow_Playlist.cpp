@@ -642,6 +642,7 @@ void MainWindow::showPlaylist()
     ui->songDetail->hide();
     ui->frameSearch->hide();
 
+    fitQueue();
     ui->playlistWidget->show();
 }
 
@@ -722,8 +723,53 @@ void MainWindow::setFrameSearch(Song *s)
         ui->lbTempoKey->setText(" (" + QString::number(s->tempo()) + ")");
     ui->lbType->setText("[" + s->songType() + "]");
     ui->lbLyrics->setText(s->lyrics().replace("\r\n", " "));
+    ui->frame_3->setVisible(!ui->lbLyrics->text().trimmed().isEmpty());    // video songs have no lyrics line
 
     if (s->artist().length() == 0) {
         ui->lbBtw->hide();
     }
+    fitSearchBar();
+}
+
+// The song search bar (typing a code or a name): see-through over the video, rounded, at the left,
+// as wide as the song shown instead of the whole screen.
+void MainWindow::styleSearchBar()
+{
+    ui->frameSearch->setStyleSheet(
+        "#frameSearch { border: none; border-radius: 12px; background-color: rgba(16, 18, 24, 150); }");
+    ui->frame_2->setStyleSheet(
+        "#frame_2 { border: none; border-radius: 8px; background-color: rgba(255, 255, 255, 220); }"
+        "#frame_2 QLabel { background: transparent; color: rgb(40, 40, 40); }");
+    ui->frame_3->setStyleSheet(
+        "#frame_3 { border: none; border-radius: 8px; background-color: rgba(70, 70, 70, 150); }"
+        "#frame_3 QLabel { background: transparent; color: rgb(255, 244, 110); }");
+    ui->frame_4->setStyleSheet(
+        "#frame_4 { border: none; border-radius: 8px; background-color: rgba(0, 129, 194, 190); }"
+        "#frame_4 QLabel { background: transparent; color: rgb(245, 245, 245); }");
+    ui->frameSearch->setAttribute(Qt::WA_TranslucentBackground, false);
+    ui->frameSearch->setAutoFillBackground(false);
+    ui->verticalLayoutMain->setAlignment(ui->frameSearch, Qt::AlignLeft);
+    fitSearchBar();
+    ui->playlistWidget->applyOverlayStyle();
+    ui->verticalLayoutMain->setAlignment(ui->playlistWidget, Qt::AlignLeft);
+    fitQueue();
+}
+
+// The queue (shown a moment after a song is added, or with the queue key): at the left, about
+// two thirds of the screen wide, only as tall as its songs (at most as tall as before)
+void MainWindow::fitQueue()
+{
+    const int avail = qMax(500, ui->centralWidget->width() - 40);
+    ui->playlistWidget->setFixedWidth(qBound(700, int(ui->centralWidget->width() * 0.66), avail));
+    ui->playlistWidget->setFixedHeight(ui->playlistWidget->fittingHeight(305));
+}
+
+void MainWindow::fitSearchBar()
+{
+    const int avail = qMax(400, ui->centralWidget->width() - 40);
+    // the song line's own width (code, name, artist, tempo / key, type), plus the bar's margins
+    int want = ui->frame_4->sizeHint().width() + 24;
+    if (ui->frame_3->isVisible())
+        want = qMax(want, int(avail * 0.75));   // MIDI songs: room for the lyrics line
+    ui->frameSearch->setFixedWidth(qBound(640, want, avail));     // aligned: it keeps exactly this width
 }

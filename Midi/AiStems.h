@@ -17,6 +17,7 @@
 #include <bassmix.h>
 
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
@@ -138,6 +139,7 @@ public:
     static bool hasPart(const QString &f) { return QFile::exists(mapPath(f)) && QFile::exists(partPath(f)); }
 
     // called from the maker thread
+    std::function<void(const QString &line)> onLog;          // diagnostics
     std::function<void(const QString &file, int percent)> onProgress;
     std::function<void(const QString &file, bool ok, const QString &error)> onDone;
 
@@ -183,6 +185,7 @@ public:
             if (focus == j)
                 return;
             focus = j;
+            yielding.store(false);
         }
         cv.notify_all();
     }
@@ -190,6 +193,7 @@ public:
     {
         std::lock_guard<std::mutex> lock(m);
         focus.reset();
+        yielding.store(false);
     }
     // made in the background (one after another) while no video / YouTube song plays
     void enqueue(const QString &file)
@@ -203,6 +207,20 @@ public:
         }
         cv.notify_all();
     }
+    // The video picture fell behind while the AI worked: the window being made is dropped and no
+    // more are made while this song plays (they are made later, when no video plays).
+    void yieldToVideo()
+    {
+        if (yielding.exchange(true))
+            return;
+        std::lock_guard<std::mutex> lock(liveMx);
+        if (live)
+            live->cancel();
+        if (onLog)
+            onLog("AI maker: steps aside for the rest of this song (the picture fell behind)");
+    }
+    bool yieldingToVideo() const { return yielding.load(); }
+
     void setBackgroundAllowed(bool on)
     {
         backgroundOn.store(on);
@@ -265,8 +283,10 @@ private:
         QString sepKey, sepModels;
         bool sepGpu = false;
         std::vector<float> win(size_t(2) * CHUNK), out(size_t(2) * CHUNK);
-        // 3/4 of the cores: ~1.6x faster than the song plays with "hq" on an 8-core CPU; idle threads sleep
-        const int threads = (std::max)(2, int(std::thread::hardware_concurrency()) * 3 / 4);
+        // No video playing: 3/4 of the cores. A video playing: a quarter, so its picture keeps
+        // its pace (with more, decoding the picture shared the cores with the AI and fell behind).
+        const int cores = (std::max)(2, int(std::thread::hardware_concurrency()));
+        int sepThreads = 0;
 
         while (!quit.load()) {
             std::shared_ptr<Job> job;
@@ -296,23 +316,44 @@ private:
                     continue;
                 }
                 if (working != job) {
+                    QElapsedTimer t;
+                    t.start();
                     if (working)
                         release(*working);
                     working = job;
+                    if (onLog)
+                        onLog(QString("AI maker: now %1 (freed the previous song in %2 ms, under lock)")
+                              .arg(QFileInfo(job->t->file).fileName()).arg(t.elapsed()));
                 }
                 models = cfgModels;
                 newKey = cfgKey;
                 gpu = cfgGpu;
             }
 
+            if (yielding.load() && !backgroundOn.load()) {   // the video needs the CPU
+                std::unique_lock<std::mutex> lock(m);
+                cv.wait_for(lock, std::chrono::milliseconds(300));
+                continue;
+            }
+            const int threads = backgroundOn.load() ? (std::max)(2, cores * 3 / 4) : (std::max)(2, cores / 4);
             QString err;
+            QElapsedTimer openClock;
+            openClock.start();
+            const bool wasOpened = job->opened;
             if (!job->opened && !openJob(*job, newKey, err)) {
                 fail(job, err);
                 continue;
             }
-            if (!sep || sepKey != job->key || sepGpu != gpu || sepModels != models) {
+            if (!wasOpened && onLog)
+                onLog(QString("AI maker: opened %1 in %2 ms (%3 windows, %4 made)")
+                      .arg(QFileInfo(job->t->file).fileName()).arg(openClock.elapsed())
+                      .arg(job->t->nWin).arg(job->t->doneCount.load()));
+            if (!sep || sepKey != job->key || sepGpu != gpu || sepModels != models || (!gpu && sepThreads != threads)) {
                 sep.reset();
                 sep.reset(new AiWindowSeparator(models, job->key, gpu, threads));
+                sepThreads = threads;
+                if (onLog)
+                    onLog(QString("AI maker: model %1 on %2, %3 threads").arg(job->key).arg(gpu ? "GPU" : "CPU").arg(threads));
                 sepKey = job->key;
                 sepGpu = gpu;
                 sepModels = models;
@@ -330,10 +371,18 @@ private:
                 finish(job);
                 continue;
             }
+            QElapsedTimer winClock;
+            winClock.start();
+            const long long decodedBefore = job->decoded;
             if (!makeWindow(*job, k, *sep, win, out, err)) {
+                if (yielding.load() || quit.load())
+                    continue;                   // stopped for the picture: not an error
                 fail(job, err);
                 continue;
             }
+            if (onLog)
+                onLog(QString("AI maker: window %1 in %2 ms (decoded %3 s first)")
+                      .arg(k).arg(winClock.elapsed()).arg((job->decoded - decodedBefore) / double(AiVocalEngine::SR), 0, 'f', 1));
             const int pct = int(job->t->doneCount.load() * 100LL / (std::max)(1, job->t->nWin));
             if (pct != job->lastPct) {
                 job->lastPct = pct;
@@ -575,7 +624,16 @@ private:
             std::fill(out.begin(), out.end(), 0.0f);
         else {
             const DWORD t0 = GetTickCount();
-            if (!sep.separate(win.data(), out.data())) {
+            {
+                std::lock_guard<std::mutex> lock(liveMx);
+                live = &sep;
+            }
+            const bool done = sep.separate(win.data(), out.data());
+            {
+                std::lock_guard<std::mutex> lock(liveMx);
+                live = nullptr;
+            }
+            if (!done) {
                 err = sep.error();
                 return false;
             }
@@ -680,6 +738,9 @@ private:
     std::atomic<long long> focusFrame{0};
     double winSec = 4.0;                        // time to make one window (maker thread)
     std::atomic<bool> backgroundOn{true};
+    std::atomic<bool> yielding{false};
+    std::mutex liveMx;
+    AiWindowSeparator *live = nullptr;          // separating a window right now (for yieldToVideo)
     QString cfgModels, cfgKey = "hq";
     bool cfgGpu = false;
     std::atomic<bool> quit{false};

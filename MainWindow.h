@@ -128,6 +128,12 @@ public:
     bool aiPrepareVideo() const;                // the AI separates the playing video song now
     void updateCutButton();                     // the cut button shows whether the AI cut is ready
     void applyCornerDisplay();                  // clock / beat box shown or hidden (settings)
+    void styleSearchBar();                      // the song search bar: see-through, rounded, at the left
+    void fitSearchBar();                        // its width follows the song shown
+    void fitQueue();                            // the queue: at the left, as tall as its songs
+    void updateBarStatus();                     // the bar: song line, play / pause, key, drum hold, AI ring
+    void changeSongKey(int step);               // key down / up for any kind of song
+    bool songIsRunning();                       // a song plays (not paused, not stopped)
     void startSibBackfill();
     // automatic update (GitHub Releases)
     void checkForUpdate(bool manual);
@@ -140,8 +146,8 @@ public:
     QTimer *drumHoldBlink = nullptr;
     void showDrumHoldBanner(int state);
     // control bar: buttons that do not fit go into the "more" button's menu
-    QList<QPushButton *> barButtons;
-    QPushButton *btnBarMore = nullptr;
+    QList<QAbstractButton *> barButtons;       // bar buttons that go into "more" when the window is narrow
+    class BarButton *btnBarMore = nullptr;
     bool fitBarQueued = false;
     void fitControlBar();
     void toggleDrumHold();
@@ -358,10 +364,16 @@ private:
     QElapsedTimer afterLyricsClock;
     int midiBaseVolume = -1;
 #endif
-    QPushButton *btnMuteVocal;
-    QPushButton *btnMedley = nullptr;
-    QPushButton *btnSecondScreen = nullptr;
-    QPushButton *btnSubtitles = nullptr;
+    class BarButton *btnMuteVocal = nullptr;
+    class BarButton *btnPlayPause = nullptr;
+    class BarButton *btnDrumHold = nullptr;
+    class KeyControl *keyControl = nullptr;
+    QLabel *barTitle = nullptr;                  // the bar's song line
+    QLabel *barMeta = nullptr;
+    bool cutWaiting = false;                     // the AI cut is not ready yet (ring on the cut button)
+    class BarButton *btnMedley = nullptr;
+    class BarButton *btnSecondScreen = nullptr;
+    class BarButton *btnSubtitles = nullptr;
     SongDatabase *db;
     QTimer *timer1, *timer2, *positionTimer, *lyricsTimer;
     QTimer *detailTimer;

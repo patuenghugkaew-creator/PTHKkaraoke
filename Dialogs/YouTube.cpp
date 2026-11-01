@@ -14,6 +14,10 @@ static void setLowPriorityProcess(QProcess *) {}
 #endif
 
 #include <QApplication>
+#include <functional>
+#include <memory>
+#include <cstring>
+#include <QCryptographicHash>
 #include <QCheckBox>
 #include <QClipboard>
 #include <QDir>
@@ -614,6 +618,7 @@ YouTubeSearchDialog::YouTubeSearchDialog(QWidget *parent, const YtItem &seedItem
 YouTubeSearchDialog::~YouTubeSearchDialog()
 {
     pendingThumbs.clear();
+    pendingLocalThumbs.clear();
     // Search, suggestions and thumbnail downloads may still run (a song is usually picked before
     // all thumbnails arrive). Cut them off first: a "finished" handler running while this dialog
     // is torn down wrote into the already deleted list and crashed the program a little later.
@@ -963,6 +968,7 @@ void YouTubeSearchDialog::showLocalVideos()
     }
     homeMode = false;
     pendingThumbs.clear();
+    pendingLocalThumbs.clear();
     list->clear();
     QDir dir(localDir);
     if (localDir.isEmpty() || !dir.exists()) {
@@ -979,22 +985,97 @@ void YouTubeSearchDialog::showLocalVideos()
         const QString title = fi.completeBaseName();
         if (!filter.isEmpty() && !title.contains(filter, Qt::CaseInsensitive))
             continue;
-        const bool ai = QFile::exists(fi.absoluteFilePath() + ".ai.wav");
+        // AI vocal cut: ready (the whole song), or how much of it is separated (see AiStems.h)
+        QString aiText;
+        if (QFile::exists(fi.absoluteFilePath() + ".ai.wav")) {
+            aiText = tr("   ✓ AI ตัดเสียงร้องพร้อม");
+        } else {
+            QFile map(fi.absoluteFilePath() + ".ai.part.map");
+            if (map.open(QIODevice::ReadOnly)) {
+                const QByteArray head = map.read(64);
+                int nWin = 0;
+                if (head.size() == 64 && head.startsWith("PTHKSTM1"))
+                    std::memcpy(&nWin, head.constData() + 16, 4);
+                if (nWin > 0 && nWin < 100000) {
+                    const QByteArray done = map.read(nWin);
+                    const int made = int(done.size() - done.count(char(0)));
+                    aiText = tr("   AI แยกเสียงร้องแล้ว %1%").arg(made * 100 / nWin);
+                }
+            }
+        }
         QListWidgetItem *li = new QListWidgetItem(title + "\n" + tr("ในเครื่อง") + "   "
                                                   + QString::number(fi.size() / (1024 * 1024)) + " MB"
-                                                  + (ai ? tr("   ✓ AI ตัดเสียงร้องพร้อม") : QString()), list);
+                                                  + aiText, list);
         li->setData(Qt::UserRole, "file:" + fi.absoluteFilePath());
         li->setData(Qt::UserRole + 1, title);
         li->setData(Qt::UserRole + 2, tr("ในเครื่อง"));
         li->setData(Qt::UserRole + 3, 0);
         li->setSizeHint(QSize(0, 98));
-        li->setIcon(QIcon(ph));
+        const QString thumb = localThumbFile(fi.absoluteFilePath());
+        QPixmap pm;
+        if (QFile::exists(thumb) && pm.load(thumb)) {
+            li->setIcon(QIcon(pm.scaled(160, 90, Qt::KeepAspectRatio, Qt::SmoothTransformation)));
+        } else {
+            li->setIcon(QIcon(ph));
+            pendingLocalThumbs << fi.absoluteFilePath();
+        }
         ++n;
     }
+    pumpLocalThumbs();
     lbStatus->setText(n ? tr("วิดีโอที่ดาวน์โหลดไว้ %1 เพลง").arg(n)
                         : tr("ไม่พบวิดีโอที่ดาวน์โหลดไว้") + (filter.isEmpty() ? QString() : tr(" ที่ตรงกับ \"%1\"").arg(filter)));
     if (list->count() > 0)
         list->setCurrentRow(0);
+}
+
+// A picture of a clip on disk, kept in the thumbnail folder (named after the file, its time and
+// size, so a replaced file gets a new one)
+QString YouTubeSearchDialog::localThumbFile(const QString &video) const
+{
+    const QFileInfo fi(video);
+    const QByteArray key = (fi.absoluteFilePath().toLower() + "|" + QString::number(fi.lastModified().toSecsSinceEpoch())
+                            + "|" + QString::number(fi.size())).toUtf8();
+    return thumbDir + "/local-" + QString::fromLatin1(QCryptographicHash::hash(key, QCryptographicHash::Md5).toHex()) + ".jpg";
+}
+
+// One frame of each downloaded clip (15 s in, or the first one for short clips), made with ffmpeg
+// two at a time at low priority, then shown in the list
+void YouTubeSearchDialog::pumpLocalThumbs()
+{
+    const QString ffmpeg = YtTools::ffmpegPath();
+    if (ffmpeg.isEmpty())
+        return;
+    while (activeThumbs < 2 && !pendingLocalThumbs.isEmpty()) {
+        const QString video = pendingLocalThumbs.takeFirst();
+        const QString file = localThumbFile(video);
+        activeThumbs++;
+        auto run = std::make_shared<std::function<void(bool)>>();
+        *run = [this, ffmpeg, video, file, run](bool fromStart) {
+            QProcess *p = new QProcess(this);
+            setLowPriorityProcess(p);
+            connect(p, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
+                    [this, p, video, file, run, fromStart](int code, QProcess::ExitStatus) {
+                p->deleteLater();
+                if ((code != 0 || !QFile::exists(file)) && !fromStart) {
+                    (*run)(true);                   // shorter than 15 s: the first frame
+                    return;
+                }
+                *run = nullptr;                     // done with it (it held itself)
+                activeThumbs--;
+                QPixmap pm;
+                if (QFile::exists(file) && pm.load(file)) {
+                    pm = pm.scaled(160, 90, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                    for (int i = 0; i < list->count(); i++)
+                        if (list->item(i)->data(Qt::UserRole).toString() == "file:" + video)
+                            list->item(i)->setIcon(QIcon(pm));
+                }
+                pumpLocalThumbs();
+            });
+            p->start(ffmpeg, { "-v", "error", "-y", "-ss", fromStart ? "0" : "15", "-i", QDir::toNativeSeparators(video),
+                               "-frames:v", "1", "-vf", "scale=320:-2", "-q:v", "4", QDir::toNativeSeparators(file) });
+        };
+        (*run)(false);
+    }
 }
 
 void YouTubeSearchDialog::loadThumb(const QString &id)
