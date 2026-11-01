@@ -41,6 +41,7 @@ public:
     void setEnabled(bool on) { enabledFlag = on; target = on ? cutAmount : 0.0f; }
     void setStrength(float s) { cutAmount = s < 0.0f ? 0.0f : (s > 1.0f ? 1.0f : s); target = enabledFlag ? cutAmount : 0.0f; }
     bool enabled() const { return enabledFlag; }
+    static constexpr int latency() { return N; }   // the output is this many samples late
 
     // interleaved stereo float, processed in place (delayed by N samples)
     void process(float *s, size_t frames)

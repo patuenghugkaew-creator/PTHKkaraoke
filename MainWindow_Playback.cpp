@@ -197,6 +197,7 @@ void MainWindow::playVideo(const QString &path, bool isVideo)
 {
     videoActive = true;
     mediaIsAudio = !isVideo;
+    updateAiStemsBackground();
 
     lyrWidget->hide();
     if (secondLyr != nullptr)
@@ -452,6 +453,7 @@ void MainWindow::resume()
 
 void MainWindow::stop()
 {
+    cancelYtFetch();            // a YouTube song still downloading to play is not wanted any more
     if (!endingSong) {          // the fade-out that ends a song calls stop() itself
         fadeTimer->stop();
         fadeDone = nullptr;
@@ -515,6 +517,7 @@ void MainWindow::stop()
     taskbarButton->progress()->hide();
     taskbarButton->progress()->setValue(0);
     #endif
+    updateAiStemsBackground();
 }
 
 void MainWindow::playNext()

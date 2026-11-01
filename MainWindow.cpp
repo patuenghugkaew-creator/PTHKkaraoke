@@ -405,6 +405,20 @@ MainWindow::MainWindow(QWidget *parent) :
                             BASS_ChannelSeconds2Bytes(videoAudioTempo, p / 1000.0), BASS_POS_BYTE);
                     }
                 }
+                // vocal cut on: the AI separates from the play position on (see AiStems.h)
+                if (aiStems && videoStemMixer && ui->chMix->isMuteVoice() && !videoStemMixer->stems()->complete.load())
+                    aiStems->setFocus(videoAudioFile, p / 1000.0);
+                if (videoStemMixer && timingLogsOn()) {    // diagnostics: the stems follow the sound
+                    static QElapsedTimer every;
+                    if (!every.isValid() || every.elapsed() > 2000) {
+                        every.restart();
+                        BASS_CHANNELINFO ci;
+                        const double rate = BASS_ChannelGetInfo(videoAudioStream, &ci) && ci.freq ? ci.freq : 44100.0;
+                        uiLog(QString("video %1 ms, sound %2 ms, stems reader %3 ms, AI heard %4")
+                              .arg(p).arg(videoAudioPositionMs()).arg(qint64(videoStemMixer->position() * 1000.0 / rate))
+                              .arg(videoStemMixer->aiHeard() ? "yes" : "no"));
+                    }
+                }
             }
             if (!ui->sliderPosition->isSliderDown())
                 ui->sliderPosition->setValue(int(p));
@@ -589,6 +603,8 @@ MainWindow::MainWindow(QWidget *parent) :
         // SIB songs imported from the collection index have no lyrics preview / real tempo:
         // fill them in from the .sib files in the background (see SibBackfill.h).
         QTimer::singleShot(15000, this, [this]() { startSibBackfill(); });
+        // downloaded clips whose AI vocal separation was not finished: go on (see AiStems.h)
+        QTimer::singleShot(20000, this, [this]() { resumeAiStems(); });
         {   // automatic update check (settings: Update/Auto, Update/IntervalHours)
             QTimer *upd = new QTimer(this);
             upd->setInterval(30 * 60 * 1000);
@@ -927,8 +943,6 @@ MainWindow::MainWindow(QWidget *parent) :
 MainWindow::~MainWindow()
 {
     stop();
-    delete videoVocalRemover;
-    videoVocalRemover = nullptr;
 
 
     delete synthMix;

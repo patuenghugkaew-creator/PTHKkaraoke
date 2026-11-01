@@ -38,7 +38,7 @@ Notes:
 | `MainWindow_Import.cpp` | Adding songs: import, .zip/.rar archives (`unpackArchive`), drag & drop |
 | `MainWindow_Audio.cpp` | Volume, YouTube audio and AI vocal cut, fades, ending a song smoothly (`checkEndAfterLyrics`), transitions |
 | `MainWindow_Remote.cpp` | Song requests from phones, artist codes |
-| `MainWindow_YouTube.cpp` | YouTube search, queue, `playYouTube()` |
+| `MainWindow_YouTube.cpp` | YouTube search, queue, `playYouTube()`; with the AI cut, YouTube songs are downloaded and played from disk first (`playYouTubeDownloaded`, `youtube-local.json`) |
 | `MainWindow_Playback.cpp` | Video/MP3 playback, pause/resume/stop, next/previous, recording, score, DMX, window events |
 | `MainWindow_Keys.cpp` | Keyboard shortcuts (`keyPressEvent`), search (`searchWithThaiFallback`, fuzzy), event filter |
 | `MainWindow_Playlist.cpp` | Medley dialogs, playlist editing, on-screen frames |
@@ -57,7 +57,8 @@ Notes:
 | `MidiSynthesizer.*` | BASSMIDI synth, SoundFonts, mixer, effects, ASIO |
 | `RhythmStyleManager.*` | Drum bridge patterns from Yamaha style files (`Rhythms/`) |
 | `AiVocal.*` | AI vocal removal (onnxruntime + DirectML, MDX-Net). Compiled into PTHKCore |
-| `YtAudio.h`, `AiStems.h` | Live YouTube audio with vocal cut; stems for downloaded videos (`<video>.ai.wav`) |
+| `YtAudio.h` | Live YouTube audio with vocal cut (online play: AI with a delayed picture) |
+| `AiStems.h` | AI stems of video / MP3 files (`<file>.ai.wav`), made window by window from the play position, resumable (`.ai.part.wav` + `.ai.part.map`); `StemMixer` plays AI parts and the fast cut elsewhere |
 | `MidiFile.*`, `HNKFile.h` | MIDI and NCN/HNK file readers |
 
 ### Songs and search

@@ -114,7 +114,15 @@ public:
     void stopVideoAudioStream();
     void setVideoAudioVolume();
     void applyVideoVocalCut();
-    void enqueueAiStems(const QString &video);
+    void enqueueAiStems(const QString &video);  // AI separation of a song file, in the background
+    void ensureAiStems();                       // the separation thread (made on first use)
+    void updateAiStemsBackground();             // background separation only while no video / YouTube plays
+    void resumeAiStems();                       // at start: go on with downloaded clips not separated yet
+    bool playYouTubeDownloaded();               // AI cut + "download first": play a local copy of the YouTube song
+    void playLocalCopy(const QString &file);
+    void cancelYtFetch();
+    class QProcess *ytFetch = nullptr;          // downloading the YouTube song about to play
+    bool ytOnlineOnce = false;                  // the download failed: play this one online
     void startSibBackfill();
     // automatic update (GitHub Releases)
     void checkForUpdate(bool manual);
@@ -136,6 +144,7 @@ public:
     void changeVideoKey(int step);
     qint64 videoAudioPositionMs();
     static void CALLBACK videoVocalDspCallback(HDSP handle, DWORD channel, void *buffer, DWORD length, void *user);
+    static void CALLBACK videoSetPosSync(HSYNC handle, DWORD channel, DWORD data, void *user);
 
     // Karaoke recording (music + microphone, F12) and vocal score
     void showHelpDialog();     // F1: shortcut keys and how to use the player
@@ -287,10 +296,9 @@ private:
 
     DWORD videoAudioStream = 0;
     DWORD videoAudioTempo = 0;
-    VocalRemover *videoVocalRemover = nullptr;
-    bool videoStemMode = false;
-    bool videoStemMatrixSet = false;
-    int videoMixerChans = 2;                    // output channels of the main mixer (matrix size)                 // playing the AI stems file (music + vocals, 4 ch)
+    class StemMixer *videoStemMixer = nullptr;  // vocal cut of video / MP3 songs: AI parts + fast cut (AiStems.h)
+    QString videoAudioFile;                     // the file videoAudioStream plays
+    bool aiCutNoticeShown = false;              // "AI is preparing" shown for this song
     class AiStemMaker *aiStems = nullptr;       // background AI separation of video songs
     class SibBackfill *sibFill = nullptr;
     class AudioBandMeter *audioMeter = nullptr;  // audio songs' levels for the synth mixer       // fills SIB lyrics preview / tempo in the background

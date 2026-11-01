@@ -69,6 +69,9 @@ public:
         Ort::SessionOptions opts;
         if (threads > 0)
             opts.SetIntraOpNumThreads(threads);
+        // Idle worker threads sleep instead of spinning: spinning kept every core busy between
+        // windows and took CPU time from the video picture.
+        opts.AddConfigEntry("session.intra_op.allow_spinning", "0");
         if (gpu) {
             const OrtDmlApi *dml = nullptr;
             Ort::GetApi().GetExecutionProviderApi("DML", ORT_API_VERSION, reinterpret_cast<const void **>(&dml));
@@ -317,6 +320,48 @@ bool AiVocalEngine::separateTrack(const QString &modelsDir, const QString &key, 
         if (error) *error = QString::fromLocal8Bit(e.what());
     } catch (...) {
         if (error) *error = QString::fromUtf8("AI แยกเสียงไม่สำเร็จ");
+    }
+    return false;
+}
+
+// ---- window-by-window separation of a file (AiStems.h) --------------------------------------------
+
+static_assert(AiWindowSeparator::CHUNK == CHUNK && AiWindowSeparator::TRIM == TRIM && AiWindowSeparator::XF == XF,
+              "AiWindowSeparator constants must match the engine");
+
+AiWindowSeparator::AiWindowSeparator(const QString &modelsDir, const QString &key, bool gpu, int threads)
+{
+    const AiVocalEngine::ModelInfo *mi = AiVocalEngine::model(key);
+    const QString path = modelsDir + "/" + mi->file;
+    if (!QFile::exists(path)) {
+        err = QString::fromUtf8("ยังไม่มีไฟล์โมเดล AI (%1) เปิดใช้ AI ตัดเสียงร้องกับ YouTube สักครั้งเพื่อดาวน์โหลด").arg(mi->file);
+        return;
+    }
+    try {
+        mm = new MdxModel(path.toStdWString(), *mi, gpu, gpu ? 0 : threads);
+    } catch (const std::exception &e) {
+        err = QString::fromLocal8Bit(e.what());
+    } catch (...) {
+        err = QString::fromUtf8("โหลดโมเดล AI ไม่สำเร็จ");
+    }
+}
+
+AiWindowSeparator::~AiWindowSeparator()
+{
+    delete mm;
+}
+
+bool AiWindowSeparator::separate(const float *mix, float *inst)
+{
+    if (!mm)
+        return false;
+    try {
+        mm->instrumental(mix, inst);
+        return true;
+    } catch (const std::exception &e) {
+        err = QString::fromLocal8Bit(e.what());
+    } catch (...) {
+        err = QString::fromUtf8("AI แยกเสียงไม่สำเร็จ");
     }
     return false;
 }

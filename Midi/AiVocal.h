@@ -121,4 +121,29 @@ private:
     std::atomic<bool> isComputing{false};
 };
 
+// One model kept loaded, separating a file window by window (see AiStems.h). Window k covers
+// track samples [k*STEP - TRIM, k*STEP - TRIM + CHUNK); its output is used for [k*STEP, k*STEP + STEP),
+// and its next XF samples cross-fade into window k+1.
+class PTHKCORE_EXPORT AiWindowSeparator
+{
+public:
+    static const int CHUNK = 261120;            // samples per window (~5.9 s)
+    static const int TRIM = 3072;               // edge samples discarded on each side
+    static const int XF = 1024;                 // cross-fade between windows
+    static const int STEP = CHUNK - 2 * TRIM - XF;  // output samples per window (~5.76 s)
+
+    AiWindowSeparator(const QString &modelsDir, const QString &key, bool gpu, int threads);
+    ~AiWindowSeparator();
+    bool ok() const { return mm != nullptr; }
+    QString error() const { return err; }
+    // planar 2 x CHUNK at 44.1 kHz in, planar 2 x CHUNK instrumental out
+    bool separate(const float *mix, float *inst);
+
+private:
+    AiWindowSeparator(const AiWindowSeparator &) = delete;
+    AiWindowSeparator &operator=(const AiWindowSeparator &) = delete;
+    MdxModel *mm = nullptr;
+    QString err;
+};
+
 #endif // AIVOCAL_H

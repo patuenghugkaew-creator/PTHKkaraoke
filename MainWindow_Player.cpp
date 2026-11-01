@@ -615,48 +615,68 @@ void MainWindow::startSibBackfill()
     sibFill->start(db->database()->databaseName(), db->sibPath());
 }
 
-// AI vocal separation of a video song on disk, in the background (see AiStems.h).
-void MainWindow::enqueueAiStems(const QString &video)
+// The AI separation thread (see AiStems.h), made on first use, with the model chosen now.
+void MainWindow::ensureAiStems()
 {
-    if (video.isEmpty() || AiStemMaker::hasStems(video))
-        return;
     if (!aiStems) {
         aiStems = new AiStemMaker();
-        aiStems->onProgress = [this](const QString &v, int pct) {
-            static int lastShown = -100;
-            if (pct != 0 && pct != 100 && pct - lastShown < 10)
-                return;
-            lastShown = pct;
-            const QString name = QFileInfo(v).completeBaseName();
-            QMetaObject::invokeMethod(this, [this, name, pct]() {
-                ui->detail->setDetail(tr("AI แยกเสียงร้อง (ทำครั้งเดียว)"), tr("%1  %2%").arg(name).arg(pct));
-                ui->detail->show();
-                detailTimer->start(4000);
-            }, Qt::QueuedConnection);
-        };
-        aiStems->onDone = [this](const QString &v, bool ok, const QString &err) {
-            QMetaObject::invokeMethod(this, [this, v, ok, err]() {
-                const QString name = QFileInfo(v).completeBaseName();
+        aiStems->onDone = [this](const QString &f, bool ok, const QString &err) {
+            QMetaObject::invokeMethod(this, [this, f, ok, err]() {
+                const QString name = QFileInfo(f).completeBaseName();
+                uiLog(QString("AI stems %1: %2 %3").arg(ok ? "done" : "failed", name, err));
+                if (ok && QFileInfo(videoAudioFile) == QFileInfo(f))
+                    return;                     // the playing song: its AI sound is already heard
                 ui->detail->setDetail(ok ? tr("AI แยกเสียงร้องเสร็จ") : tr("AI แยกเสียงร้องไม่สำเร็จ"),
-                                      ok ? tr("%1 — ตัดเสียงร้องได้ทันทีเมื่อเล่นเพลงนี้").arg(name)
+                                      ok ? tr("%1 — ตัดเสียงร้องได้สะอาดทันทีเมื่อเล่นเพลงนี้").arg(name)
                                          : tr("%1 — %2").arg(name, err));
                 ui->detail->show();
                 detailTimer->start(6000);
             }, Qt::QueuedConnection);
         };
     }
-    const QString models = QFileInfo(YtTools::toolsDir()).absolutePath() + "/models";
-    const QString key = settings->value("YtAiModel", "hq").toString();
-    const bool gpu = settings->value("YtAiDevice", 0).toInt() == 2;   // CPU unless "GPU" was chosen
-    aiStems->enqueue(video, models, key, gpu);
-    ui->detail->setDetail(tr("AI แยกเสียงร้อง (ทำครั้งเดียว)"),
-                          tr("%1  เริ่ม...").arg(QFileInfo(video).completeBaseName()));
-    ui->detail->show();
-    detailTimer->start(4000);
+    aiStems->configure(QFileInfo(YtTools::toolsDir()).absolutePath() + "/models",
+                       settings->value("YtAiModel", "hq").toString(),
+                       settings->value("YtAiDevice", 0).toInt() == 2);     // CPU unless "GPU" was chosen
+    updateAiStemsBackground();
 }
 
-// Video audio routed through BASS main mixer: enables Vocal Cut (center cancellation DSP),
-// Pitch transpose, Master volume, and Equalizer on local / downloaded YouTube video songs.
+// AI separation of a song file in the background (e.g. a clip just downloaded)
+void MainWindow::enqueueAiStems(const QString &file)
+{
+    if (file.isEmpty() || AiStemMaker::hasStems(file))
+        return;
+    ensureAiStems();
+    aiStems->enqueue(file);
+}
+
+// Background separation takes CPU: only while no video / YouTube song plays (a song playing with
+// the vocal cut on is separated anyway, from its play position on).
+void MainWindow::updateAiStemsBackground()
+{
+    if (aiStems)
+        aiStems->setBackgroundAllowed(!videoActive && !ytActive);
+}
+
+// At start: downloaded clips whose separation is not finished go on in the background.
+void MainWindow::resumeAiStems()
+{
+    if (!db)
+        return;
+    const QString models = QFileInfo(YtTools::toolsDir()).absolutePath() + "/models";
+    const QString model = settings->value("YtAiModel", "hq").toString();
+    if (!QFile::exists(models + "/" + AiVocalEngine::model(model)->file))
+        return;                                 // the AI was never used: nothing to go on with
+    QString dir = QDir::fromNativeSeparators(db->videoPath());
+    while (dir.endsWith('/'))
+        dir.chop(1);
+    const QFileInfoList files = QDir(dir + "/YouTube").entryInfoList({ "*.mp4", "*.mkv", "*.webm", "*.mov" }, QDir::Files);
+    for (const QFileInfo &fi : files)
+        if (!AiStemMaker::hasStems(fi.absoluteFilePath()))
+            enqueueAiStems(fi.absoluteFilePath());
+}
+
+// Video / MP3 song sound through the BASS main mixer: vocal cut (AI parts + fast cut, see
+// StemMixer in AiStems.h), key change, master volume and equalizer.
 bool MainWindow::startVideoAudioStream(const QString &path)
 {
     stopVideoAudioStream();
@@ -667,24 +687,8 @@ bool MainWindow::startVideoAudioStream(const QString &path)
     if (!mixer)
         return false;
 
-    // AI stems prepared ahead of time (see AiStems.h): 4 channels music L/R + vocals L/R,
-    // used instead of the video's own sound; the vocal cut is a mixing matrix (instant).
-    videoStemMode = false;
-    if (AiStemMaker::hasStems(path)) {
-        const QString stem = AiStemMaker::stemPath(path);
-        videoAudioStream = BASS_StreamCreateFile(FALSE, stem.utf16(), 0, 0,
-                                                 BASS_STREAM_DECODE | BASS_SAMPLE_FLOAT | BASS_UNICODE);
-        BASS_CHANNELINFO si;
-        if (videoAudioStream && BASS_ChannelGetInfo(videoAudioStream, &si) && si.chans == 4) {
-            videoStemMode = true;
-        } else if (videoAudioStream) {
-            BASS_StreamFree(videoAudioStream);
-            videoAudioStream = 0;
-        }
-    }
-    if (!videoAudioStream)
-        videoAudioStream = BASS_StreamCreateFile(FALSE, path.utf16(), 0, 0,
-                                                 BASS_STREAM_DECODE | BASS_SAMPLE_FLOAT | BASS_UNICODE);
+    videoAudioStream = BASS_StreamCreateFile(FALSE, path.utf16(), 0, 0,
+                                             BASS_STREAM_DECODE | BASS_SAMPLE_FLOAT | BASS_UNICODE);
     if (!videoAudioStream)
         return false;
 
@@ -699,25 +703,23 @@ bool MainWindow::startVideoAudioStream(const QString &path)
     BASS_ChannelGetInfo(videoAudioStream, &info);
     const int freq = info.freq ? int(info.freq) : 44100;
 
-    delete videoVocalRemover;
-    videoVocalRemover = nullptr;
-    if (info.chans == 2 && !videoStemMode) {
-        videoVocalRemover = new VocalRemover(freq);
-        BASS_ChannelSetDSP(videoAudioTempo, &MainWindow::videoVocalDspCallback, this, 0);
+    if (info.chans == 2) {
+        // on the song's own sound (before the key change), which knows its position: the AI parts
+        // are read from the stems file at the same place
+        ensureAiStems();
+        videoStemMixer = new StemMixer(aiStems->track(path), freq);
+        BASS_ChannelSetDSP(videoAudioStream, &MainWindow::videoVocalDspCallback, this, 0);
+        BASS_ChannelSetSync(videoAudioStream, BASS_SYNC_SETPOS | BASS_SYNC_MIXTIME, 0, &MainWindow::videoSetPosSync, this);
     }
+    videoAudioFile = path;
+    aiCutNoticeShown = false;
 
-    {
-        BASS_CHANNELINFO mi;
-        videoMixerChans = BASS_ChannelGetInfo(mixer, &mi) ? int(mi.chans) : 2;
-    }
-    videoStemMatrixSet = false;
-    const DWORD addFlags = BASS_MIXER_CHAN_NORAMPIN | BASS_MIXER_CHAN_PAUSE
-                           | (videoStemMode ? BASS_MIXER_CHAN_MATRIX : 0);
-    if (!BASS_Mixer_StreamAddChannel(mixer, videoAudioTempo, addFlags)) {
+    if (!BASS_Mixer_StreamAddChannel(mixer, videoAudioTempo, BASS_MIXER_CHAN_NORAMPIN | BASS_MIXER_CHAN_PAUSE)) {
         BASS_StreamFree(videoAudioTempo);
         videoAudioTempo = videoAudioStream = 0;
-        delete videoVocalRemover;
-        videoVocalRemover = nullptr;
+        delete videoStemMixer;
+        videoStemMixer = nullptr;
+        videoAudioFile.clear();
         return false;
     }
 
@@ -733,59 +735,60 @@ void MainWindow::stopVideoAudioStream()
         const DWORD mixer = (synth && synth->isOpened()) ? synth->mainMixerHandle() : 0;
         if (mixer)
             BASS_Mixer_ChannelRemove(videoAudioTempo);
-        BASS_StreamFree(videoAudioTempo);
+        BASS_StreamFree(videoAudioTempo);       // frees videoAudioStream and its DSP too
         videoAudioTempo = 0;
         videoAudioStream = 0;
     }
-    delete videoVocalRemover;
-    videoVocalRemover = nullptr;
-    videoStemMode = false;
+    delete videoStemMixer;
+    videoStemMixer = nullptr;
+    videoAudioFile.clear();
+    if (aiStems)
+        aiStems->clearFocus();
 }
 
 void MainWindow::videoVocalDspCallback(HDSP, DWORD, void *buffer, DWORD length, void *user)
 {
     MainWindow *self = static_cast<MainWindow *>(user);
-    if (self && self->videoVocalRemover) {
-        self->videoVocalRemover->process(static_cast<float *>(buffer), length / (2 * sizeof(float)));
+    if (self && self->videoStemMixer)
+        self->videoStemMixer->process(static_cast<float *>(buffer), int(length / (2 * sizeof(float))));
+}
+
+// the song's sound was moved (seek / resync with the picture): the stems follow
+void MainWindow::videoSetPosSync(HSYNC, DWORD channel, DWORD, void *user)
+{
+    MainWindow *self = static_cast<MainWindow *>(user);
+    if (self && self->videoStemMixer) {
+        const QWORD pos = BASS_ChannelGetPosition(channel, BASS_POS_BYTE);
+        if (pos != QWORD(-1))
+            self->videoStemMixer->setPosition((long long)(pos / (2 * sizeof(float))));
     }
 }
 
 void MainWindow::applyVideoVocalCut()
 {
-    if (videoStemMode && videoAudioTempo) {
-        // music L/R = in 0/1, vocals L/R = in 2/3; same vocal / music levels as the YouTube AI
-        const bool cut = ui->chMix->isMuteVoice();
-        const float gV = cut ? settings->value("YtVocalLevel", 0).toInt() / 100.0f : 1.0f;
-        const float gM = cut ? settings->value("YtMusicLevel", 100).toInt() / 100.0f : 1.0f;
-        if (audioMeter)
-            audioMeter->setStemVocalGain(gV);
-        // The matrix must be [mixer outputs][4]: the main mixer has 8 outputs (multi-speaker
-        // routing), and a 2x4 matrix made BASS read past it (noise, then silence).
-        // Front L/R carry the song, like a stereo channel added without a matrix.
-        const int outs = qMax(2, videoMixerChans);
-        std::vector<float> mtx(size_t(outs) * 4, 0.0f);
-        mtx[0 * 4 + 0] = gM; mtx[0 * 4 + 2] = gV;     // out L = music L + vocals L
-        mtx[1 * 4 + 1] = gM; mtx[1 * 4 + 3] = gV;     // out R = music R + vocals R
-        if (videoStemMatrixSet)
-            BASS_Mixer_ChannelSetMatrixEx(videoAudioTempo, mtx.data(), 0.08f);   // short ramp: no click
-        else
-            BASS_Mixer_ChannelSetMatrix(videoAudioTempo, mtx.data());   // first time: at once, so no
-        videoStemMatrixSet = true;                                    // sound starts on other outputs
+    if (!videoStemMixer)
+        return;
+    const bool cut = ui->chMix->isMuteVoice();
+    videoStemMixer->setLevels(settings->value("YtVocalLevel", 0).toInt() / 100.0f,
+                              settings->value("YtMusicLevel", 100).toInt() / 100.0f);
+    videoStemMixer->setCut(cut);
+    if (audioMeter)
+        audioMeter->setStemVocalGain(1.0f);
+    ensureAiStems();                            // takes a newly chosen model for new work
+    if (!cut) {
+        aiStems->clearFocus();                  // no AI work for this song while the cut is off
         return;
     }
-    if (videoVocalRemover) {
-        const bool cut = ui->chMix->isMuteVoice();
-        videoVocalRemover->setEnabled(cut);
-        // The fast cut removes only the centre voice; its reverb stays. No AI stems yet (e.g. the
-        // separation after a download was stopped when the program closed): make them now, once.
-        if (cut && videoActive && playingSong.songType() == "VIDEO" && !playingSong.path().isEmpty()) {
-            static QString asked;
-            const QString video = db->videoPath() + playingSong.path();
-            if (video != asked && QFileInfo::exists(video)) {
-                asked = video;
-                enqueueAiStems(video);
-            }
-        }
+    if (videoStemMixer->stems()->complete.load())
+        return;
+    // the windows from here on are made first; the fast cut is heard until they are there
+    aiStems->setFocus(videoAudioFile, videoAudioPositionMs() / 1000.0);
+    if (!aiCutNoticeShown) {
+        aiCutNoticeShown = true;
+        ui->detail->setDetail(tr("AI กำลังแยกเสียงร้อง"),
+                              tr("อีกไม่กี่วินาทีเสียงจะสะอาดขึ้น ระหว่างนี้ใช้ตัดเสียงแบบเร็ว"));
+        ui->detail->show();
+        detailTimer->start(5000);
     }
 }
 

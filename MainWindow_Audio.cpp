@@ -180,6 +180,7 @@ void MainWindow::showYtVocalDialog()
         settings->setValue("YtAiPreStart", preStart->isChecked());
         showLevels();
         applyYtVocalCut();
+        applyVideoVocalCut();           // the same levels / model for video songs
     };
     for (QRadioButton *r : { rAi, rFast })
         connect(r, &QRadioButton::toggled, &dlg, apply);
@@ -271,6 +272,10 @@ void MainWindow::showYtVocalDialog()
     form->addRow(tr("ดนตรี:"), hm);
     form->addRow(delayPic);
     form->addRow(preStart);
+    QCheckBox *dlFirst = new QCheckBox(tr("โหมด AI: โหลดเพลง YouTube ลงเครื่องก่อนเล่น (ภาพไม่ต้องรอ ไม่กระตุก เพลงที่เคยโหลดแล้วเล่นทันที)"), &dlg);
+    dlFirst->setChecked(settings->value("YtDownloadFirst", true).toBool());
+    connect(dlFirst, &QCheckBox::toggled, &dlg, [this](bool on) { settings->setValue("YtDownloadFirst", on); });
+    form->addRow(dlFirst);
 
     QDialogButtonBox *bb = new QDialogButtonBox(QDialogButtonBox::Close, &dlg);
     connect(bb, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
