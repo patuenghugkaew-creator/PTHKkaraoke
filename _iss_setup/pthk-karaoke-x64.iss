@@ -3,7 +3,7 @@
 ; Expects the deployed program in D:\REA\PTHK-Build\deploy (see D:\REA\build-pthk.ps1).
 
 #ifndef AppVersion
-  #define AppVersion "1.1.0"
+  #define AppVersion "1.1.2"
 #endif
 #define MyAppName "PTHK Karaoke"
 #define MyAppPublisher "PTHK"
