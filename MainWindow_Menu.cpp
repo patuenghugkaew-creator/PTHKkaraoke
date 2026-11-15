@@ -1,5 +1,6 @@
 // MainWindow: Right-click menu, config file save/load, settings & effect dialogs, language
 #include "MainWindow_p.h"
+#include "Widgets/EdgeQuickPanel.h"
 #include <QTabWidget>
 
 void MainWindow::showContextMenu(const QPoint &pos)
@@ -750,6 +751,16 @@ void MainWindow::showContextMenuAt(const QPoint &globalPos)
             showSettingsDialog();
         });
         m->addSeparator();
+        {   // quick buttons at the right edge
+            QAction *edge = m->addAction(tr("ปุ่มด่วนขอบขวา (เลื่อนเมาส์ชิดขอบขวาของจอ)"));
+            edge->setCheckable(true);
+            edge->setChecked(settings->value("QuickEdge/On", true).toBool());
+            connect(edge, &QAction::triggered, this, [this](bool on) {
+                settings->setValue("QuickEdge/On", on);
+                if (edgePanel)
+                    edgePanel->setEnabledEdge(on);
+            });
+        }
         {   // clock and beat box (top right): shown or not
             QAction *clock = m->addAction(tr("แสดงนาฬิกา"));
             clock->setCheckable(true);

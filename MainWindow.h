@@ -5,6 +5,7 @@ class VocalRemover;
 
 #include <QMainWindow>
 #include <QTimer>
+#include <QHash>
 #include <QKeyEvent>
 #include <QLocale>
 #include <QSettings>
@@ -500,6 +501,11 @@ private:
     void openPortableDrive();                    // "สร้างไดรฟ์พกพา" (Dialogs/PortableDriveDialog.h)
     void openEventSounds();                      // "เสียงพิธีการ / เอฟเฟกต์"
     void showEventSoundsQuickMenu(const QPoint &globalPos); // quick popup menu on the bar's "เอฟเฟกต์" button
+    void setupEdgePanel();                      // quick buttons at the right edge (Widgets/EdgeQuickPanel.h)
+    QString findEventSound(const QString &words);   // first event sound whose name holds one of the words ("a|b")
+    bool playEventSoundWords(const QString &words, const QString &title); // plays / stops it; false = none found
+    class EdgeQuickPanel *edgePanel = nullptr;
+    QHash<QString, QString> eventSoundCache;
     void showFirstRunGuide();                    // no songs yet: where to start
     int settingsStartTab = -1;                   // the next settings dialog opens on this tab
     bool simpleMenu() const;                     // right-click menu without the sound engineer's tools

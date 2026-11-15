@@ -1,5 +1,6 @@
 // MainWindow: Volume, YouTube audio / AI vocal cut, fades, song endings and transitions
 #include "MainWindow_p.h"
+#include "Widgets/EdgeQuickPanel.h"
 
 int MainWindow::effectiveVolume() const
 {
@@ -639,6 +640,146 @@ void MainWindow::openEventSounds()
     dlg.exec();
     settings->setValue("EventSounds/Last", dlg.currentCategoryName());
     setFocus();
+}
+
+QString MainWindow::findEventSound(const QString &words)
+{
+    ensureSoundPads();
+    if (!soundPads)
+        return QString();
+    const QString cached = eventSoundCache.value(words);
+    if (!cached.isEmpty() && QFileInfo::exists(cached))
+        return cached;
+    const QStringList ws = words.toLower().split('|', QString::SkipEmptyParts);
+    for (const QString &w : ws)             // the words in order: the first is the best
+        for (const EventSoundsDialog::Cat &c : EventSoundsDialog::allCategories(soundPads))
+            for (const QString &f : c.files)
+                if (SoundPads::fileLabel(f).toLower().contains(w)) {
+                    eventSoundCache.insert(words, f);
+                    return f;
+                }
+    return QString();
+}
+
+bool MainWindow::playEventSoundWords(const QString &words, const QString &title)
+{
+    const QString f = findEventSound(words);
+    if (f.isEmpty())
+        return false;
+    soundPads->preview(f);                  // pressed again while it plays = stop
+    const bool on = !soundPads->previewPlaying().isEmpty();
+    ui->detail->setDetail(title, on ? SoundPads::fileLabel(f) : tr("หยุด"));
+    ui->detail->show();
+    detailTimer->start(2000);
+    return true;
+}
+
+// quick buttons at the right edge: mouse held at the edge, or a click / tap on the thin handle
+void MainWindow::setupEdgePanel()
+{
+    if (edgePanel)
+        return;
+    edgePanel = new EdgeQuickPanel(this);
+    using Item = EdgeQuickPanel::Item;
+    QVector<Item> items;
+    auto soundItem = [this](const QString &label, BarIcons::Fn icon, const QColor &col,
+                            const QString &words) {
+        Item it;
+        it.label = label;
+        it.icon = icon;
+        it.color = col;
+        it.run = [this, words, label]() {
+            if (!playEventSoundWords(words, label))
+                QTimer::singleShot(0, this, [this]() { openEventSounds(); });   // none on this PC: the window
+        };
+        it.refresh = [this, words](Item &x) {
+            const QString f = soundPads ? eventSoundCache.value(words) : QString();
+            x.lit = !f.isEmpty() && soundPads->previewPlaying() == f;
+        };
+        return it;
+    };
+    items << soundItem(tr("ปรบมือ"), EdgeIcons::clap, QColor(254, 202, 87), QString::fromUtf8("ปรบมือ"));
+    items << soundItem(tr("เชียร์"), EdgeIcons::cheer, QColor(255, 126, 95),
+                       QString::fromUtf8("เชียร์|โห่|กรี๊ด|นกหวีด"));
+    {
+        Item it;
+        it.label = tr("พิธีการ");
+        it.icon = BarIcons::fx;
+        it.color = BarIcons::colorOf("fx");
+        it.run = [this]() { QTimer::singleShot(0, this, [this]() { openEventSounds(); }); };
+        items << it;
+    }
+    {
+        Item up;
+        up.label = tr("คีย์ +");
+        up.icon = EdgeIcons::keyStep(true);
+        up.color = BarIcons::colorOf("note");
+        up.run = [this]() { changeSongKey(1); updateBarStatus(); };
+        items << up;
+        Item down = up;
+        down.label = tr("คีย์ -");
+        down.icon = EdgeIcons::keyStep(false);
+        down.run = [this]() { changeSongKey(-1); updateBarStatus(); };
+        items << down;
+    }
+    {
+        Item it;
+        it.color = BarIcons::colorOf("mic");
+        it.run = [this]() { if (btnMuteVocal) btnMuteVocal->toggle(); };
+        it.refresh = [this](Item &x) {
+            const bool cut = btnMuteVocal && btnMuteVocal->isChecked();
+            x.label = cut ? tr("เปิดร้อง") : tr("ตัดร้อง");
+            x.icon = cut ? BarIcons::micOff : BarIcons::mic;
+            x.lit = cut;
+        };
+        it.refresh(it);
+        items << it;
+    }
+    {
+        Item it;
+        it.run = [this]() {
+            if (isShopStrictLocked()) { notifyShopStrictLocked(tr("เล่น / พักเพลง")); return; }
+            if (songIsRunning())
+                pause();
+            else
+                on_btnPlay_clicked();
+            updateBarStatus();
+        };
+        it.refresh = [this](Item &x) {
+            const bool run = songIsRunning();
+            x.label = run ? tr("พัก") : tr("เล่น");
+            x.icon = run ? BarIcons::pause : BarIcons::play;
+            x.color = BarIcons::colorOf(run ? "pause" : "play");
+        };
+        it.refresh(it);
+        items << it;
+    }
+    {
+        Item it;
+        it.label = tr("ข้าม");
+        it.icon = BarIcons::next;
+        it.color = BarIcons::colorOf("next");
+        it.run = [this]() {
+            if (isShopStrictLocked()) { notifyShopStrictLocked(tr("ข้ามไปเพลงถัดไป")); return; }
+            playNext();
+        };
+        items << it;
+    }
+    edgePanel->setItems(items);
+    edgePanel->wireHandleMenu();
+    edgePanel->onContextMenu = [this](const QPoint &g) {
+        QMenu m(this);
+        QAction *off = m.addAction(tr("ปิดปุ่มด่วนขอบขวา"));
+        connect(off, &QAction::triggered, this, [this]() {
+            settings->setValue("QuickEdge/On", false);
+            edgePanel->setEnabledEdge(false);
+            ui->detail->setDetail(tr("ปุ่มด่วนขอบขวา"), tr("ปิดแล้ว (เปิดได้ที่ เมนู › จอและเนื้อร้อง)"));
+            ui->detail->show();
+            detailTimer->start(3500);
+        });
+        m.exec(g);
+    };
+    edgePanel->setEnabledEdge(settings->value("QuickEdge/On", true).toBool());
 }
 
 void MainWindow::showEventSoundsQuickMenu(const QPoint &globalPos)

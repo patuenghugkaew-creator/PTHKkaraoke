@@ -1123,6 +1123,7 @@ MainWindow::MainWindow(QWidget *parent) :
     }
 
 
+    QTimer::singleShot(0, this, [this]() { setupEdgePanel(); });
     uiLog("start-up: main window: done");
     // Menu
     connect(this, SIGNAL(customContextMenuRequested(const QPoint&)), this, SLOT(showContextMenu(const QPoint&)));
