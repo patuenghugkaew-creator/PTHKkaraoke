@@ -211,43 +211,8 @@ QVector<RhythmBridgeEvent> MidiSequencer::softStopEvents(int fromIndex, int at)
     return ev;
 }
 
-void MidiSequencer::toggleDrumHold()
+QVector<RhythmBridgeEvent> MidiSequencer::grooveOrPlain()
 {
-    if (_holdActive.load()) {
-        _releaseRequested.store(true);
-        _waitCondition.wakeAll();
-    } else if (_holdRequested.load()) {
-        _holdRequested.store(false);        // pressed twice before it stopped: never mind
-        emit drumHoldChanged(0);
-    } else if (_playing) {
-        _holdTick = -1;
-        _releaseRequested.store(false);
-        _holdRequested.store(true);
-    }
-}
-
-// Runs in the play thread when the song reaches _holdTick (a bar line). Plays the song's main
-// drum beat bar after bar until released, then one fill bar, and returns at the moment the song
-// should go on (beat 1 after the fill), so the caller resumes at _holdTick right on time.
-void MidiSequencer::runDrumHold(int fromIndex)
-{
-    const double holdAt = clockMs();
-    _holdActive.store(true);
-    _holdRequested.store(false);
-    emit drumHoldChanged(2);
-
-    auto sendCC = [this](int ch, int cc, int val) {
-        MidiEvent e;
-        e.setEventType(MidiEventType::Controller);
-        e.setChannel(ch);
-        e.setData1(cc);
-        e.setData2(val);
-        emit playingEvent(e);
-    };
-    Q_UNUSED(sendCC);
-    // the band lands on beat 1, rings, fades out (no chop); the drums carry on
-    const QVector<RhythmBridgeEvent> landing = softStopEvents(fromIndex, _holdTick);
-
     QVector<RhythmBridgeEvent> groove = extractOutgoingGroove();
     if (groove.isEmpty()) {                 // no steady beat in the song: a plain one
         for (int b = 0; b < 4; ++b) {
@@ -260,7 +225,11 @@ void MidiSequencer::runDrumHold(int fromIndex)
             groove.append({ b + 0.7, MidiEventType::NoteOff, 9, 42, 0 });
         }
     }
-    // the fill bar: the beat on 1-2, snare 16ths on 3, toms high -> low on 4
+    return groove;
+}
+
+QVector<RhythmBridgeEvent> MidiSequencer::drumFillBar(const QVector<RhythmBridgeEvent> &groove)
+{
     QVector<RhythmBridgeEvent> fill;
     for (const RhythmBridgeEvent &g : groove)
         if (g.beatOffset < 2.0)
@@ -273,54 +242,126 @@ void MidiSequencer::runDrumHold(int fromIndex)
     hit(2.0, 38, 92); hit(2.25, 38, 96); hit(2.5, 38, 102); hit(2.75, 38, 108);
     hit(3.0, 36, 110);
     hit(3.0, 50, 112); hit(3.25, 48, 114); hit(3.5, 45, 118); hit(3.75, 43, 122);
+    std::stable_sort(fill.begin(), fill.end(), [](const RhythmBridgeEvent &a, const RhythmBridgeEvent &b) {
+        return a.beatOffset < b.beatOffset;
+    });
+    return fill;
+}
+
+void MidiSequencer::toggleDrumHold()
+{
+    if (_holdActive.load()) {
+        _releaseRequested.store(true);
+        _waitCondition.wakeAll();
+    } else if (_holdRequested.load()) {
+        _holdRequested.store(false);        // pressed twice before it stopped: never mind
+        emit drumHoldChanged(0);
+    } else if (_playing) {
+        _holdTick = -1;
+        _holdPressMs = clockMs();
+        _releaseRequested.store(false);
+        _holdRequested.store(true);
+        _waitCondition.wakeAll();       // the play thread may be waiting for a note seconds away
+    }
+}
+
+// Runs in the play thread at _holdTick (where the press was, to a 1/32 note). The band lands and
+// fades; the song's main drum beat goes on in the song's own beat grid until released. On release a
+// short fill starts at once and the song comes back with a crash on a beat 1-2 beats later (the old
+// way waited for the bar's end and played a whole fill bar: 3-8 s in a slow song). The song goes on
+// from the next beat after _holdTick (_skipNotesBefore), so its notes land on the beat with the crash.
+void MidiSequencer::runDrumHold(int fromIndex)
+{
+    const double holdAt = clockMs();
+    _holdActive.store(true);
+    _holdRequested.store(false);
+    emit drumHoldChanged(2);
+
+    // the band lands where it was, rings, fades out (no chop); the drums carry on
+    const QVector<RhythmBridgeEvent> landing = softStopEvents(fromIndex, _holdTick);
+
+    QVector<RhythmBridgeEvent> groove = grooveOrPlain();
+    QVector<RhythmBridgeEvent> fill = drumFillBar(groove);
     auto byTime = [](const RhythmBridgeEvent &a, const RhythmBridgeEvent &b) { return a.beatOffset < b.beatOffset; };
     std::stable_sort(groove.begin(), groove.end(), byTime);
     std::stable_sort(fill.begin(), fill.end(), byTime);
-    QVector<RhythmBridgeEvent> firstBar = groove + landing;     // beat 0..2: the band's tail
-    std::stable_sort(firstBar.begin(), firstBar.end(), byTime);
 
+    const double b0 = _holdBeat;
+    timingLog(QString("drum hold: band stops %1 ms after the press, %2 beats into the bar (%3 BPM)")
+                  .arg(holdAt - _holdPressMs, 0, 'f', 0).arg(b0, 0, 'f', 2).arg(currentBpm()));
     const double beatMs = 60000.0 / qMax(30, currentBpm());
     const double barMs = 4.0 * beatMs;
-    int bar = 0;
-    int fillBar = -1;
-    while (_playing) {
-        const bool isFill = (bar == fillBar);
-        const QVector<RhythmBridgeEvent> &pat = isFill ? fill : (bar == 0 ? firstBar : groove);
-        const double barStart = holdAt + bar * barMs;
-        int k = 0;
-        while (_playing) {
-            const double now = clockMs();
-            if (fillBar < 0 && _releaseRequested.load()) {
-                fillBar = bar + 1;          // the next bar is the fill
-                emit drumHoldChanged(3);
-            }
-            while (k < pat.size() && barStart + pat[k].beatOffset * beatMs <= now) {
-                MidiEvent e;
-                e.setEventType(pat[k].eventType);
-                e.setChannel(pat[k].channel);
-                e.setData1(pat[k].data1);
-                e.setData2(pat[k].data2);
-                emit playingEvent(e);
-                ++k;
-            }
-            if (now >= barStart + barMs)
-                break;
-            double next = barStart + barMs;
-            if (k < pat.size())
-                next = qMin(next, barStart + pat[k].beatOffset * beatMs);
-            const double sleepMs = next - clockMs();
-            if (sleepMs > 1.5) {
-                _mutex.lock();
-                _waitCondition.wait(&_mutex, qBound(1, int(sleepMs - 0.5), 20));
-                _mutex.unlock();
-            }
+    const double t0 = holdAt - b0 * beatMs;         // beat 1 of the held bar (the song's grid)
+    auto send = [this](const RhythmBridgeEvent &r) {
+        MidiEvent e;
+        e.setEventType(r.eventType);
+        e.setChannel(r.channel);
+        e.setData1(r.data1);
+        e.setData2(r.data2);
+        emit playingEvent(e);
+    };
+
+    // groove events one after another in time: bar gb, event gk (the first bar from the hold on)
+    int gb = 0, gk = 0;
+    while (gk < groove.size() && groove[gk].beatOffset < b0 - 0.001)
+        ++gk;
+    auto grooveTime = [&]() { return t0 + gb * barMs + groove[gk].beatOffset * beatMs; };
+    auto grooveNext = [&]() {
+        if (++gk >= groove.size()) {
+            gk = 0;
+            ++gb;
         }
-        if (isFill)
+    };
+    int li = 0;                                     // next landing event
+    double releasedAt = -1.0, backAt = -1.0;        // the press, the moment the song comes back
+    QVector<QPair<double, RhythmBridgeEvent>> fillAt;
+    int fi = 0;
+
+    while (_playing && !groove.isEmpty()) {
+        const double now = clockMs();
+        if (releasedAt < 0 && _releaseRequested.load()) {
+            releasedAt = now;
+            // back on the first beat of the grid at least ~1 beat away: 1-2 beats of fill
+            const double n = std::ceil((now + 0.9 * beatMs - t0) / beatMs - 0.001);
+            backAt = t0 + n * beatMs;
+            // the last two beats of the fill bar, ending at backAt; only what is still ahead
+            for (const RhythmBridgeEvent &r : fill) {
+                if (r.beatOffset < 2.0 - 0.001)
+                    continue;
+                const double at = backAt - (4.0 - r.beatOffset) * beatMs;
+                if (at >= now - 1.0)
+                    fillAt.append({ at, r });
+            }
+            emit drumHoldChanged(3);
+        }
+        while (li < landing.size() && holdAt + landing[li].beatOffset * beatMs <= now)
+            send(landing[li++]);
+        // the groove stops where the fill starts (or at the press, when the fill starts later)
+        const double grooveEnd = fillAt.isEmpty() ? backAt : qMin(backAt, fillAt.first().first);
+        while (grooveTime() <= now && (backAt < 0 || grooveTime() < grooveEnd - 1.0)) {
+            send(groove[gk]);
+            grooveNext();
+        }
+        while (fi < fillAt.size() && fillAt[fi].first <= now)
+            send(fillAt[fi++].second);
+        if (backAt >= 0 && now >= backAt)
             break;
-        ++bar;
+        double next = grooveTime();
+        if (li < landing.size())
+            next = qMin(next, holdAt + landing[li].beatOffset * beatMs);
+        if (fi < fillAt.size())
+            next = qMin(next, fillAt[fi].first);
+        if (backAt >= 0)
+            next = qMin(next, backAt);
+        const double sleepMs = next - clockMs();
+        if (sleepMs > 1.5) {
+            _mutex.lock();
+            _waitCondition.wait(&_mutex, qBound(1, int(sleepMs - 0.5), 20));
+            _mutex.unlock();
+        }
     }
 
-    // beat 1 of the song again: crash + kick on top of the song's own first notes
+    // back in: crash + kick, with the song's own notes of that beat
     if (_playing) {
         MidiEvent crash;
         crash.setEventType(MidiEventType::NoteOn);
@@ -332,14 +373,24 @@ void MidiSequencer::runDrumHold(int fromIndex)
         crash.setData2(118);
         emit playingEvent(crash);
     }
+    while (_playing && li < landing.size())     // (only when released at once: the tail's end)
+        send(landing[li++]);
 
-    // carry on at _holdTick exactly one fill bar later than the last groove bar
-    const double resumeAt = holdAt + (bar + 1) * barMs;
+    // the song goes on from the next beat after the hold point, at backAt
+    const int res = qMax(1, _midi->resorution());
+    const int bs = int(barStartTick(barAtTick(uint32_t(_holdTick))));
+    int resumeTick = bs + ((_holdTick - bs + res - 1) / res) * res;
+    if (resumeTick < _holdTick)
+        resumeTick = _holdTick;
+    if (releasedAt >= 0)
+        timingLog(QString("drum hold: released, the song is back %1 ms after the press (%2 beats)")
+                      .arg(backAt - releasedAt, 0, 'f', 0).arg((backAt - releasedAt) / beatMs, 0, 'f', 1));
     _mutex.lock();
     _eTimer->restart();
-    _startPlayTime = long(_midi->timeFromTick(uint32_t(_holdTick), _midiSpeed) * 1000)
-                     - long(qMax(0.0, clockMs() - resumeAt) + 0.5);
-    _positionTick = _holdTick;
+    _startPlayTime = long(_midi->timeFromTick(uint32_t(resumeTick), _midiSpeed) * 1000)
+                     - long(qMax(0.0, clockMs() - (backAt >= 0 ? backAt : clockMs())) + 0.5);
+    _positionTick = resumeTick;
+    _skipNotesBefore = resumeTick;
     _mutex.unlock();
     _releaseRequested.store(false);
     _holdActive.store(false);
@@ -544,11 +595,14 @@ bool MidiSequencer::load(const QString &file, bool seekFileChunkID)
 
     if (!_midi->read(file, seekFileChunkID))
         return false;
+    if (_midi->events().isEmpty())
+        return false;           // a broken / empty file: nothing to play (and no last event)
 
     _midiSpeed = 0;
     _midiSpeedTemp = 0;
     _midiChangeBpmSpeed = false;
     _endTick = _midi->events().last()->tick();
+    _endingFill.store(false);
 
     _finished = false;
 
@@ -1102,6 +1156,7 @@ void MidiSequencer::run()
     _playing = true;
     _stopped = false;
     _finished = false;
+    _skipNotesBefore = -1;      // (a hold's skip belongs to that play only; a seek starts here again)
     _idealEndClockMs = -1.0;
     _fillEndClockMs = -1.0;
     _endAnnounced = false;
@@ -1340,11 +1395,34 @@ void MidiSequencer::run()
         if (!_playing)
             break;
 
-        // Drum hold: stop at the next real bar line, wait for that moment, then hold.
+        if (_skipNotesBefore >= 0) {
+            MidiEvent *se = _midi->events()[i];
+            if (int(se->tick()) < _skipNotesBefore) {
+                if (se->eventType() != MidiEventType::Meta
+                        && !(se->eventType() == MidiEventType::NoteOn && se->data2() > 0))
+                    emit playingEvent(*se);
+                _playedIndex = i;
+                continue;
+            }
+            _skipNotesBefore = -1;
+        }
+
+        // Drum hold: the band stops now - at the next 1/32 note from where the song is this moment
+        // (by the clock, not the last note played). Waiting for the next beat felt slow (0.2-0.8 s).
         if (_holdRequested.load() && !_holdActive.load()) {
             if (_holdTick < 0) {
-                const int curBar = barAtTick(uint32_t(qMax(0, _positionTick)));
-                _holdTick = int(barStartTick(curBar + 1));
+                const long nowMs = long(_startPlayTime + _eTimer->elapsed());
+                const int pos = qMax(qMax(0, _positionTick), int(_midi->tickFromTimeMs(nowMs, _midiSpeed)));
+                const int res = qMax(1, _midi->resorution());
+                const int step = qMax(1, res / 8);
+                const int curBar = barAtTick(uint32_t(pos));
+                const int bs = int(barStartTick(curBar)), nextBar = int(barStartTick(curBar + 1));
+                int tick = pos <= bs ? bs : bs + ((pos - bs + step - 1) / step) * step;
+                if (tick >= nextBar || tick < bs)
+                    tick = nextBar;
+                const int barOf = tick >= nextBar ? nextBar : bs;
+                _holdTick = tick;
+                _holdBeat = qBound(0.0, double(tick - barOf) / res, 3.99);
                 emit drumHoldChanged(1);
             }
             if (int(_midi->events()[i]->tick()) >= _holdTick) {
@@ -1417,16 +1495,29 @@ void MidiSequencer::run()
                     emit playingEvent(notesOff);
                 }
             };
-            if (!(_playing && _endHitHold))
+            const bool endingFill = _endingFill.load();
+            if (!(_playing && (_endHitHold || endingFill)))
                 releaseMelodic();       // no drum bridge: the next song starts right now
 
             // Band-style ending: the song still hits its chord on beat 1 (together with
             // the bridge's crash), lets it ring for one beat, then lets go - instead of
             // chopping everything off. Only when a drum bridge follows (with no bridge
             // the next song's notes start right here).
-            if (_playing && _endHitHold) {
+            // With the ending fill ("ลูกจบ"), the drums play a fill bar over that, then
+            // crash + kick on the next beat 1, and the song ends a beat later.
+            if (_playing && (_endHitHold || endingFill)) {
                 // land on beat 1, ring 1 beat, fade 1 beat, then silence (no chop)
-                const QVector<RhythmBridgeEvent> tail = softStopEvents(i, int(_endEvent->tick()));
+                QVector<RhythmBridgeEvent> tail = softStopEvents(i, int(_endEvent->tick()));
+                if (endingFill) {
+                    tail += drumFillBar(grooveOrPlain());
+                    tail.append({ 4.0, MidiEventType::NoteOn, 9, 49, 120 });   // crash
+                    tail.append({ 4.0, MidiEventType::NoteOn, 9, 36, 118 });   // kick
+                    tail.append({ 4.2, MidiEventType::NoteOff, 9, 36, 0 });
+                    tail.append({ 5.0, MidiEventType::NoteOff, 9, 49, 0 });    // let the crash ring a beat
+                    std::stable_sort(tail.begin(), tail.end(), [](const RhythmBridgeEvent &a, const RhythmBridgeEvent &b) {
+                        return a.beatOffset < b.beatOffset;
+                    });
+                }
                 const double beatMs = 60000.0 / qMax(30, currentBpm());
                 const double t0 = clockMs();
                 int k = 0, hitNotes = 0;
@@ -1450,7 +1541,8 @@ void MidiSequencer::run()
                 }
                 if (!_playing)
                     releaseMelodic();
-                medleyLog(QString("ending: %1 notes land on beat 1, ring 1 beat, fade 1 beat").arg(hitNotes));
+                medleyLog(QString("ending: %1 notes land on beat 1, ring 1 beat, fade 1 beat%2")
+                          .arg(hitNotes).arg(endingFill ? ", drum fill bar, crash" : ""));
             }
             seqEnded = true;
             break;
@@ -1486,6 +1578,13 @@ void MidiSequencer::run()
 
             if (waitTime > 2) {
                 _waitCondition.wait(&_mutex, waitTime - 1);
+                // woken by a drum hold press: this note is still ahead; run the hold check now
+                if (_playing && _holdRequested.load() && !_holdActive.load()
+                        && (_holdTick < 0 || int(tick) >= _holdTick)) {
+                    _mutex.unlock();
+                    --i;
+                    continue;
+                }
                 while ((_midi->timeFromTick(tick, _midiSpeed) * 1000) - _startPlayTime - _eTimer->elapsed() > 0) {
                     if (!_playing) break;
                 }

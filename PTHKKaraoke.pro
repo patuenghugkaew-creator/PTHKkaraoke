@@ -42,7 +42,7 @@ SOURCES += main.cpp\
     MainWindow_Playlist.cpp \
     MainWindow_Menu.cpp \
     MainWindow_Update.cpp \
-    MainWindow_Player.cpp \
+    MainWindow_Player.cpp     MainWindow_Midi.cpp \
     MedleyLoader.cpp \
     SettingsDialog.cpp \
     SongDatabase.cpp \
@@ -133,6 +133,18 @@ HEADERS  += Widgets/PanKnob.h \
     Dialogs/YouTube.h \
     Midi/AiVocal.h \
     Midi/YtAudio.h \
+    Midi/SongLevel.h \
+    LyricsIndex.h \
+    Midi/SoundPads.h \
+    Dialogs/SoundPadsDialog.h \
+    Dialogs/SoundFxManager.h \
+    Dialogs/TickerDialog.h \
+    Dialogs/ShopModeDialog.h \
+    Dialogs/MultiSoundfontDialog.h     Dialogs/MidiMapperDialog.h \
+    SongFormats.h \
+    IdleSmart.h \
+    Widgets/TickerBar.h \
+    Widgets/SearchPanel.h \
     Midi/VocalRemover.h \
     Widgets/BarButton.h \
     Dmx/DmxLights.h \

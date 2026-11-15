@@ -13,6 +13,8 @@
 #include <QPointer>
 #include <QVector>
 #include <QStringList>
+#include <QProcess>
+#include <functional>
 
 class QLineEdit;
 class QCheckBox;
@@ -27,6 +29,19 @@ QString toolsDir();
 QString ytdlpPath();        // empty when not found
 QString ffmpegPath();       // empty when not found
 bool isYouTubeUrl(const QString &url);
+// yt-dlp arguments for a video file Windows plays (H.264 + AAC in .mp4) with YouTube's best sound:
+// the Opus track (full range to 20 kHz) made into AAC 256k. YouTube's own AAC (128k) cuts everything
+// above 16 kHz, which makes cymbals and voices dull. Falls back to the AAC track when there is no Opus.
+QStringList formatArgs(int maxHeight);
+// After yt-dlp (formatArgs merges into .mkv in a second, Opus sound kept): the sound to AAC 256k in an
+// .mp4 Windows plays, by our own ffmpeg so the progress is known (0..100 to onProgress; the merge
+// inside yt-dlp gave none: the cut button sat at 99 % for up to a minute on a long clip). An .mp4
+// in already is returned as it is. onDone gets the .mp4 ("" when it failed); the .mkv is removed.
+// The process is returned (kill it to cancel), nullptr when nothing had to be done.
+QProcess *convertForWindows(QObject *ctx, const QString &in, const std::function<void(int)> &onProgress,
+                            const std::function<void(const QString &)> &onDone);
+// the .mp4 convertForWindows makes from in
+QString convertedName(const QString &in);
 }
 
 class YouTubeDownloadDialog : public QDialog
@@ -188,6 +203,7 @@ private:
     bool paused = false;
     bool active = false;
     bool started = false;
+    QString currentId;          // the clip asked for: what the player reports about another one is ignored
     qint64 duration = 0;
     int waitedMs = 0;
     qint64 lastPos = -1;        // stuck-at-the-end detection (see poll)

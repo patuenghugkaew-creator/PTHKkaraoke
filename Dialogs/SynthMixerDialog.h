@@ -23,8 +23,14 @@ class SynthMixerDialog : public QDialog
     Q_OBJECT
 
 public:
-    // audio songs: strips follow frequency bands (low..high, 0..127), MASTER the real level
-    void showAudioBands(const int *bands, int count, int total);
+    // Audio songs (YouTube / video / MP3), see Midi/AudioBandMeter.h: the strips' meters (0..127 per
+    // InstrumentType 0..41) and MASTER's real level
+    void showAudioStrips(const int *levels, int count, int total);
+    // the EQ the audio song faders drive (set once at start)
+    void setAudioEq(class AudioBandMeter *eq);
+    // true while an audio song plays: the faders show and change the audio song set, not the MIDI one
+    void setAudioMode(bool on);
+    bool isAudioMode() const { return audioMode; }
     explicit SynthMixerDialog(QWidget *parent = 0, MainWindow *mainWin = 0);//, MainWindow *mainWin = 0);
     ~SynthMixerDialog();
 
@@ -176,6 +182,19 @@ private:
     void showStripPage(int page);
     void setChInstDetails();
     void createBusActions(InstrumentType t, QMenu *busMenu);
+
+    // audio song fader set (InstrumentType 0..41), saved in SynthMixer.conf [AudioSong]
+    static const int kAudioStrips = 42;
+    static bool isAudioStrip(InstrumentType t) { return int(t) >= 0 && int(t) < kAudioStrips; }
+    class AudioBandMeter *audioEq = nullptr;
+    bool audioMode = false;
+    int audioLevel[kAudioStrips];
+    bool audioMute[kAudioStrips];
+    QTimer audioSaveTimer;
+    void loadAudioFaders();
+    void saveAudioFaders();
+    void pushAudioGain(int strip);
+    void showFaderSet();        // put the faders of the current set (audio / MIDI) on the strips
 };
 
 #endif // SYNTHMIXERDIALOG_H

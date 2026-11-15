@@ -10,6 +10,7 @@
 #include "BASSFX/ReverbFX.h"
 #include "BASSFX/VSTFX.h"
 #include "Midi/AsioOutput.h"
+#include "Midi/SongLevel.h"
 #include "Config.h"
 #include <QSettings>
 
@@ -107,9 +108,16 @@ MidiSynthesizer::MidiSynthesizer(QObject *parent) : QObject(parent)
         dSF.append(0);
     }
 
+    QList<int> srcDefault, volDefault;
+    for (int i = 0; i < 128; i++) {
+        srcDefault.append(-1);
+        volDefault.append(100);
+    }
     for (int i = 0; i < SF_PRESET_COUNT; i++) {
         instmSf.append(iSF);
         drumSf.append(dSF);
+        instSrc.append(srcDefault);
+        instVol.append(volDefault);
     }
 
     #ifndef __linux__
@@ -160,13 +168,18 @@ MidiSynthesizer::~MidiSynthesizer()
 {
     timer.stop();
 
-    for (MidiOut *o : extPorts.values()) {
-        if (o) {
-            try { o->closePort(); } catch (...) {}
-            delete o;
+    {
+        QMutexLocker lk(&extMx);
+        extCount.store(0);
+        extOutName.clear();
+        for (MidiOut *o : extPorts.values()) {
+            if (o) {
+                try { o->closePort(); } catch (...) {}
+                delete o;
+            }
         }
+        extPorts.clear();
     }
-    extPorts.clear();
 
     if (openned)
         close();
@@ -177,6 +190,9 @@ MidiSynthesizer::~MidiSynthesizer()
         BASS_MIDI_FontFree(f);
     }
     synth_HSOUNDFONT.clear();
+    for (HSOUNDFONT f : levelFonts)
+        BASS_MIDI_FontFree(f);
+    levelFonts.clear();
 
     // free per-channel reverbs
     qDeleteAll(sendRv);
@@ -290,6 +306,10 @@ bool MidiSynthesizer::open()
             PTHKCore::initMasterDsp(ci.chans, ci.freq);
             if (!masterDspHandle)
                 masterDspHandle = BASS_ChannelSetDSP(mixers[0].handle, &MidiSynthesizer::masterDspCallback, this, -990);
+            // same loudness for every song: before the master chain (higher priority runs first)
+            SongLevel::get().prepare(int(ci.freq), int(ci.chans));
+            if (!songLevelHandle)
+                songLevelHandle = BASS_ChannelSetDSP(mixers[0].handle, &MidiSynthesizer::songLevelCallback, this, -980);
         }
 
     // create midi and bus stream
@@ -345,6 +365,10 @@ void MidiSynthesizer::close()
     if (masterDspHandle && !mixers.isEmpty()) {
         BASS_ChannelRemoveDSP(mixers[0].handle, masterDspHandle);
         masterDspHandle = 0;
+    }
+    if (songLevelHandle && !mixers.isEmpty()) {
+        BASS_ChannelRemoveDSP(mixers[0].handle, songLevelHandle);
+        songLevelHandle = 0;
     }
 
     // Clear FX
@@ -769,8 +793,11 @@ void MidiSynthesizer::removeSoundfont(int sfIndex)
 
         for (int i=0; i<instSfMap.count(); i++)
         {
-            if (instSfMap[i] == sfIndex)
+            if (instSfMap[i] == sfIndex) {
                 instSfMap[i] = 0;
+                if (i < instSrc[presetIndex].count())
+                    instSrc[presetIndex][i] = -1;   // that file's sound is gone: the program's own
+            }
             else if (instSfMap[i] > sfIndex)
                 instSfMap[i] = instSfMap[i] - 1;
         }
@@ -836,6 +863,76 @@ void MidiSynthesizer::setSoundfontVolume(int sfIndex, float sfvl)
         return;
 
     BASS_MIDI_FontSetVolume(synth_HSOUNDFONT[sfIndex], sfvl);
+    // the file's other handles (own level per instrument) follow it
+    const QString prefix = sfFiles.at(sfIndex) + '|';
+    for (auto it = levelFonts.constBegin(); it != levelFonts.constEnd(); ++it)
+        if (it.key().startsWith(prefix))
+            BASS_MIDI_FontSetVolume(it.value(), sfvl * it.key().mid(prefix.size()).toInt() / 100.0f);
+}
+
+HSOUNDFONT MidiSynthesizer::openFontFile(const QString &file) const
+{
+    if (PTHKCore::isProtectedSoundfont(file))
+        return PTHKCore::openProtectedSoundfont(file, BASS_MIDI_FONT_NOFX);
+#ifdef _WIN32
+    return BASS_MIDI_FontInit(file.toStdWString().c_str(), BASS_MIDI_FONT_NOFX);
+#else
+    return BASS_MIDI_FontInit(file.toStdString().c_str(), BASS_MIDI_FONT_NOFX);
+#endif
+}
+
+// The soundfont file once more, with its own volume (file volume x percent), for the instruments
+// played at another level. Only the presets it plays are loaded (see setSoundfontPresets).
+HSOUNDFONT MidiSynthesizer::levelFont(int sfIndex, int percent, QSet<QString> &used)
+{
+    if (sfIndex < 0 || sfIndex >= synth_HSOUNDFONT.count())
+        return 0;
+    if (percent == 100)
+        return synth_HSOUNDFONT.at(sfIndex);
+    const QString key = sfFiles.at(sfIndex) + '|' + QString::number(percent);
+    used.insert(key);
+    HSOUNDFONT f = levelFonts.value(key);
+    if (!f) {
+        f = openFontFile(sfFiles.at(sfIndex));
+        if (!f)
+            return synth_HSOUNDFONT.at(sfIndex);    // (at the file's own level)
+        levelFonts.insert(key, f);
+    }
+    BASS_MIDI_FontSetVolume(f, BASS_MIDI_FontGetVolume(synth_HSOUNDFONT.at(sfIndex)) * percent / 100.0f);
+    return f;
+}
+
+QVector<DWORD> MidiSynthesizer::soundfontPresetList(int sfIndex)
+{
+    QVector<DWORD> out;
+    const HSOUNDFONT f = soundfontHandle(sfIndex);
+    BASS_MIDI_FONTINFO info;
+    if (!f || !BASS_MIDI_FontGetInfo(f, &info) || info.presets == 0)
+        return out;
+    out.resize(int(info.presets));
+    if (!BASS_MIDI_FontGetPresets(f, out.data()))
+        return QVector<DWORD>();
+    std::sort(out.begin(), out.end(), [](DWORD a, DWORD b) {
+        const DWORD ba = a >> 16, bb = b >> 16;
+        return ba != bb ? ba < bb : (a & 0xffff) < (b & 0xffff);
+    });
+    return out;
+}
+
+void MidiSynthesizer::setMapSoundExtras(int presetIndex, const QList<int> &src, const QList<int> &vol)
+{
+    if (presetIndex < 0 || presetIndex >= SF_PRESET_COUNT)
+        return;
+    if (src.count() == 128)
+        instSrc[presetIndex] = src;
+    if (vol.count() == 128) {
+        QList<int> v = vol;
+        for (int &x : v)
+            x = qBound(0, x, 200);
+        instVol[presetIndex] = v;
+    }
+    if (presetIndex == sfPreset)
+        setSoundfontPresets(presetIndex);
 }
 
 void MidiSynthesizer::setLoadAllSoundfont(bool loadAll)
@@ -896,35 +993,75 @@ void MidiSynthesizer::setSoundfontPresets(int presetIndex)
     if (synth_HSOUNDFONT.count() == 0 || !openned)
         return;
 
-    std::vector<BASS_MIDI_FONT> mFonts;
-
-    // check instrument use another sf
-    for (int i=0; i<128; i++)
-    {
-        if (instmSf[presetIndex].at(i) <= 0)
-            continue;
-
-        if (instmSf[presetIndex].at(i) >= synth_HSOUNDFONT.count())
-        {
-            instmSf[presetIndex][i] = 0;
-            continue;
-        }
-
-        BASS_MIDI_FONT font;
-        font.font = synth_HSOUNDFONT.at(instmSf[presetIndex].at(i));
-        font.preset = i;
-        font.bank = 0;
-
-        mFonts.push_back(font);
+    // Multi soundfont: every program the map changes (another file, another sound of the file, or
+    // another level) is written out bank by bank (tested with BASSMIDI 2.4: a FONTEX entry with
+    // sbank -1 and one preset picked a drum kit), then the main soundfont for everything else.
+    QSet<QString> usedLevel;
+    if (instSrc.count() <= presetIndex || instSrc[presetIndex].count() != 128) {
+        while (instSrc.count() <= presetIndex) instSrc.append(QList<int>());
+        instSrc[presetIndex].clear();
+        for (int i = 0; i < 128; i++) instSrc[presetIndex].append(-1);
     }
+    if (instVol.count() <= presetIndex || instVol[presetIndex].count() != 128) {
+        while (instVol.count() <= presetIndex) instVol.append(QList<int>());
+        instVol[presetIndex].clear();
+        for (int i = 0; i < 128; i++) instVol[presetIndex].append(100);
+    }
+    QHash<int, QVector<DWORD>> presetsOf;       // sf index -> its presets
+    auto presetsFor = [&](int sfIdx) -> const QVector<DWORD> & {
+        if (!presetsOf.contains(sfIdx))
+            presetsOf.insert(sfIdx, soundfontPresetList(sfIdx));
+        return presetsOf[sfIdx];
+    };
+    // the entries for one program; false when the map leaves it to the main soundfont
+    // bankNo: 0, or 101..110 (that bank of the program first, played as bank 0)
+    auto programEntries = [&](std::vector<BASS_MIDI_FONTEX> &v, int prog, int bankNo) -> bool {
+        int sfIdx = instmSf[presetIndex].at(prog);
+        if (sfIdx < 0 || sfIdx >= synth_HSOUNDFONT.count()) {
+            instmSf[presetIndex][prog] = 0;
+            sfIdx = 0;
+        }
+        const int src = instSrc[presetIndex].at(prog);
+        const int vol = instVol[presetIndex].at(prog);
+        if (sfIdx == 0 && src < 0 && vol == 100)
+            return false;
+        const HSOUNDFONT base = synth_HSOUNDFONT.at(sfIdx);
+        const HSOUNDFONT f = levelFont(sfIdx, vol, usedLevel);
+        auto add = [&](int sp, int sb, int dp, int db) {
+            if (f != base && sfLoadAll)
+                BASS_MIDI_FontLoad(f, sp, sb);      // the other handle: just what it plays
+            BASS_MIDI_FONTEX e;
+            e.font = f; e.spreset = sp; e.sbank = sb;
+            e.dpreset = dp; e.dbank = db; e.dbanklsb = 0;
+            v.push_back(e);
+        };
+        if (src >= 0 && BASS_MIDI_FontGetPreset(base, src % 128, src / 128) != nullptr) {
+            add(src % 128, src / 128, prog, 0);     // another sound of the file, for every bank asked
+            return true;
+        }
+        if (bankNo != 0 && BASS_MIDI_FontGetPreset(base, prog, bankNo) != nullptr) {
+            add(prog, bankNo, prog, 0);
+            return true;
+        }
+        bool any = false;
+        for (DWORD p : presetsFor(sfIdx)) {
+            const int b = int(p >> 16), pr = int(p & 0xffff);
+            if (pr != prog || b >= 127)             // (127 / 128: drum kits)
+                continue;
+            add(prog, b, prog, b);                  // the program and its variations (bank select)
+            any = true;
+        }
+        return any;
+    };
 
-    // defaut sf
-    if (synth_HSOUNDFONT.count() > 0) {
-        BASS_MIDI_FONT f;
-        f.font = synth_HSOUNDFONT.at(0);
-        f.preset = -1;
-        f.bank = 0;
-        mFonts.push_back(f);
+    std::vector<BASS_MIDI_FONTEX> mFonts;
+    for (int i = 0; i < 128; i++)
+        programEntries(mFonts, i, 0);
+    if (synth_HSOUNDFONT.count() > 0) {         // the main soundfont: everything else
+        BASS_MIDI_FONTEX e;
+        e.font = synth_HSOUNDFONT.at(0); e.spreset = -1; e.sbank = -1;
+        e.dpreset = -1; e.dbank = 0; e.dbanklsb = 0;   // (dbank -1 here: no sound at all)
+        mFonts.push_back(e);
     }
 
     // Preset 101..110: melodic strips look for the soundfont's bank 101..110 first, then bank 000
@@ -953,11 +1090,8 @@ void MidiSynthesizer::setSoundfontPresets(int presetIndex)
     };
     std::vector<BASS_MIDI_FONTEX> exFonts;           // all strips without an own soundfont
     if (bankNo != 0) {
-        for (int i=0; i<128; i++) {
-            const int sfIdx = instmSf[presetIndex].at(i);
-            if (sfIdx > 0 && sfIdx < synth_HSOUNDFONT.count())
-                addBank(exFonts, synth_HSOUNDFONT.at(sfIdx), i);
-        }
+        for (int i=0; i<128; i++)
+            programEntries(exFonts, i, bankNo);     // (the map's programs; the rest below)
         if (synth_HSOUNDFONT.count() > 0)
             addBank(exFonts, synth_HSOUNDFONT.at(0), -1);
     }
@@ -997,7 +1131,7 @@ void MidiSynthesizer::setSoundfontPresets(int presetIndex)
             continue;
         }
 
-        BASS_MIDI_StreamSetFonts(h, mFonts.data(), mFonts.size());
+        BASS_MIDI_StreamSetFonts(h, (const void *)mFonts.data(), (DWORD)mFonts.size() | BASS_MIDI_FONT_EX);
     }
 
 
@@ -1093,6 +1227,24 @@ void MidiSynthesizer::setSoundfontPresets(int presetIndex)
             BASS_MIDI_StreamEvent(h, ch, MIDI_EVENT_PROGRAM, prog);
         }
     }
+
+    // the level handles no instrument uses now (the streams no longer hold them)
+    for (auto it = levelFonts.begin(); it != levelFonts.end(); ) {
+        if (usedLevel.contains(it.key())) {
+            ++it;
+            continue;
+        }
+        BASS_MIDI_FontFree(it.value());
+        it = levelFonts.erase(it);
+    }
+    int custom = 0;
+    for (int i = 0; i < 128; i++)
+        if (instmSf[presetIndex].at(i) != 0 || instSrc[presetIndex].at(i) >= 0 || instVol[presetIndex].at(i) != 100)
+            ++custom;
+    if (custom > 0)
+        MidiSequencer::timingLog(QString("multi soundfont: preset %1, %2 instrument(s) set, %3 font entries, %4 level handle(s)")
+                                 .arg(sfPresetBankNumber(presetIndex), 3, 10, QChar('0')).arg(custom)
+                                 .arg(int(bankNo != 0 ? exFonts.size() : mFonts.size())).arg(levelFonts.size()));
 }
 
 void MidiSynthesizer::sendNoteOff(int ch, int note, int velocity)
@@ -1103,9 +1255,14 @@ void MidiSynthesizer::sendNoteOff(int ch, int note, int velocity)
     if (ch == 9)
         note = remapDrumNote(note);
 
-    if (MidiOut *xo = extPort(typeOf(ch, note))) {
-        xo->sendNoteOff(ch, note, velocity);
-        return;
+    if (extCount.load()) {
+        QMutexLocker lk(&extMx);
+        const InstrumentType xt = typeOf(ch, note);
+        if (MidiOut *xo = extPort(xt)) {
+            xo->sendNoteOff(ch, note, velocity);
+            if (!extDual.contains(int(xt)))
+                return;
+        }
     }
 
     if (ch == 9)
@@ -1144,9 +1301,24 @@ void MidiSynthesizer::sendNoteOn(int ch, int note, int velocity)
     if (ch == 9)
         note = remapDrumNote(note);
 
-    if (MidiOut *xo = extPort(typeOf(ch, note))) {
-        xo->sendNoteOn(ch, note, velocity);
-        return;
+    if (extCount.load()) {
+        QMutexLocker lk(&extMx);
+        const InstrumentType xt = typeOf(ch, note);
+        if (MidiOut *xo = extPort(xt)) {
+            // the mixer strip still works: mute / solo stop the notes, the fader sets their strength,
+            // the meter shows them
+            const Instrument im = instMap.value(xt);
+            if (velocity == 0) {
+                xo->sendNoteOn(ch, note, 0);
+            } else if (im.enable) {
+                const int v = extVelocity(xt, velocity);
+                xo->sendNoteOn(ch, note, v);
+                if (!extDual.contains(int(xt)))
+                    emit noteOnSended(xt, im.bus, ch, note, v);
+            }
+            if (!extDual.contains(int(xt)))
+                return;
+        }
     }
 
     if (ch == 9)
@@ -1275,9 +1447,14 @@ void MidiSynthesizer::sendNoteAftertouch(int ch, int note, int value)
     if (ch == 9)
         note = remapDrumNote(note);
 
-    if (MidiOut *xo = extPort(typeOf(ch, note))) {
-        xo->sendNoteAftertouch(ch, note, value);
-        return;
+    if (extCount.load()) {
+        QMutexLocker lk(&extMx);
+        const InstrumentType xt = typeOf(ch, note);
+        if (MidiOut *xo = extPort(xt)) {
+            xo->sendNoteAftertouch(ch, note, value);
+            if (!extDual.contains(int(xt)))
+                return;
+        }
     }
 
     if (ch == 9)
@@ -1310,7 +1487,8 @@ void MidiSynthesizer::sendNoteAftertouch(int ch, int note, int value)
 
 void MidiSynthesizer::sendController(int ch, int number, int value)
 {
-    if (!extOutName.isEmpty() && ch >= 0 && ch < 16) {
+    if (extCount.load() && ch >= 0 && ch < 16) {
+        QMutexLocker lk(&extMx);
         if (ch == 9)
             extTeeAll(0xB0 | ch, number & 0x7F, value & 0x7F);
         else if (MidiOut *xo = extPort(chInstType[ch]))
@@ -1437,7 +1615,8 @@ void MidiSynthesizer::sendController(int ch, int number, int value)
 
 void MidiSynthesizer::sendProgramChange(int ch, int number)
 {
-    if (!extOutName.isEmpty() && ch >= 0 && ch < 16 && ch != 9) {
+    if (extCount.load() && ch >= 0 && ch < 16 && ch != 9) {
+        QMutexLocker lk(&extMx);
         if (MidiOut *xo = extPort(MidiHelper::getInstrumentType(number)))
             xo->sendProgramChange(ch, number);
     }
@@ -1461,7 +1640,8 @@ InstrumentType MidiSynthesizer::melodicTypeFor(int ch, int program) const
 
 void MidiSynthesizer::sendChannelAftertouch(int ch, int value)
 {
-    if (!extOutName.isEmpty() && ch >= 0 && ch < 16) {
+    if (extCount.load() && ch >= 0 && ch < 16) {
+        QMutexLocker lk(&extMx);
         if (ch == 9)
             extTeeAll(0xD0 | ch, value & 0x7F, 0, true);
         else if (MidiOut *xo = extPort(chInstType[ch]))
@@ -1473,10 +1653,12 @@ void MidiSynthesizer::sendChannelAftertouch(int ch, int value)
 
 void MidiSynthesizer::sendPitchBend(int ch, int value)
 {
-    if (!extOutName.isEmpty() && ch >= 0 && ch < 16 && ch != 9) {
+    if (extCount.load() && ch >= 0 && ch < 16 && ch != 9) {
+        QMutexLocker lk(&extMx);
         if (MidiOut *xo = extPort(chInstType[ch])) {
             xo->sendPitchBend(ch, value);
-            return;
+            if (!extDual.contains(int(chInstType[ch])))
+                return;
         }
     }
 
@@ -1503,7 +1685,7 @@ void MidiSynthesizer::sendPitchBend(int ch, int value)
 
 void MidiSynthesizer::sendAllNotesOff(int ch)
 {
-    if (!extOutName.isEmpty() && ch >= 0 && ch < 16)
+    if (extCount.load() && ch >= 0 && ch < 16)
         extTeeAll(0xB0 | ch, 123, 0);
     sendToAllMidiStream(ch, MIDI_EVENT_NOTESOFF, 0);
 }
@@ -1517,7 +1699,7 @@ void MidiSynthesizer::sendAllNotesOff()
 
 void MidiSynthesizer::sendResetAllControllers(int ch)
 {
-    if (!extOutName.isEmpty() && ch >= 0 && ch < 16)
+    if (extCount.load() && ch >= 0 && ch < 16)
         extTeeAll(0xB0 | ch, 121, 0);
     sendToAllMidiStream(ch, MIDI_EVENT_RESET, 0);
     sendToAllMidiStream(ch, MIDI_EVENT_PITCHRANGE, 2);
@@ -2690,41 +2872,136 @@ HSTREAM MidiSynthesizer::getDrumHandleFromNote(int drumNote)
 
 void MidiSynthesizer::setExtMidiOut(InstrumentType t, const QString &deviceName)
 {
+    QMutexLocker lk(&extMx);
     if (deviceName.isEmpty()) {
+        extWant.remove(t);
         extOutName.remove(t);
-        return;
+        extDual.remove(int(t));
+    } else {
+        extWant[t] = deviceName;
+        extOutName.remove(t);
+        connectExt(t, MidiPlayer::midiDevices(), extInName);   // missing now: kept, connected later
     }
+    dropUnusedExtPorts();
+    extCount.store(extOutName.size());
+}
 
-    if (!extPorts.contains(deviceName)) {
-        int idx = MidiPlayer::midiDevices().indexOf(deviceName);
-        MidiOut *out = nullptr;
-        if (idx >= 0) {
-            try {
-                out = new MidiOut();
-                out->openPort(idx);
-                if (!out->isPortOpen()) {
-                    delete out;
-                    out = nullptr;
-                }
-            } catch (...) {
-                delete out;
-                out = nullptr;
-            }
+QString MidiSynthesizer::extMidiOut(InstrumentType t)
+{
+    QMutexLocker lk(&extMx);
+    return extWant.value(t);
+}
+
+bool MidiSynthesizer::isExtMidiConnected(InstrumentType t)
+{
+    QMutexLocker lk(&extMx);
+    return extOutName.contains(t);
+}
+
+void MidiSynthesizer::setExtMidiDual(InstrumentType t, bool dual)
+{
+    QMutexLocker lk(&extMx);
+    if (dual)
+        extDual.insert(int(t));
+    else
+        extDual.remove(int(t));
+}
+
+bool MidiSynthesizer::isExtMidiDual(InstrumentType t)
+{
+    QMutexLocker lk(&extMx);
+    return extDual.contains(int(t));
+}
+
+// extMx held. Opens (or shares) the port for one instrument; false when it is missing / busy.
+bool MidiSynthesizer::connectExt(InstrumentType t, const QStringList &names, const QString &inName)
+{
+    const QString name = extWant.value(t);
+    if (name.isEmpty() || name == inName)       // never send to the port we listen on (a loop)
+        return false;
+    MidiOut *out = extPorts.value(name, nullptr);
+    if (!out) {
+        const int idx = names.indexOf(name);
+        if (idx < 0)
+            return false;
+        out = new MidiOut();
+        if (!out->openSafe(idx, name)) {
+            delete out;
+            return false;
         }
-        if (out == nullptr) {       // device missing or busy -> fall back to internal sound
-            extOutName.remove(t);
-            return;
-        }
-        extPorts[deviceName] = out;
+        extPorts[name] = out;
     }
+    extOutName[t] = name;
+    return true;
+}
 
-    extOutName[t] = deviceName;
+// extMx held. Closes ports no instrument uses any more.
+void MidiSynthesizer::dropUnusedExtPorts()
+{
+    for (const QString &name : extPorts.keys()) {
+        bool used = false;
+        for (const QString &n : extOutName.values())
+            if (n == name) { used = true; break; }
+        if (used)
+            continue;
+        MidiOut *o = extPorts.take(name);
+        if (o) {
+            try { o->closePort(); } catch (...) {}
+            delete o;
+        }
+    }
+}
+
+bool MidiSynthesizer::reconnectExt(const QString &midiInName)
+{
+    QMutexLocker lk(&extMx);
+    bool changed = midiInName != extInName;
+    extInName = midiInName;
+    const QStringList names = MidiPlayer::midiDevices();
+    // ports that went away (closed / failed / now the MIDI-in port): disconnect them
+    for (const QString &name : extPorts.keys()) {
+        MidiOut *o = extPorts.value(name);
+        const int idx = names.indexOf(name);
+        if (o && !o->hasFailed() && idx >= 0 && name != midiInName)
+            continue;
+        for (InstrumentType t : extOutName.keys())
+            if (extOutName.value(t) == name)
+                extOutName.remove(t);
+        extPorts.remove(name);
+        if (o) {
+            try { o->closePort(); } catch (...) {}
+            delete o;
+        }
+        changed = true;
+    }
+    // wanted ports that are present now
+    for (InstrumentType t : extWant.keys()) {
+        if (extOutName.contains(t))
+            continue;
+        if (connectExt(t, names, midiInName))
+            changed = true;
+    }
+    extCount.store(extOutName.size());
+    return changed;
+}
+
+int MidiSynthesizer::extVelocity(InstrumentType t, int velocity)
+{
+    const Instrument im = instMap.value(t);
+    // note strength ~ level squared on most synths, so the fader's gain goes in as its square root.
+    // Only downwards: the faders above 0 dB were set for the SoundFont's level, and lifting would push
+    // every hit to 127 (the drum part loses its dynamics on the other program).
+    double g = FaderTaper::gain(im.volume) * std::pow(10.0, im.trimDb / 20.0);
+    if (g > 1.0)
+        g = 1.0;
+    const int v = int(velocity * std::sqrt(g) + 0.5);
+    return v < 1 ? 1 : (v > 127 ? 127 : v);
 }
 
 MidiOut *MidiSynthesizer::extPort(InstrumentType t)
 {
     if (extOutName.isEmpty())
-        return nullptr;
+        return nullptr;     // extMx held by the caller
     auto it = extOutName.constFind(t);
     if (it == extOutName.constEnd() && t == InstrumentType::Canthai)
         it = extOutName.constFind(InstrumentType::Accordion);   // no port of its own: same as the accordion strip
@@ -2748,10 +3025,10 @@ void MidiSynthesizer::extTeeAll(int status, int d1, int d2, bool oneData)
     m.push_back((unsigned char)d1);
     if (!oneData)
         m.push_back((unsigned char)d2);
+    QMutexLocker lk(&extMx);
     for (MidiOut *o : extPorts.values()) {
-        if (o) {
-            try { o->sendMessage(&m); } catch (...) {}
-        }
+        if (o)
+            o->send(&m);
     }
 }
 
@@ -2765,7 +3042,19 @@ void CALLBACK MidiSynthesizer::masterDspCallback(HDSP, DWORD, void *buffer, DWOR
     if (c <= 0)
         return;
     const size_t frames = size_t(length) / (size_t(c) * sizeof(float));
-    PTHKCore::processMasterDsp(samples, frames, 1.0f);
+    // the gain the mixer (or the ASIO output) puts on after this DSP: the master volume can boost
+    // up to +12 dB, so the limiter's ceiling must count it (with 1.0 the output went past full scale)
+    const float outGain = s->synth_volume * FaderTaper::kOutputHeadroom;
+    PTHKCore::processMasterDsp(samples, frames, outGain > 1e-4f ? outGain : 1e-4f);
+}
+
+void CALLBACK MidiSynthesizer::songLevelCallback(HDSP, DWORD, void *buffer, DWORD length, void *user)
+{
+    MidiSynthesizer *s = reinterpret_cast<MidiSynthesizer *>(user);
+    if (!s || !buffer || length == 0 || s->masterChannels <= 0)
+        return;
+    SongLevel::get().process(reinterpret_cast<float *>(buffer),
+                             size_t(length) / (size_t(s->masterChannels) * sizeof(float)));
 }
 
 void MidiSynthesizer::setMasterParams(const MasterDsp::Params &p)

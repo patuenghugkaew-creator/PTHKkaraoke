@@ -12,7 +12,12 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         }
         case Qt::Key_Enter:
         case Qt::Key_Return: {
-            Song *s = playlist[ui->playlistWidget->currentRow()];
+            const int row = ui->playlistWidget->currentRow();
+            if (row < 0 || row >= playlist.size()) {
+                ui->songMedley->hide();
+                break;
+            }
+            Song *s = playlist[row];
             s->setCutStartBar(ui->songMedley->cutStartBar());
             s->setCutEndBar(ui->songMedley->cutEndBar());
             this->setFocus();
@@ -32,8 +37,43 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         return;
     }
 
+    if (event->modifiers() == Qt::AltModifier
+        && (event->key() == Qt::Key_Up || event->key() == Qt::Key_Down)) {
+        changeSongLevel(event->key() == Qt::Key_Up ? 1.0 : -1.0);   // this song louder / quieter
+        return;
+    }
+    // Alt + 1..9 (also on the number pad): the sound pads; Alt + 0: the next sound bank.
+    // The digit comes from the key itself (Windows virtual key), not its character: with the Thai
+    // keyboard layout the 1 key types "ๅ", so event->key() is not Qt::Key_1.
+    if (event->modifiers() == Qt::AltModifier && event->key() == Qt::Key_Backspace) {
+        stopAllSoundPads();             // every sound pad sound off
+        return;
+    }
+    if ((event->modifiers() & ~Qt::KeypadModifier) == Qt::AltModifier) {
+        const quint32 vk = event->nativeVirtualKey();
+        int digit = -1;
+        if (vk >= 0x30 && vk <= 0x39)           // '0'..'9' above the letters
+            digit = int(vk - 0x30);
+        else if (vk >= 0x60 && vk <= 0x69)      // VK_NUMPAD0..9
+            digit = int(vk - 0x60);
+        else if (event->key() >= Qt::Key_0 && event->key() <= Qt::Key_9)
+            digit = event->key() - Qt::Key_0;
+        if (digit >= 0) {
+            if (!event->isAutoRepeat()) {
+                if (digit == 0)
+                    nextSoundBank();
+                else
+                    triggerSoundPad(digit - 1);
+            }
+            return;
+        }
+    }
+
     if (event->modifiers() == Qt::ControlModifier) {
         switch (event->key()) {
+            case Qt::Key_L:             // lock / unlock screen for shops
+                toggleShopLock();
+                return;
             case Qt::Key_D:             // drum hold / fill back into the song
                 toggleDrumHold();
                 return;
@@ -131,6 +171,10 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
             case Qt::Key_Equal:     // same as + / - without Ctrl: + up, - down
             case Qt::Key_Plus:
                 if (ui->playlistWidget->isVisible()) {
+                    if (isShopStrictLocked()) {
+                        notifyShopStrictLocked(tr("เลื่อนลำดับคิวเพลง"));
+                        break;
+                    }
                     int i = ui->playlistWidget->currentRow();
                     if (i > 0)
                         swapInPlaylist(i, i-1);
@@ -139,6 +183,10 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
                 break;
             case Qt::Key_Minus:
                 if (ui->playlistWidget->isVisible()) {
+                    if (isShopStrictLocked()) {
+                        notifyShopStrictLocked(tr("เลื่อนลำดับคิวเพลง"));
+                        break;
+                    }
                     int i = ui->playlistWidget->currentRow();
                     if (i >= 0 && i < ui->playlistWidget->rowCount() - 1)
                         swapInPlaylist(i, i+1);
@@ -216,7 +264,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         break;
     }
     case Qt::Key_F4: {
-        if (player->isUseMedley() && player->midiFile() && !player->midiFile()->events().isEmpty()) {
+        if (songInMedley() && player->midiFile() && !player->midiFile()->events().isEmpty()) {
         player->midiFile()->setSingleTempo(true);
         const int baseBpm = player->currentBpm() - player->bpmSpeed();
         const int targetBpm = player->medleyBPM() > 0 ? MidiPlayer::fitLockedBpm(player->medleyBPM(), baseBpm, player->medleyKeepFarSongs()) : player->currentBpm();
@@ -236,16 +284,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
             if (box.clickedButton() == btnSettings) {
                 openMedleySettings();
             } else if (box.clickedButton() == btnOff) {
-                player->setUseMedley(false);
-                player->unloadNextMedley();
-                if (!player->isPlayerStopped())
-                    player->midiSequencer()->setEndTick(0);
-                if (btnMedley) { QSignalBlocker b(btnMedley); btnMedley->setChecked(false); }
-                ui->detail->setDetail(tr("เมดเลย์ "), tr("ปิด"));
-                ui->detail->show();
-                detailTimer->start(3000);
-                if (this->width() < 1160 && ui->chMix->isVisible())
-                    ui->lcdTime->hide();
+                turnOffMedley();        // (also gives the playing song its own tempo back)
             }
         } else {
             openMedleySettings();
@@ -258,6 +297,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         break;
     }
     case Qt::Key_F5: {
+        if (isShopStrictLocked()) { notifyShopStrictLocked(tr("เล่น / เริ่มใหม่")); break; }
         if (player->isPlayerPaused())
             resume();
         else
@@ -265,14 +305,17 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         break;
     }
     case Qt::Key_F6: {
+        if (isShopStrictLocked()) { notifyShopStrictLocked(tr("พักเพลง")); break; }
         pause();
         break;
     }
     case Qt::Key_F7: {
+        if (isShopStrictLocked()) { notifyShopStrictLocked(tr("หยุดเพลง")); break; }
         stop();
         break;
     }
     case Qt::Key_F8: {
+        if (isShopStrictLocked()) { notifyShopStrictLocked(tr("เพลงก่อนหน้า")); break; }
         playPrevious();
         break;
     }
@@ -280,17 +323,14 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         toggleDrumHold();
         break;
     case Qt::Key_F9: {
+        if (isShopStrictLocked()) { notifyShopStrictLocked(tr("ข้ามไปเพลงถัดไป")); break; }
         playNext();
         break;
     }
     case Qt::Key_Asterisk: {
-        if (ui->chMix->isMuteVoice()) {
-            ui->chMix->setMuteVoice(false);
-            ui->detail->setDetail(tr("เสียงร้อง "), tr("เปิด"));
-        } else {
-            ui->chMix->setMuteVoice(true);
-            ui->detail->setDetail(tr("เสียงร้อง "), tr("ปิด"));
-        }
+        ui->chMix->setMuteVoice(!ui->chMix->isMuteVoice());
+        // (the state it ended in: during idle music a press may turn the cut on either way)
+        ui->detail->setDetail(tr("เสียงร้อง "), ui->chMix->isMuteVoice() ? tr("ปิด") : tr("เปิด"));
         {   // keep the bar button in step with the key
             QSignalBlocker block(btnMuteVocal);
             btnMuteVocal->setChecked(ui->chMix->isMuteVoice());
@@ -322,6 +362,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         playingSong.setTranspose(player->transpose() + 1);
         player->setTranspose(player->transpose() + 1);
         int trp = player->transpose();
+        rememberPlayingKey(trp);
         QString t;
         if (trp > 0) t = "+" + QString::number(trp);
         else t = QString::number(trp);
@@ -341,10 +382,20 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
             break;
         }
         if (ui->playlistWidget->isVisible()) {
-            int i = ui->playlistWidget->currentRow();
-            if (i<0)
+            if (isShopStrictLocked()) {
+                notifyShopStrictLocked(tr("ลบเพลงออกจากคิว"));
                 break;
+            }
+            int i = ui->playlistWidget->currentRow();
+            if (i<0 || i >= playlist.size())
+                break;
+            const QString gone = playlist[i]->name();
             removeFromPlaylist(i);
+            if (i < playingIndex)
+                playingIndex--;                 // (played songs kept in the queue) the playing one moved up
+            ui->detail->setDetail(tr("เอาออกจากคิว "), gone);    // Delete here is not "key down" / "delete the song"
+            ui->detail->show();
+            detailTimer->start(3000);
             showPlaylist();
             timer2->start(playlist_timeout);
             break;
@@ -360,6 +411,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         playingSong.setTranspose(player->transpose() - 1);
         player->setTranspose(player->transpose() - 1);
         int trp = player->transpose();
+        rememberPlayingKey(trp);
         QString t;
         if (trp > 0) t = "+" + QString::number(trp);
         else t = QString::number(trp);
@@ -404,15 +456,30 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         }
         break;
     case Qt::Key_Home:
+        if (isShopStrictLocked()) {
+            notifyShopStrictLocked(tr("เริ่มเพลงใหม่"));
+            break;
+        }
         if (playingSong.id() != "") {
             play(-1);
         }
         break;
     case Qt::Key_End:
+        if (isShopStrictLocked()) {
+            notifyShopStrictLocked(tr("จบเพลง"));
+            break;
+        }
         endSongSmoothly();
         break;
     case Qt::Key_Up:
-        if (ui->playlistWidget->isVisible()) {
+        if (ui->frameSearch->isVisible()) {
+            if (searchBoxChangeBpm) {
+                searchBoxChangeBpm = false;
+                ui->lbSearch->setText(db->searchText() + "_");
+            }
+            setFrameSearch(db->searchPrevious());
+            timer2->start(search_timeout);
+        } else if (ui->playlistWidget->isVisible()) {
             if (ui->playlistWidget->currentRow() > 0 )
                 ui->playlistWidget->setCurrentRow( ui->playlistWidget->currentRow() - 1 );
             timer2->start(playlist_timeout);
@@ -427,7 +494,14 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         }
         break;
     case Qt::Key_Down:
-        if (ui->playlistWidget->isVisible()) {
+        if (ui->frameSearch->isVisible()) {
+            if (searchBoxChangeBpm) {
+                searchBoxChangeBpm = false;
+                ui->lbSearch->setText(db->searchText() + "_");
+            }
+            setFrameSearch(db->searchNext());
+            timer2->start(search_timeout);
+        } else if (ui->playlistWidget->isVisible()) {
             if (ui->playlistWidget->currentRow() < ui->playlistWidget->rowCount() - 1 )
                 ui->playlistWidget->setCurrentRow( ui->playlistWidget->currentRow() + 1 );
             timer2->start(playlist_timeout);
@@ -451,6 +525,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
             timer2->start(search_timeout);
         } else {
             searchBoxChangeBpm = false;
+            searchFooter.clear();
             db->currentSong()->setBpmSpeed(0);
             db->currentSong()->setTranspose(0);
             ui->playlistWidget->hide();
@@ -473,6 +548,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
             timer2->start(search_timeout);
         } else {
             searchBoxChangeBpm = false;
+            searchFooter.clear();
             db->currentSong()->setBpmSpeed(0);
             db->currentSong()->setTranspose(0);
             ui->playlistWidget->hide();
@@ -486,24 +562,10 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         }
         break;
     case Qt::Key_Tab:
+    case Qt::Key_Backtab:
         if (ui->frameSearch->isVisible()) {
-            QString s = ui->lbSearch->text();
-            s = s.replace(s.length() - 1, 1, "");
-            setFrameSearch( db->nextType(s) );
-            {
-                QString mode;
-                switch (db->currentSearchType()) {
-                case SearchType::ByAll:    mode = tr("ทั้งหมด (วิดีโอ/MP3 ขึ้นก่อน)"); break;
-                case SearchType::ById:     mode = tr("รหัสเพลง"); break;
-                case SearchType::ByName:   mode = tr("ชื่อเพลง"); break;
-                case SearchType::ByArtist: mode = tr("ชื่อนักร้อง"); break;
-                case SearchType::ByVideo:  mode = tr("เฉพาะวิดีโอ / MP3"); break;
-                }
-                ui->detail->setDetail(tr("ค้นหา (Tab เปลี่ยน)"), mode);
-                ui->detail->show();
-                detailTimer->start(1500);
-            }
-            timer2->start(search_timeout);
+            const int step = (event->key() == Qt::Key_Backtab || (event->modifiers() & Qt::ShiftModifier)) ? -1 : 1;
+            setSearchMode(static_cast<SearchType>((int(db->currentSearchType()) + step + 7) % 7));
         }
         break;
     case Qt::Key_Backspace:
@@ -522,6 +584,8 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
     case Qt::Key_Enter:
     case Qt::Key_Return:
         if (ui->frameSearch->isVisible()) {
+            if (ui->lbId->text().isEmpty())
+                break;                  // a message is shown (nothing found / type something): no song
             Song *s = db->currentSong();
             addToPlaylist(s);
 
@@ -532,14 +596,21 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
             }
         }
         if (ui->playlistWidget->isVisible() && ui->playlistWidget->rowCount() > 0) {
+            if (isShopStrictLocked() && isSongPlaying() && !idlePlaying) {
+                notifyShopStrictLocked(tr("ข้ามไปเล่นเพลงในคิว"));
+                break;
+            }
             ui->playlistWidget->hide();
             play(ui->playlistWidget->currentRow());
         }
         break;
     case Qt::Key_Space:
         if (player->isUseMedley() && ui->playlistWidget->isVisible()) {
+            const int row = ui->playlistWidget->currentRow();
+            if (row < 0 || row >= playlist.size())
+                break;                          // empty queue: no song to set the medley cuts of
             timer2->stop();
-            Song *s = playlist[ui->playlistWidget->currentRow()];
+            Song *s = playlist[row];
             ui->songMedley->setup(s->cutStartBar(), s->cutEndBar());
             ui->songMedley->show();
             break;
@@ -555,6 +626,10 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
     case Qt::Key_Plus:
     case Qt::Key_Equal:
         if (ui->playlistWidget->isVisible()) {
+            if (isShopStrictLocked()) {
+                notifyShopStrictLocked(tr("เลื่อนลำดับคิวเพลง"));
+                break;
+            }
             int i = ui->playlistWidget->currentRow();
             if (i > 0)
                 swapInPlaylist(i, i-1);
@@ -563,6 +638,10 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         }
     case Qt::Key_Minus:
         if (ui->playlistWidget->isVisible()) {
+            if (isShopStrictLocked()) {
+                notifyShopStrictLocked(tr("เลื่อนลำดับคิวเพลง"));
+                break;
+            }
             int i = ui->playlistWidget->currentRow();
             if (i >= 0 && i < ui->playlistWidget->rowCount() - 1)
                 swapInPlaylist(i, i+1);
@@ -570,6 +649,16 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
             break;
         }
     default:
+        // keys that type nothing (Alt / Shift / Ctrl alone, control characters) or Alt shortcuts: no search.
+        // Alt + number pad digits (the sound pads) also make Windows type an "Alt code" when Alt is let
+        // go: Alt+1 = ☺, Alt+2 = ☻, Alt+3 = ♥ ... (the old symbols for codes 1-31). Not search text either.
+        {
+            static const QString altCodes = QString::fromUtf8("☺☻♥♦♣♠•◘○◙♂♀♪♫☼►◄↕‼¶§▬↨↑↓→←∟↔▲▼");
+            const QString t = event->text();
+            if (t.isEmpty() || !t.at(0).isPrint() || altCodes.contains(t.at(0))
+                    || (event->modifiers() & Qt::AltModifier))
+                break;
+        }
         if (searchBoxChangeBpm) {
             ui->lbSearch->setText("_");
             searchBoxChangeBpm = false;
@@ -581,7 +670,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
             ui->lbSearch->setText(text + "_");
             timer2->start(search_timeout);
         } else {
-            db->setSearchType(SearchType::ByAll);
+            db->setSearchType(SearchType::ByAll);     // a new search starts on "ทั้งหมด": codes, names and lyrics
             QString text = searchWithThaiFallback(event->text());
             ui->lbSearch->setText(text + "_");
             showFrameSearch();
@@ -591,6 +680,28 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         }
         break;
     }
+}
+
+void MainWindow::setSearchMode(SearchType mode)
+{
+    db->setSearchType(mode);
+    if (searchChips)
+        searchChips->setCurrent(int(mode));
+    QString s = ui->lbSearch->text();
+    if (s.endsWith('_'))
+        s.chop(1);
+    searchBoxChangeBpm = false;
+    if (s.isEmpty() && mode != SearchType::ByLyrics && mode != SearchType::ByTempo) {
+        searchFooter.clear();
+        ++lyricsSearchGen;
+        if (lyricsSearchTimer)
+            lyricsSearchTimer->stop();
+        setFrameSearch(db->search(""));
+    } else {
+        searchWithThaiFallback(s);
+    }
+    showFrameSearch();
+    timer2->start(search_timeout);
 }
 
 QString MainWindow::searchWithThaiFallback(const QString &text)
@@ -605,6 +716,33 @@ QString MainWindow::searchWithThaiFallback(const QString &text)
                   .arg(w->db->isFuzzyResult() ? " (approximate)" : ""));
         }
     } report{ searchT, text, this };
+    searchFooter.clear();
+    ++lyricsSearchGen;
+    if (lyricsSearchTimer)
+        lyricsSearchTimer->stop();
+    // lyrics: searched in the background once the typing pauses (see searchLyricsLater)
+    if (db->currentSearchType() == SearchType::ByLyrics) {
+        db->search(text);                   // keeps the typed text for Tab
+        searchLyricsLater(text);
+        return text;
+    }
+    // tempo: the songs within 5 BPM of the number typed
+    if (db->currentSearchType() == SearchType::ByTempo) {
+        Song *s = db->search(text);
+        if (db->lastSearchFound()) {
+            searchFooter = tr("♩ เพลงความเร็วใกล้ %1 BPM พบ %2 เพลง   (↑ ↓ เลือกเพลง   Enter เพิ่มเข้าคิว)").arg(s->tempo()).arg(db->resultCount());
+            setFrameSearch(s);
+            ui->lbType->setText(ui->lbType->text() + tr("  ♩ %1 BPM (%2 เพลง)").arg(s->tempo()).arg(db->resultCount()));
+        } else {
+            showSearchMessage(text.trimmed().isEmpty() ? tr("พิมพ์ความเร็ว (BPM) เช่น 145") : tr("ไม่มีเพลงความเร็วใกล้ %1").arg(text));
+        }
+        return text;
+    }
+    // song codes (digits only) are not looked for in the lyrics
+    const bool canAutoLyrics = (db->currentSearchType() == SearchType::ByAll)
+            && text.contains(QRegExp("[^0-9\\s]"))
+            && (LyricsIndex::normalize(text).size() >= 3
+                || (text.contains(QRegExp("[A-Za-z]")) && LyricsIndex::normalize(SongDatabase::kedmaneeToThai(text)).size() >= 3));
     // Typed with the keyboard still in English mode (e.g. "lyxH" for "สายฝ")?
     // When nothing matches, retry with the same keys on the Thai Kedmanee layout.
     Song *s = db->search(text);
@@ -613,36 +751,204 @@ QString MainWindow::searchWithThaiFallback(const QString &text)
         Song *t = db->search(thai);
         if (db->lastSearchFound()) {
             setFrameSearch(t);
+            if (canAutoLyrics && LyricsIndex::normalize(thai).size() >= 4)
+                searchLyricsLater(thai, true);
             return thai;
         }
         db->search(text);   // keep the typed text as the search text
     }
-    if (!db->lastSearchFound()) {
-        // nothing exact: approximate search (typos, tone marks, spaces, sound-alike letters)
-        Song *f = db->searchFuzzy(text);
-        if (!db->isFuzzyResult() && text.contains(QRegExp("[A-Za-z]")))
-            f = db->searchFuzzy(SongDatabase::kedmaneeToThai(text));
-        if (db->isFuzzyResult()) {
-            setFrameSearch(f);
-            ui->lbType->setText(ui->lbType->text() + tr("  ≈ ใกล้เคียง"));
-            return text;
-        }
-        db->search(text);
+    if (db->lastSearchFound()) {
+        setFrameSearch(s);
+        if (canAutoLyrics && LyricsIndex::normalize(text).size() >= 4)
+            searchLyricsLater(text, true);
+        return text;
+    }
+    // nothing exact: approximate search (typos, tone marks, spaces, sound-alike letters)
+    Song *f = db->searchFuzzy(text);
+    if (!db->isFuzzyResult() && text.contains(QRegExp("[A-Za-z]")))
+        f = db->searchFuzzy(SongDatabase::kedmaneeToThai(text));
+    if (db->isFuzzyResult()) {
+        searchFooter = tr("≈ ค้นชื่อใกล้เคียง พบ %1 เพลง   (↑ ↓ เลือกเพลง   Enter เพิ่มเข้าคิว)").arg(db->resultCount());
+        setFrameSearch(f);
+        ui->lbType->setText(ui->lbType->text() + tr("  ≈ ใกล้เคียง"));
+        if (canAutoLyrics)
+            searchLyricsLater(text, true);
+        return text;
+    }
+    db->search(text);
+    if (canAutoLyrics) {
+        searchLyricsLater(text, false);
+        return text;
+    }
+    if (!text.trimmed().isEmpty()) {
+        showSearchMessage(tr("ไม่พบเพลง \"%1\"").arg(text));
+        return text;
     }
     setFrameSearch(s);
     return text;
 }
 
+// ---- "ค้นจากเนื้อร้อง" (LyricsIndex.h) ---------------------------------------------------------------
+
+QString MainWindow::lyricsDbPath() const
+{
+    return Config::DATABASE_DIR_PATH + "/Lyrics.db3";
+}
+
+// the index of the songs' full lyrics: built in the background, then only new songs are added
+void MainWindow::startLyricsIndex()
+{
+    if (!db || (lyricsIndex && lyricsIndex->running()))
+        return;
+    delete lyricsIndex;
+    lyricsIndex = new LyricsIndex();
+    lyricsIndex->onFinished = [](int added) {
+        if (added > 0)
+            uiLog(QString("lyrics index: %1 songs added").arg(added));
+    };
+    lyricsIndex->start(lyricsDbPath(), db->database()->databaseName(), db->ncnPath(), db->hnkPath(), db->sibPath());
+}
+
+// a line in the search bar instead of a song (searching, nothing found, what to type)
+void MainWindow::showSearchMessage(const QString &msg)
+{
+    if (searchChips)
+        searchChips->setCurrent(int(db->currentSearchType()));
+    ui->lbId->setText(QString());
+    ui->lbName->setText(" " + msg);
+    ui->lbBtw->hide();
+    ui->lbArtist->setText(QString());
+    ui->lbTempoKey->setText(QString());
+    ui->lbType->setText(QString());
+    ui->lbLyrics->setText(QString());
+    ui->frame_3->setVisible(false);
+    if (searchResults) {
+        searchResults->setRows({}, -1, QString());
+        searchResults->hide();
+    }
+    ui->frame_4->show();                // the message goes in the song line (hidden while a list shows)
+    ui->frameSearch->setFixedHeight(168);
+    fitSearchBar();
+}
+
+// The lyrics are looked up on another thread a moment after the last key (a search reads the
+// whole index, about a second); only the answer to the newest text is shown.
+void MainWindow::searchLyricsLater(const QString &text, bool quiet)
+{
+    lyricsSearchText = text;
+    const int idxPct = lyricsIndex ? lyricsIndex->progressPercent() : 100;
+    const QString building = (lyricsIndex && lyricsIndex->running()) ? tr("  (กำลังสร้างดัชนีเนื้อร้อง %1%)").arg(idxPct) : QString();
+    const int normLen = qMax(LyricsIndex::normalize(text).size(),
+                             text.contains(QRegExp("[A-Za-z]")) ? LyricsIndex::normalize(SongDatabase::kedmaneeToThai(text)).size() : 0);
+    if (normLen < 3) {
+        if (!quiet)
+            showSearchMessage(tr("พิมพ์ท่อนเนื้อร้องที่จำได้ อย่างน้อย 3 ตัวอักษร") + building);
+        return;
+    }
+    if (!quiet)
+        showSearchMessage(tr("กำลังค้นหาเนื้อร้อง \"%1\" ...").arg(text) + building);
+    if (!lyricsSearchTimer) {
+        lyricsSearchTimer = new QTimer(this);
+        lyricsSearchTimer->setSingleShot(true);
+        lyricsSearchTimer->setInterval(450);
+        connect(lyricsSearchTimer, &QTimer::timeout, this, [this]() {
+            if (!lyricsPool) {
+                lyricsPool = new QThreadPool(this);
+                lyricsPool->setMaxThreadCount(1);
+            }
+            const int gen = ++lyricsSearchGen;
+            const QString t = lyricsSearchText, file = lyricsDbPath(), songsFile = db->database()->databaseName();
+            QPointer<MainWindow> self(this);
+            lyricsPool->start([self, gen, t, file, songsFile]() {
+                QElapsedTimer clock;
+                clock.start();
+                auto keys = LyricsIndex::find(file, t);
+                if (keys.isEmpty() && t.contains(QRegExp("[A-Za-z]")))
+                    keys = LyricsIndex::find(file, SongDatabase::kedmaneeToThai(t));
+                // the songs of those lyrics, here too: hundreds of them took a third of a second on screen
+                const QVector<qint64> rows = SongDatabase::rowsForKeys(songsFile, keys);
+                const qint64 ms = clock.elapsed();
+                QMetaObject::invokeMethod(qApp, [self, gen, t, rows, ms]() {
+                    if (!self || gen != self->lyricsSearchGen)
+                        return;                     // typed on since: a newer search is coming
+                    self->onLyricsFound(t, rows, ms);
+                }, Qt::QueuedConnection);
+            });
+        });
+    }
+    lyricsSearchTimer->start();
+}
+
+void MainWindow::onLyricsFound(const QString &text, const QVector<qint64> &rows, qint64 ms)
+{
+    uiLog(QString("lyrics search \"%1\": %2 songs in %3 ms").arg(text).arg(rows.size()).arg(ms));
+    if (!ui->frameSearch->isVisible())
+        return;
+    if (db->currentSearchType() == SearchType::ByAll) {
+        // One list: the songs found by code / name / artist (or a name like it) first, then the
+        // songs whose lyrics have the text, each song once. The song picked so far stays picked.
+        const bool found = db->lastSearchFound();
+        const bool approx = db->isFuzzyResult();
+        const QVector<qint64> names = found ? db->currentRows(300) : QVector<qint64>();
+        const int pos = found ? db->resultIndex() : 0;
+        QVector<qint64> merged = names;
+        QSet<qint64> seen(names.begin(), names.end());
+        for (const qint64 r : rows)
+            if (!seen.contains(r)) {
+                seen.insert(r);
+                merged.append(r);
+            }
+        const int byLyrics = merged.size() - names.size();
+        if (byLyrics == 0) {
+            if (!found)
+                showSearchMessage(tr("ไม่พบเพลงหรือเนื้อร้อง \"%1\"").arg(text));
+            return;                         // nothing more than what is shown
+        }
+        db->showRows(merged, text, pos, names.size());
+        if (names.isEmpty())
+            searchFooter = tr("♪ เพลงที่เนื้อร้องมีคำนี้ %1 เพลง   (↑ ↓ เลือกเพลง   Enter เพิ่มเข้าคิว)").arg(byLyrics);
+        else
+            searchFooter = tr("%1 %2 เพลง   ♪ เนื้อร้องตรงอีก %3 เพลง ต่อท้ายรายการ   (↑ ↓ เลือก   Enter เข้าคิว)")
+                           .arg(approx ? tr("≈ ชื่อใกล้เคียง") : tr("ชื่อ / รหัสตรง"))
+                           .arg(names.size() >= 300 ? QString("300+") : QString::number(names.size()))
+                           .arg(byLyrics);
+        setFrameSearch(db->currentSong());
+        timer2->start(search_timeout);
+        return;
+    }
+    if (db->currentSearchType() != SearchType::ByLyrics)
+        return;
+    if (db->showRows(rows, text)) {
+        searchFooter = tr("♪ พบเนื้อร้อง \"%1\" ทั้งหมด %2 เพลง   (↑ ↓ เลือกเพลง   Enter เพิ่มเข้าคิว)").arg(text).arg(db->resultCount());
+        setFrameSearch(db->currentSong());
+        ui->lbType->setText(ui->lbType->text() + tr("  ♪ เนื้อร้อง (%1 เพลง)").arg(db->resultCount()));
+        timer2->start(search_timeout);
+        return;
+    }
+    QString msg = tr("ไม่พบเนื้อร้อง \"%1\"").arg(text);
+    if (LyricsIndex::songCount(lyricsDbPath()) == 0)
+        msg = tr("ยังไม่มีดัชนีเนื้อร้อง (โปรแกรมกำลังสร้างอยู่เบื้องหลัง ลองใหม่อีกสักครู่)");
+    else if (lyricsIndex && lyricsIndex->running())
+        msg += tr("  (ดัชนีเนื้อร้องสร้างไปแล้ว %1%)").arg(lyricsIndex->progressPercent());
+    showSearchMessage(msg);
+}
+
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
+    if (watched == ui->frameSearch) {
+        if (event->type() == QEvent::Hide && searchResults)
+            searchResults->hide();
+        else if (event->type() == QEvent::Show)
+            updateSearchResults();
+    }
     if (event->type() == QEvent::MouseButtonDblClick) {
         // double-click on the screen (picture, video, lyrics): full screen on / off. Not on the bar,
         // the song search, the queue or the channel mixer, which use double-clicks themselves.
         QWidget *w = qobject_cast<QWidget *>(watched);
         auto inside = [w](QWidget *area) { return area && (w == area || area->isAncestorOf(w)); };
         if (w && w->window() == this && static_cast<QMouseEvent *>(event)->button() == Qt::LeftButton
-                && !inside(ui->frameControl) && !inside(ui->frameSearch) && !inside(ui->playlistWidget)
-                && !inside(ui->chMix) && !inside(ui->songMedley)) {
+                && !inside(ui->frameControl) && !inside(ui->frameSearch) && !inside(searchResults)
+                && !inside(ui->playlistWidget) && !inside(ui->chMix) && !inside(ui->songMedley)) {
             showFullScreenOrNormal();
             return true;
         }
@@ -650,7 +956,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     if (event->type() == QEvent::MouseButtonDblClick && ui->frameSearch->isVisible()) {
         // double-click on the song found = Enter (into the queue / play)
         QWidget *w = qobject_cast<QWidget *>(watched);
-        if (w && (w == ui->frameSearch || ui->frameSearch->isAncestorOf(w))) {
+        if (w && w != searchChips && (w == ui->frameSearch || ui->frameSearch->isAncestorOf(w))) {
             QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
             keyPressEvent(&enter);
             setFocus();

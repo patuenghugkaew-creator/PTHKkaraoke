@@ -1,5 +1,7 @@
 #include "PlaylistWidget.h"
 #include "ui_PlaylistWidget.h"
+#include <QHeaderView>
+#include <QLabel>
 
 PlaylistWidget::PlaylistWidget(QWidget *parent) :
     QWidget(parent),
@@ -31,6 +33,23 @@ PlaylistWidget::PlaylistWidget(QWidget *parent) :
 
     connect(ui->tableWidget, &QTableWidget::cellClicked, this, [this](int row, int) { emit rowClicked(row); });
     connect(ui->tableWidget, &QTableWidget::cellDoubleClicked, this, [this](int row, int) { emit rowDoubleClicked(row); });
+
+    emptyNote = new QLabel(tr("ยังไม่มีเพลงในคิว  ·  พิมพ์รหัสหรือชื่อเพลง แล้วกด Enter เพื่อเพิ่ม"), ui->tableWidget->viewport());
+    emptyNote->setStyleSheet("color: rgb(220, 220, 220); background: transparent; padding-left: 10px;");
+    emptyNote->setAttribute(Qt::WA_TransparentForMouseEvents);
+    updateTitle();
+}
+
+void PlaylistWidget::updateTitle()
+{
+    const int n = ui->tableWidget->rowCount();
+    ui->lbPlaylist->setText(n > 0 ? tr("คิวเพลง (%1 เพลง)  ·  Enter เล่น  ·  Delete เอาออก").arg(n)
+                                  : tr("คิวเพลง"));
+    if (emptyNote) {
+        emptyNote->setFont(ui->tableWidget->font());
+        emptyNote->setGeometry(0, 0, 3000, ui->tableWidget->verticalHeader()->defaultSectionSize());
+        emptyNote->setVisible(n == 0);
+    }
 }
 
 void PlaylistWidget::applyOverlayStyle()
@@ -86,6 +105,7 @@ void PlaylistWidget::setPlaylist(const QList<Song *> &songlist)
 
     for (Song* s : songlist)
         addSong(s);
+    updateTitle();
 
     setCurrentRow(0);
 }
@@ -104,6 +124,7 @@ void PlaylistWidget::addSong(Song *song)
     ui->tableWidget->setItem(rowCount, 3, type);
 
     ui->tableWidget->item(rowCount, 0)->setTextAlignment(Qt::AlignHCenter|Qt::AlignVCenter);
+    updateTitle();
 }
 
 void PlaylistWidget::updateDetail(int row, Song *song)
@@ -138,6 +159,7 @@ void PlaylistWidget::removeRow(int row)
         return;
 
     ui->tableWidget->removeRow(row);
+    updateTitle();
 
     for (int i=row; i<ui->tableWidget->rowCount(); i++)
     {

@@ -109,6 +109,7 @@ public:
     }
 
     bool gpu() const { return onGpu; }
+    static std::mutex &gpuRunMutex() { static std::mutex mx; return mx; }
     void terminate(bool on) { if (on) runOpts.SetTerminate(); else runOpts.UnsetTerminate(); }
 
     void instrumental(const float *mix, float *inst)
@@ -153,7 +154,14 @@ public:
         Ort::Value in = Ort::Value::CreateTensor<float>(mem, x.data(), x.size(), shape, 4);
         const char *inNames[] = { inName.c_str() };
         const char *outNames[] = { outName.c_str() };
+        // One window at a time on the graphics card: the live cut and the stems maker each have
+        // a session, and both at once (with the picture) hung an integrated GPU (887A0006).
+        std::unique_lock<std::mutex> gpuLock(gpuRunMutex(), std::defer_lock);
+        if (onGpu)
+            gpuLock.lock();
         std::vector<Ort::Value> out = session->Run(runOpts, inNames, &in, 1, outNames, 1);
+        if (onGpu)
+            gpuLock.unlock();
         const float *y = out[0].GetTensorData<float>();
 
         // iSTFT with window-square normalisation
@@ -223,6 +231,9 @@ private:
 static std::atomic<int> s_devicePref{0};
 void AiVocalEngine::setDevicePreference(int pref) { s_devicePref.store(pref); }
 int AiVocalEngine::devicePreference() { return s_devicePref.load(); }
+static std::atomic<bool> s_gpuBroken{false};
+bool AiVocalEngine::gpuBroken() { return s_gpuBroken.load(); }
+void AiVocalEngine::setGpuBroken() { s_gpuBroken.store(true); }
 
 // speed-test results etc. go to yt-video.log next to the exe
 // Developer timing logs: only when "debug-logs.txt" is next to the exe.
@@ -439,6 +450,8 @@ AiVocalEngine::~AiVocalEngine()
     cv.notify_all();
     if (workerThread.joinable()) workerThread.join();
     if (loaderThread.joinable()) loaderThread.join();
+    for (int i = 0; i < 600 && isLoading.load(); ++i)      // a reload started by the worker (runWindow)
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
 }
 
 QString AiVocalEngine::modelKey() const
@@ -509,7 +522,7 @@ void AiVocalEngine::loadModel(QString key)
         std::unique_ptr<MdxModel> best;
         double bestT = 1e9;
         QString bestProv;
-        const int pref = s_devicePref.load();
+        const int pref = s_gpuBroken.load() ? 1 : s_devicePref.load();     // 1 = CPU
         const int threads = std::max(4, int(std::thread::hardware_concurrency()) * 3 / 4);
         // per computer (Windows machine id): a portable copy on another PC measures its own speed
         const QString pc = QString::fromLatin1(QSysInfo::machineUniqueId().toHex().left(16));
@@ -720,8 +733,37 @@ void AiVocalEngine::runWindow(MdxModel &model)
     std::vector<float> inst(size_t(2) * CHUNK);
     const double t0 = nowSec();
     isComputing.store(true);
-    model.instrumental(buf.data(), inst.data());
+    bool failed = false;
+    QString why;
+    try {
+        model.instrumental(buf.data(), inst.data());
+    } catch (const std::exception &e) {
+        failed = true;
+        why = QString::fromLocal8Bit(e.what());
+    } catch (...) {
+        failed = true;
+    }
     isComputing.store(false);
+    if (failed) {
+        // The model failed (on the GPU: the device hung; uncaught, this ended the program,
+        // 2026-11-14). This window is heard uncut, and the model is loaded again - on the CPU
+        // when it was the graphics card.
+        aiLog(QString("live cut: the model failed on the %1, loads again%2: %3")
+              .arg(model.gpu() ? "GPU" : "CPU").arg(model.gpu() ? " on the CPU" : "").arg(why.left(200)));
+        if (model.gpu())
+            s_gpuBroken.store(true);
+        std::copy(buf.begin(), buf.end(), inst.begin());
+        tailInst.clear();
+        QString key;
+        {
+            std::lock_guard<std::mutex> lock(m);
+            key = wantedKey;
+            loadedKey.clear();
+        }
+        aiReady = false;                    // passes the sound through until the model is back
+        if (!key.isEmpty() && !isLoading.exchange(true))
+            std::thread([this, key]() { loadModel(key); }).detach();
+    }
     const double dt = nowSec() - t0;
     {
         std::lock_guard<std::mutex> lock(m);

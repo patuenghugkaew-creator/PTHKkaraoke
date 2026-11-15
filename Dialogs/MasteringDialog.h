@@ -76,14 +76,25 @@ public:
         st.endGroup();
     }
 
-    // at start-up: the saved settings are used only with a PRO licence (without one everything stays off)
+    // at start-up: the saved settings are used only with a PRO licence (without one the chain stays off).
+    // The limiter is a safety net for everyone: on at -1 dBFS unless a PRO user saved it switched off
+    // (the master volume boosts up to +12 dB; without it Windows itself crushed the peaks -> hoarse sound).
     static void applySaved(MidiSynthesizer *synth)
     {
         if (!synth)
             return;
         MasterDsp::Params p;
-        if (PTHKCore::isProUnlocked())
+        bool limSaved = false;
+        if (PTHKCore::isProUnlocked()) {
             p = loadSaved();
+            QSettings st(Config::CONFIG_SYNTH_FILE_PATH, QSettings::IniFormat);
+            limSaved = st.contains(QStringLiteral("Mastering/LimOn"));
+        }
+        if (!limSaved) {
+            p.limOn = true;
+            p.ceilingDb = -1.0f;
+            p.truePeak = true;
+        }
         p.meter = false;
         synth->setMasterParams(p);
     }

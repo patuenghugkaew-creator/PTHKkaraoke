@@ -142,6 +142,8 @@ public:
     std::function<void(const QString &line)> onLog;          // diagnostics
     std::function<void(const QString &file, int percent)> onProgress;
     std::function<void(const QString &file, bool ok, const QString &error)> onDone;
+    // the graphics card stopped answering twice: the AI goes on with the CPU (maker thread)
+    std::function<void(const QString &error)> onGpuLost;
 
     AiStemMaker()
     {
@@ -258,6 +260,31 @@ public:
         return false;
     }
 
+    // A video / YouTube picture plays: on the graphics card the maker rests between windows (as long
+    // as a window took), so the card also draws the picture - unless the playing song itself needs the
+    // windows soon (less than 30 s ahead of where it is). Measured: at full speed the picture lost ~20 %
+    // of its frames while the AI worked.
+    void setPaced(bool on)
+    {
+        paced.store(on);
+        cv.notify_all();
+    }
+    // the songs coming next (the queue): prepared first, in this order
+    void prioritize(const QStringList &files)
+    {
+        {
+            std::lock_guard<std::mutex> lock(m);
+            for (int i = files.size() - 1; i >= 0; --i) {
+                std::shared_ptr<Job> j = jobFor(files[i]);
+                if (j->t->complete.load() || j->failed)
+                    continue;
+                background.removeAll(j);
+                background.prepend(j);
+            }
+        }
+        cv.notify_all();
+    }
+
     void setBackgroundAllowed(bool on)
     {
         backgroundOn.store(on);
@@ -320,6 +347,11 @@ private:
         std::unique_ptr<AiWindowSeparator> sep;
         QString sepKey, sepModels;
         bool sepGpu = false;
+        // The graphics card can stop answering (DirectML 887A0006 "device hung", seen 2026-11-14
+        // on the first window of a song): the window is tried again with a new session, and after
+        // a second time the CPU makes the rest of this run - the song is not lost.
+        int gpuFails = 0;
+        bool gpuLost = false;
         std::vector<float> win(size_t(2) * CHUNK), out(size_t(2) * CHUNK);
         // No video playing: 3/4 of the cores. A video playing: a quarter, so its picture keeps
         // its pace (with more, decoding the picture shared the cores with the AI and fell behind).
@@ -365,7 +397,7 @@ private:
                 }
                 models = cfgModels;
                 newKey = cfgKey;
-                gpu = cfgGpu;
+                gpu = cfgGpu && !gpuLost && !AiVocalEngine::gpuBroken();
             }
 
             if (yielding.load() && !backgroundOn.load()) {   // the video needs the CPU
@@ -377,7 +409,11 @@ private:
                 drop(job);
                 continue;
             }
-            const int threads = backgroundOn.load() ? (std::max)(2, cores * 3 / 4) : (std::max)(2, cores / 4);
+            // 4 threads: measured on a 16-thread PC (2026-11-14, hq model, one window): 2 = 5.8 s,
+            // 4 = 4.0 s, 8 = 4.0 s, 12 = 3.7 s - and with the program running, 12 threads were slower
+            // (5.7 s) and made the whole PC sluggish. One count also means no model reload each time
+            // a video starts / stops (the count used to change with it).
+            const int threads = (std::max)(2, (std::min)(4, cores / 2));
             QString err;
             QElapsedTimer openClock;
             openClock.start();
@@ -402,6 +438,14 @@ private:
                 if (!sep->ok()) {
                     err = sep->error();
                     sep.reset();
+                    if (gpu) {                  // no session on the graphics card: the CPU
+                        gpuLost = true;
+                        if (onLog)
+                            onLog("AI maker: no GPU session, the CPU goes on: " + err.left(200));
+                        if (onGpuLost)
+                            onGpuLost(err);
+                        continue;
+                    }
                     fail(job, err);
                     continue;
                 }
@@ -428,6 +472,24 @@ private:
             if (!made) {
                 if (yielding.load() || quit.load())
                     continue;                   // stopped for the picture: not an error
+                if (sepFailed && sepGpu) {
+                    // the graphics card: a new session (the driver resets it in ~2 s), then the CPU
+                    sep.reset();
+                    ++gpuFails;
+                    if (gpuFails >= 2) {
+                        gpuLost = true;
+                        AiVocalEngine::setGpuBroken();      // the live cut too
+                    }
+                    if (onLog)
+                        onLog(QString("AI maker: the graphics card stopped (%1 time(s)), %2: %3")
+                              .arg(gpuFails).arg(gpuLost ? "the CPU goes on" : "new session")
+                              .arg(err.left(200)));
+                    if (gpuLost && onGpuLost)
+                        onGpuLost(err);
+                    std::unique_lock<std::mutex> lock(m);
+                    cv.wait_for(lock, std::chrono::milliseconds(2500));
+                    continue;
+                }
                 fail(job, err);
                 continue;
             }
@@ -440,8 +502,18 @@ private:
                 if (onProgress)
                     onProgress(job->t->file, pct);
             }
-            if (job->t->doneCount.load() >= job->t->nWin)
+            if (job->t->doneCount.load() >= job->t->nWin) {
                 finish(job);
+                continue;
+            }
+            if (paced.load() && sepGpu) {
+                const bool playingNeedsIt = want >= 0
+                        && (long long)(k + 1) * STEP < want + 30LL * AiVocalEngine::SR;
+                if (!playingNeedsIt) {
+                    std::unique_lock<std::mutex> lock(m);
+                    cv.wait_for(lock, std::chrono::milliseconds((std::max)(qint64(300), winClock.elapsed())));
+                }
+            }
         }
         std::lock_guard<std::mutex> lock(m);
         if (working)
@@ -671,6 +743,7 @@ private:
     bool makeWindow(Job &j, int k, AiWindowSeparator &sep, std::vector<float> &win, std::vector<float> &out, QString &err)
     {
         StemTrack &t = *j.t;
+        sepFailed = false;
         const long long s = (long long)k * STEP - TRIM;          // window start in the song
         if (!decodeTo(j, s + CHUNK, err))
             return quit.load() ? true : false;
@@ -699,6 +772,7 @@ private:
             }
             if (!done) {
                 err = sep.error();
+                sepFailed = true;               // the model failed (not the decoding)
                 return false;
             }
             winSec = 0.7 * winSec + 0.3 * (GetTickCount() - t0) / 1000.0;
@@ -801,11 +875,13 @@ private:
     QList<std::shared_ptr<Job>> background;
     std::atomic<long long> focusFrame{0};
     double winSec = 4.0;                        // time to make one window (maker thread)
+    bool sepFailed = false;                     // makeWindow failed in the model (maker thread)
     std::atomic<bool> backgroundOn{true};
+    std::atomic<bool> paced{false};
     std::atomic<bool> yielding{false};
     std::mutex liveMx;
     AiWindowSeparator *live = nullptr;          // separating a window right now (for yieldToVideo)
-    QString cfgModels, cfgKey = "hq";
+    QString cfgModels, cfgKey = "light";
     bool cfgGpu = false;
     std::atomic<bool> quit{false};
     std::thread worker;

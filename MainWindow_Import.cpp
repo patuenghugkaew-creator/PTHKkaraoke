@@ -85,7 +85,7 @@ static bool unpackArchive(const QString &archive, const QString &dir, QString *e
 
 QStringList MainWindow::importSongs(const QStringList &files, bool quiet)
 {
-    static const QStringList archiveExts = { "zip", "rar", "7z" };
+    const QStringList &archiveExts = SongFormats::archiveExts();
     QStringList plain, tempDirs, archiveProblems;
     for (const QString &f : files) {
         const QString ext = QFileInfo(f).suffix().toLower();
@@ -160,8 +160,9 @@ QStringList MainWindow::importSongs(const QStringList &files, bool quiet)
 QStringList MainWindow::importSongsImpl(const QStringList &files, bool quiet)
 {
     QStringList ids;
-    QStringList videoExts = { "mp4", "mkv", "avi", "mpg", "mpeg", "wmv", "vob", "dat" };
     QStringList added, problems;
+    const int skippedOther = importSkippedOther;    // files of a chosen folder that are not songs
+    importSkippedOther = 0;
 
     QProgressDialog progress(tr("กำลังเพิ่มเพลง..."), tr("ยกเลิก"), 0, files.count(), dialogParent());
     progress.setWindowTitle(tr("เพิ่มเพลง"));
@@ -324,25 +325,24 @@ QStringList MainWindow::importSongsImpl(const QStringList &files, bool quiet)
             problems << fi.fileName() + tr("  (เพลง NCN ไม่ครบ: ไม่มีไฟล์ .lyr หรือ .cur)");
             continue;
         }
-        QString type, root;
-        if (videoExts.contains(ext)) {
-            type = "VIDEO";
+        // the type a file is added as: the same list as the file picker and the library scan
+        const QString type = SongFormats::typeFor(ext);
+        QString root;
+        if (type == "VIDEO") {
             root = db->videoPath();
-        } else if (ext == "mp3") {
-            type = "MP3";
+        } else if (type == "MP3") {             // MP3 and the other sound files (WAV, FLAC, M4A ...)
             root = db->mp3Path();
-        } else if (ext == "emk") {
-            type = "EMK";
+        } else if (type == "EMK") {
             root = db->ncnPath();
-        } else if (ext == "sib") {
-            type = "SIB";
-            root = db->sibPath().isEmpty() ? "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB" : db->sibPath();
-        } else if (ext == "kar" || ext == "mid" || ext == "midi") {
-            type = "KAR";
+        } else if (type == "HNK") {
+            root = db->hnkPath();
+        } else if (type == "SIB") {
+            root = sibImportFolder();
+        } else if (type == "KAR") {
             root = db->karPath();
         } else {
             if (ext != "lrc")       // a .lrc comes along with its MP3
-                problems << fi.fileName() + tr("  (ไม่รองรับชนิดไฟล์นี้)");
+                problems << fi.fileName() + tr("  (โปรแกรมเล่นไฟล์ชนิดนี้ไม่ได้)");
             continue;
         }
 
@@ -405,6 +405,7 @@ QStringList MainWindow::importSongsImpl(const QStringList &files, bool quiet)
         QString rel = dst.mid(root.length());
         db->removeSongFile(type, rel);
         bool ok = (type == "EMK") ? db->insertEMK(root, fi.completeBaseName(), dst)
+                                  : (type == "HNK") ? db->insertHNK(root, fi.completeBaseName(), dst)
                                   : (type == "SIB") ? db->insertSIB(root, fi.completeBaseName(), dst)
                                   : (type == "KAR") ? db->insertKAR(root, "-------", dst, QFileInfo(dst).fileName())
                                   : db->insertVideo(root, dst, QFileInfo(dst).fileName(), type, type == "MP3" ? "M" : "V");
@@ -431,8 +432,10 @@ QStringList MainWindow::importSongsImpl(const QStringList &files, bool quiet)
         msg += (msg.isEmpty() ? "" : "\n\n") + tr("เพิ่มไม่ได้ %1 เพลง:\n").arg(problems.count()) + problems.mid(0, 10).join("\n");
     if (problems.count() > 10)
         msg += "\n...";
-    if (msg.isEmpty())
-        msg = tr("ไม่พบไฟล์เพลงที่เพิ่มได้ในที่ที่เลือก");
+    if (skippedOther > 0)
+        msg += (msg.isEmpty() ? "" : "\n\n") + tr("ข้ามไฟล์ที่ไม่ใช่เพลง (รูป ข้อความ ฯลฯ) %1 ไฟล์").arg(skippedOther);
+    if (added.isEmpty() && problems.isEmpty() && ncnSkipped == 0 && duplicateSkipped == 0)
+        msg = tr("ไม่พบไฟล์เพลงที่เพิ่มได้ในที่ที่เลือก") + (msg.isEmpty() ? QString() : "\n\n" + msg);
     if (!added.isEmpty())
         refreshArtistCodes();
     if (!msg.isEmpty() && (!quiet || !problems.isEmpty()))
@@ -453,7 +456,11 @@ void MainWindow::showYouTubeDownload(const QString &url)
         const QStringList ids = importSongs({ file }, enqueue);
         if (!enqueue || ids.isEmpty())
             return;
+        // by its code, whatever search mode the search bar is in (lyrics / tempo don't look up codes)
+        const SearchType mode = db->currentSearchType();
+        db->setSearchType(SearchType::ById);
         Song *s = db->search(ids.first());
+        db->setSearchType(mode);
         if (!s || s->id() != ids.first())
             return;
         addToPlaylist(s);
@@ -497,12 +504,28 @@ void MainWindow::updateNewSongs()
 // ---- song transitions ------------------------------------------------------------------------
 
 
+// Where added SIB songs go: the SIB folder when it exists on this computer, else a "SIB" folder next
+// to the KAR folder (writable: under the program in a portable / own-folder install, else under Music).
+// The old code fell back to the developer's own D:/REA/SIBSIB... folder on every computer.
+QString MainWindow::sibImportFolder()
+{
+    const QString cur = db->sibPath();
+    if (!cur.isEmpty() && QDir(cur).exists())
+        return cur;
+    const QString sib = QFileInfo(QDir::fromNativeSeparators(db->karPath())).dir().absoluteFilePath("SIB");
+    db->setSibPath(sib);
+    settings->setValue("SIBPath", sib);
+    return sib;
+}
+
 // "+ เพิ่มเพลง": a whole folder of new songs (e.g. a set of NCN songs as received) or single files
 void MainWindow::showImportDialog()
 {
+    if (!requireShopUnlock(tr("เพิ่มเพลงเข้าคลัง")))
+        return;
     QMenu m(this);
     QAction *aFolder = m.addAction(tr("เลือกทั้งโฟลเดอร์ (เช่น โฟลเดอร์เพลง NCN ที่ได้มา)..."));
-    QAction *aFiles = m.addAction(tr("เลือกไฟล์เพลง (NCN / วิดีโอ / MP3 / KAR)..."));
+    QAction *aFiles = m.addAction(tr("เลือกไฟล์เพลง (NCN / EMK / SIB / HNK / KAR / วิดีโอ / เพลงเสียง)..."));
     QAction *aArchive = m.addAction(tr("เพิ่มจากไฟล์บีบอัด (.zip / .rar / .7z)..."));
     QAction *pick = m.exec(QCursor::pos());
     if (pick == nullptr)
@@ -517,23 +540,30 @@ void MainWindow::showImportDialog()
         Utils::LAST_OPEN_DIR = dir;
         QApplication::setOverrideCursor(Qt::WaitCursor);
         QDirIterator it(dir, QDir::Files, QDirIterator::Subdirectories);
+        int seen = 0;
+        importSkippedOther = 0;
         while (it.hasNext()) {
-            files << it.next();
-            if (files.size() % 2000 == 0)
+            const QString f = it.next();
+            // pictures, text, program files ... in the folder are not songs: skipped quietly, counted
+            if (SongFormats::isSongFile(QFileInfo(f).suffix()))
+                files << f;
+            else
+                importSkippedOther++;
+            if (++seen % 2000 == 0)
                 QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
         }
         QApplication::restoreOverrideCursor();
     } else if (pick == aArchive) {
         files = QFileDialog::getOpenFileNames(
                     dialogParent(), tr("เลือกไฟล์บีบอัดที่มีเพลง"), Utils::LAST_OPEN_DIR,
-                    tr("ไฟล์บีบอัด (*.zip *.rar *.7z);;ทุกไฟล์ (*)"));
+                    tr("ไฟล์บีบอัด (*.zip *.rar *.7z)"));
         if (files.isEmpty())
             return;
         Utils::LAST_OPEN_DIR = QFileInfo(files.first()).absolutePath();
     } else if (pick == aFiles) {
         files = QFileDialog::getOpenFileNames(
                     dialogParent(), tr("เลือกไฟล์เพลงที่จะเพิ่ม (เพลง NCN เลือก .mid .lyr .cur มาด้วยกัน)"), Utils::LAST_OPEN_DIR,
-                    tr("เพลงคาราโอเกะ (*.mid *.midi *.lyr *.cur *.mp4 *.mkv *.avi *.mpg *.mpeg *.wmv *.vob *.dat *.mp3 *.kar *.emk *.sib *.zip *.rar *.7z);;ไฟล์บีบอัด (*.zip *.rar *.7z);;ทุกไฟล์ (*)"));
+                    SongFormats::dialogFilter());
         if (files.isEmpty())
             return;
         Utils::LAST_OPEN_DIR = QFileInfo(files.first()).absolutePath();
@@ -551,12 +581,22 @@ void MainWindow::dragEnterEvent(QDragEnterEvent *event)
 void MainWindow::dropEvent(QDropEvent *event)
 {
     QStringList files;
+    if (!requireShopUnlock(tr("เพิ่มเพลงเข้าคลัง"))) {
+        event->ignore();
+        return;
+    }
+    importSkippedOther = 0;
     for (const QUrl &u : event->mimeData()->urls()) {
         QFileInfo fi(u.toLocalFile());
-        if (fi.isDir()) {           // a dropped folder: every file in it
+        if (fi.isDir()) {           // a dropped folder: its song files (other files skipped quietly)
             QDirIterator it(fi.absoluteFilePath(), QDir::Files, QDirIterator::Subdirectories);
-            while (it.hasNext())
-                files << it.next();
+            while (it.hasNext()) {
+                const QString f = it.next();
+                if (SongFormats::isSongFile(QFileInfo(f).suffix()))
+                    files << f;
+                else
+                    importSkippedOther++;
+            }
         } else if (fi.isFile()) {
             files << fi.absoluteFilePath();
         }

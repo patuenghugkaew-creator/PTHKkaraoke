@@ -1,5 +1,6 @@
 // MainWindow: Right-click menu, config file save/load, settings & effect dialogs, language
 #include "MainWindow_p.h"
+#include <QTabWidget>
 
 void MainWindow::showContextMenu(const QPoint &pos)
 {
@@ -221,6 +222,9 @@ void MainWindow::applyConfigLive()
             if (sfDrumMap.count() == 0)
                 sfDrumMap = synth->getDrumMapSfIndex(i);
             synth->setMapSoundfontIndex(i, sfMap, sfDrumMap);
+            const QString n = i > 0 ? QString::number(i) : QString();
+            synth->setMapSoundExtras(i, app.value("SynthSoundfontsSrc" + n).value<QList<int>>(),
+                                     app.value("SynthSoundfontsVol" + n).value<QList<int>>());
         }
     }
 
@@ -293,15 +297,44 @@ QWidget* MainWindow::dialogParent()
 
 void MainWindow::showContextMenuAt(const QPoint &globalPos)
 {
+    if (isShopLocked()) {
+        QMenu lockedMenu(tr("Context menu"), this);
+        lockedMenu.setMinimumWidth(240);
+        lockedMenu.addAction(MenuIcons::make(MenuIcons::Lock),
+                             tr("ปลดล็อกหน้าจอสำหรับร้าน\tCtrl+L"),
+                             this, [this]() { QTimer::singleShot(0, this, [this]() { toggleShopLock(); }); });
+        lockedMenu.addAction(MenuIcons::make(MenuIcons::Settings),
+                             tr("ตั้งค่าล็อกหน้าจอ / เพลงคลอเมื่อคิวว่าง..."),
+                             this, [this]() { QTimer::singleShot(0, this, [this]() { openShopModeSettings(); }); });
+        lockedMenu.addSeparator();
+        lockedMenu.addAction(MenuIcons::make(MenuIcons::Star),
+                             tr("เพลงโปรด / เล่นล่าสุด / เพลงฮิต\tF3"),
+                             this, [this]() {
+            QKeyEvent e(QEvent::KeyPress, Qt::Key_F3, Qt::NoModifier);
+            keyPressEvent(&e);
+        });
+        lockedMenu.addAction(MenuIcons::make(MenuIcons::YouTube),
+                             tr("ค้นหาเพลง YouTube\tF10"),
+                             this, [this]() { showYouTubeSearch(); });
+        lockedMenu.addAction(MenuIcons::make(MenuIcons::Fullscreen),
+                             tr("เต็มจอ / หน้าต่างปกติ"),
+                             this, [this]() { showFullScreenOrNormal(); });
+        lockedMenu.addAction(MenuIcons::make(MenuIcons::Help),
+                             tr("คู่มือการใช้งาน / ปุ่มลัด\tF1"),
+                             this, [this]() { showHelpDialog(); });
+        lockedMenu.exec(globalPos);
+        return;
+    }
+
     QMenu menu(tr("Context menu"), synthMix);
     menu.setMinimumWidth(230);
 
     QAction actionSettings(tr("ตั้งค่า..."), this);
-    QAction actionMappChanel(tr("แยกช่องสัญญาณ..."), this);
+    QAction actionMappChanel(tr("แยกเสียงมิดี้ (MIDI Mapper / loopMIDI)..."), this);
     QAction actionShowEqDlg(tr("อีควอไลเซอร์"), this);
     QAction actionShowChorusDlg(tr("เอฟเฟ็กต์เสียงประสาน"), this);
     QAction actionShowReverbDlg(tr("เอฟเฟ็กต์เสียงก้อง"), this);
-    QAction actionMapSF(tr("ตารางเลือกใช้ซาวด์ฟ้อนท์..."), this);
+    QAction actionMapSF(tr("มัลติซาวด์ฟอนต์ (เลือกเสียงรายเครื่องดนตรี / ส่งออก-นำเข้าชุดเสียง)..."), this);
     QAction actionAbout(tr("เกี่ยวกับ..."), this);
     QAction actionAboutQt(tr("เกี่ยวกับ Qt..."), this);
     QAction actionExit(tr("ออกจากโปรแกรม"), this);
@@ -400,6 +433,9 @@ void MainWindow::showContextMenuAt(const QPoint &globalPos)
     // ---- Layout: what is used while singing, then one sub-menu per topic, then settings / help.
     // Things with a button on the control bar (drum hold, mixer, add song...) are not repeated here.
     MidiSynthesizer *syn = player->midiSynthesizer();
+    // simple menu (the default): the everyday things; the sound engineer's tools (effects, sound
+    // fonts, routing, VST, config files, DMX) come back with "เมนูแบบง่าย" unticked
+    const bool simple = simpleMenu();
     actionSettings.setIcon(MenuIcons::make(MenuIcons::Settings));
     actionMappChanel.setIcon(MenuIcons::make(MenuIcons::Channel));
     actionMapSF.setIcon(MenuIcons::make(MenuIcons::Soundfont));
@@ -450,6 +486,11 @@ void MainWindow::showContextMenuAt(const QPoint &globalPos)
         m->addSeparator();
         m->addAction(&actionNewSongs);
         m->addAction(&actionQuickUpdate);
+        m->addSeparator();
+        m->addAction(MenuIcons::make(MenuIcons::Download), tr("สร้างไดรฟ์พกพา (USB / External HD) พร้อมเพลงและค่าตั้ง..."), this, [this]() {
+            QTimer::singleShot(0, this, [this]() { openPortableDrive(); });
+        });
+        if (!simple) {
         m->addAction(MenuIcons::make(MenuIcons::Search), tr("ค้นหาเพลงซ้ำ (ชื่อ นักร้อง ความเร็วเดียวกัน)..."), this, [this]() {
             QTimer::singleShot(0, this, [this]() {
                 DuplicateSongsDialog dlg(db, dialogParent());
@@ -460,6 +501,7 @@ void MainWindow::showContextMenuAt(const QPoint &globalPos)
         m->addSeparator();
         m->addAction(&actionVideoDir);
         m->addAction(&actionMp3Dir);
+        }
     }
 
     { // YouTube
@@ -486,9 +528,31 @@ void MainWindow::showContextMenuAt(const QPoint &globalPos)
         m->addAction(MenuIcons::make(MenuIcons::Transition), tr("การต่อเพลง (เฟดเสียง / ตัดท้ายเพลง)..."), this, [this]() { showTransitionDialog(); });
     }
 
+    { // Sound pads / sound effects: Alt + 1..9, the on-screen panel, the shop's own sound files
+        QMenu *m = menu.addMenu(MenuIcons::make(MenuIcons::Drum), tr("แป้นเสียงเชียร์ / เสียงเอฟเฟกต์"));
+        m->addAction(tr("เสียงพิธีการ / เอฟเฟกต์ (เชิญประธาน เพลงชาติ ปรบมือ ...)  ปุ่ม อื่น ๆ"), this, [this]() {
+            QTimer::singleShot(0, this, [this]() { openEventSounds(); });
+        });
+        m->addSeparator();
+        m->addAction(tr("เพิ่มเสียงเอฟเฟกต์ (ใส่ไฟล์เสียงของร้าน)..."), this, [this]() {
+            QTimer::singleShot(0, this, [this]() { openSoundFxManager(); });
+        });
+        QAction *show = m->addAction(tr("แสดงแถบปุ่มแป้นเสียงบนจอ"));
+        show->setCheckable(true);
+        show->setChecked(padsPanel && padsPanel->isVisible());
+        connect(show, &QAction::triggered, this, [this](bool v) { showSoundPadsPanel(v); });
+        m->addAction(tr("ตั้งค่าแป้นเสียง..."), this, [this]() {
+            QTimer::singleShot(0, this, [this]() { openSoundPadsSettings(); });
+        });
+        m->addSeparator();
+        QAction *keys = m->addAction(tr("Alt + 1..9 = เล่น/หยุด  •  Alt + 0 = ชุดถัดไป  •  Alt + Backspace = หยุดทั้งหมด"));
+        keys->setEnabled(false);
+    }
+
     { // Sound and mixer
         QMenu *m = menu.addMenu(MenuIcons::make(MenuIcons::Eq), tr("เสียงและมิกเซอร์"));
         m->addAction(&actionShowMixer);
+        if (!simple) {
         m->addAction(&actionMixerAtStart);
         QAction *topAct = m->addAction(tr("มิกเซอร์อยู่บนสุดตลอดเวลา (On Top)"));
         topAct->setCheckable(true);
@@ -496,6 +560,7 @@ void MainWindow::showContextMenuAt(const QPoint &globalPos)
         connect(topAct, &QAction::triggered, this, [this](bool on) {
             QMetaObject::invokeMethod(synthMix, "setStaysOnTop", Q_ARG(bool, on));
         });
+        }
         m->addSeparator();
 
         // effect pictograms: neon green when the effect is on, dimmed when off
@@ -506,14 +571,49 @@ void MainWindow::showContextMenuAt(const QPoint &globalPos)
         actionShowChorusDlg.setIcon(fxIcon(MenuIcons::Chorus, syn->chorusFXs()[0]->isOn()));
         actionShowReverbDlg.setIcon(fxIcon(MenuIcons::Reverb, syn->reverbFXs()[0]->isOn()));
         m->addAction(&actionShowEqDlg);
-        m->addAction(&actionShowChorusDlg);
-        m->addAction(&actionShowReverbDlg);
-        QAction *actMaster = m->addAction(MenuIcons::make(MenuIcons::AiSparkle), tr("มาสเตอริ่งเสียง (Mastering Suite)..."));
-        connect(actMaster, &QAction::triggered, this, [this]() {
-            MasteringDialog dlg(dialogParent(), player->midiSynthesizer());
-            dlg.exec();
-        });
-        {
+        if (!simple) {
+            m->addAction(&actionShowChorusDlg);
+            m->addAction(&actionShowReverbDlg);
+            QAction *actMaster = m->addAction(MenuIcons::make(MenuIcons::AiSparkle), tr("มาสเตอริ่งเสียง (Mastering Suite)..."));
+            connect(actMaster, &QAction::triggered, this, [this]() {
+                MasteringDialog dlg(dialogParent(), player->midiSynthesizer());
+                dlg.exec();
+            });
+        }
+        if (audioMeter) {   // "เสียงใส" for YouTube / video / MP3 (Midi/AudioClarity.h)
+            QAction *clear = m->addAction(tr("เสียงใส (เพลง YouTube / วิดีโอ / MP3)"));
+            clear->setCheckable(true);
+            clear->setChecked(audioMeter->isClear());
+            clear->setToolTip(tr("เติมเสียงแหลมที่ไฟล์คุณภาพต่ำตัดหายไป เพิ่มความใส ลดเสียงอู้ ไม่มีผลกับเพลง MIDI"));
+            connect(clear, &QAction::triggered, this, [this](bool v) {
+                audioMeter->setClear(v);
+                settings->setValue("AudioClear", v);
+            });
+        }
+        {   // same loudness for every song (MIDI / MP3 / video / YouTube); Alt + Up / Down per song
+            QMenu *lv = m->addMenu(tr("ความดังทุกเพลงเท่ากัน"));
+            QAction *on = lv->addAction(tr("เปิดใช้ (Alt + ↑ / ↓ ปรับเฉพาะเพลงที่เล่นอยู่)"));
+            on->setCheckable(true);
+            on->setChecked(songLevelOn);
+            connect(on, &QAction::triggered, this, [this](bool v) { setSongLevelOn(v); });
+            lv->addSeparator();
+            QActionGroup *grp = new QActionGroup(lv);
+            const struct { double lufs; const char *name; } levels[] = {
+                { -20.0, QT_TR_NOOP("เบา (-20 LUFS)") },
+                { -18.0, QT_TR_NOOP("ค่อนข้างเบา (-18 LUFS)") },
+                { -16.0, QT_TR_NOOP("ปกติ (-16 LUFS)") },
+                { -14.0, QT_TR_NOOP("ดัง (-14 LUFS)") },
+            };
+            for (const auto &l : levels) {
+                QAction *a = lv->addAction(tr(l.name));
+                a->setCheckable(true);
+                a->setChecked(qAbs(songLevelTarget - l.lufs) < 0.05);
+                grp->addAction(a);
+                const double target = l.lufs;
+                connect(a, &QAction::triggered, this, [this, target]() { setSongLevelTarget(target); });
+            }
+        }
+        if (!simple) {
             QMenu *sf = m->addMenu(MenuIcons::make(MenuIcons::Soundfont), tr("ซาวด์ฟอนต์"));
             sf->addAction(&actionMapSF);
             QAction *actLockSf = sf->addAction(MenuIcons::make(MenuIcons::Lock), tr("ล็อก Soundfont (.kmsf)..."));
@@ -522,13 +622,32 @@ void MainWindow::showContextMenuAt(const QPoint &globalPos)
                 dlg.exec();
             });
         }
-        QAction *drumAct = m->addAction(tr("ตัดคำสั่งจูนเสียงกลอง/สแนร์ (ช่อง 10)"));
-        drumAct->setCheckable(true);
-        drumAct->setChecked(syn->isIgnoreDrumPitch());
-        connect(drumAct, &QAction::triggered, this, [this](bool on) {
-            player->midiSynthesizer()->setIgnoreDrumPitch(on);
-            settings->setValue("IgnoreDrumPitch", on);
-        });
+        if (!simple) {
+            QAction *drumAct = m->addAction(tr("ตัดคำสั่งจูนเสียงกลอง/สแนร์ (ช่อง 10)"));
+            drumAct->setCheckable(true);
+            drumAct->setChecked(syn->isIgnoreDrumPitch());
+            connect(drumAct, &QAction::triggered, this, [this](bool on) {
+                player->midiSynthesizer()->setIgnoreDrumPitch(on);
+                settings->setValue("IgnoreDrumPitch", on);
+            });
+        }
+        if (!simple || isMidiRoutedOut()) {   // the way out when MIDI routing to loopMIDI etc. left the songs silent
+            QAction *reset = m->addAction(MenuIcons::make(MenuIcons::Channel),
+                                          tr("เสียงมิดี้ไม่ออก? คืนทุกช่องเป็นเสียงในโปรแกรม (SoundFont)"));
+            reset->setEnabled(isMidiRoutedOut());
+            connect(reset, &QAction::triggered, this, [this]() {
+                if (QMessageBox::question(dialogParent(), tr("คืนเป็นเสียงในโปรแกรม"),
+                        tr("ให้ทุกเครื่องดนตรี ทุกช่อง และมิดี้ขาออกหลัก กลับมาเล่นจากซาวด์ฟอนต์ในโปรแกรม?\n"
+                           "(การส่งออก loopMIDI / โปรแกรมอื่นจะถูกยกเลิกทั้งหมด มิดี้ขาเข้าไม่เปลี่ยน)"))
+                        != QMessageBox::Yes)
+                    return;
+                resetMidiRoutingToSoundfont();
+                ui->detail->setDetail(tr("คืนเป็นเสียงในโปรแกรมแล้ว"), tr("ทุกเครื่องดนตรีเล่นจากซาวด์ฟอนต์"));
+                ui->detail->show();
+                detailTimer->start(4000);
+            });
+        }
+        if (!simple) {
         m->addSeparator();
 
         {   // routing and hardware: set up once, rarely touched
@@ -556,6 +675,7 @@ void MainWindow::showContextMenuAt(const QPoint &globalPos)
         connect(saveCfg, &QAction::triggered, this, [this]() { saveConfigFile(); });
         QAction *openCfg = m->addAction(MenuIcons::make(MenuIcons::Open), tr("เปิดคอนฟิก (Open config)..."));
         connect(openCfg, &QAction::triggered, this, [this]() { openConfigFile(); });
+        }
     }
 
     { // Screen
@@ -582,8 +702,50 @@ void MainWindow::showContextMenuAt(const QPoint &globalPos)
                 applyCornerDisplay();
             });
         }
+        {   // the karaoke maker's name at the start of songs ("เต่า คาราโอเกะ", "SIB KARAOKE")
+            QAction *br = m->addAction(tr("ชื่อผู้ทำคาราโอเกะตอนต้นเพลง แสดงเป็น PTHK KARAOKE (ซ่อนเบอร์โทร)"));
+            br->setCheckable(true);
+            br->setChecked(settings->value("Lyrics/BrandOn", true).toBool());
+            br->setToolTip(tr("เช่น \"......เต่า คาราโอเกะ......\" หรือ \"SIB KARAOKE\" ในเนื้อร้อง  มีผลตั้งแต่เพลงถัดไป"));
+            connect(br, &QAction::triggered, this, [this](bool on) {
+                settings->setValue("Lyrics/BrandOn", on);
+                LyricsWidget::brandText() = on ? settings->value("Lyrics/BrandText", "PTHK KARAOKE").toString() : QString();
+            });
+        }
         m->addAction(MenuIcons::make(MenuIcons::Video), tr("พื้นหลัง (สี / รูปภาพ / สไลด์ภาพ / วิดีโอ)..."), this,
                      [this]() { QTimer::singleShot(0, this, [this]() { showSettingsDialog(); }); });
+        {   // scrolling text: the shop's messages and the next songs (top edge of both screens)
+            QAction *tk = m->addAction(tr("แสดงข้อความวิ่ง"));
+            tk->setCheckable(true);
+            tk->setChecked(settings->value("Ticker/On", false).toBool());
+            connect(tk, &QAction::triggered, this, [this](bool on) {
+                settings->setValue("Ticker/On", on);
+                updateTicker();
+            });
+            m->addAction(tr("ตั้งค่าข้อความวิ่ง (ข้อความ / เพลงถัดไป / สี)..."), this,
+                         [this]() { QTimer::singleShot(0, this, [this]() { openTickerSettings(); }); });
+        }
+        m->addSeparator();
+        {   // screen lock for shops & idle background music
+            QAction *lk = m->addAction(MenuIcons::make(MenuIcons::Lock), tr("ล็อกหน้าจอสำหรับร้าน\tCtrl+L"));
+            lk->setCheckable(true);
+            lk->setChecked(isShopLocked());
+            connect(lk, &QAction::triggered, this, [this]() {
+                QTimer::singleShot(0, this, [this]() { toggleShopLock(); });
+            });
+            QAction *idOn = m->addAction(tr("เปิดเพลงคลออัตโนมัติเมื่อคิวว่าง"));
+            idOn->setCheckable(true);
+            idOn->setChecked(settings->value("IdleMusic/On", false).toBool());
+            connect(idOn, &QAction::triggered, this, [this](bool on) {
+                settings->setValue("IdleMusic/On", on);
+                if (!on && idlePlaying)
+                    stop();
+                idleClock.restart();
+                updateBarStatus();
+            });
+            m->addAction(tr("ตั้งค่าล็อกหน้าจอ / เพลงคลอเมื่อคิวว่าง..."), this,
+                         [this]() { QTimer::singleShot(0, this, [this]() { openShopModeSettings(); }); });
+        }
         m->addSeparator();
         {
             QMenu *ms = m->addMenu(MenuIcons::make(MenuIcons::Fullscreen), tr("ขนาดเมนู"));
@@ -637,17 +799,29 @@ void MainWindow::showContextMenuAt(const QPoint &globalPos)
         connect(act, SIGNAL(triggered()), this, SLOT(showRemoteDialog()));
         m->addAction(MenuIcons::make(MenuIcons::QrCode), tr("ขอเพลงจากมือถือ (QR ลูกค้า / เจ้าของ)..."),
                      this, [this]() { showSongRequestDialog(); });
-        m->addSeparator();
-        m->addAction(&actionDmx);
+        if (!simple) {
+            m->addSeparator();
+            m->addAction(&actionDmx);
+        }
     }
 
     // ---- settings, help, about
     menu.addSeparator();
+    menu.addAction(MenuIcons::make(MenuIcons::Lock),
+                   tr("ล็อกหน้าจอสำหรับร้าน / เพลงคลอเมื่อคิวว่าง...\tCtrl+L"),
+                   this, [this]() { QTimer::singleShot(0, this, [this]() { openShopModeSettings(); }); });
     menu.addAction(&actionSettings);
     QAction *helpAct = menu.addAction(MenuIcons::make(MenuIcons::Help), tr("คู่มือการใช้งาน / ปุ่มลัด\tF1"));
     connect(helpAct, &QAction::triggered, this, [this]() { showHelpDialog(); });
     menu.addAction(MenuIcons::make(MenuIcons::Download), tr("ตรวจหาอัปเดต..."), this, [this]() { showCheckUpdateDialog(); });
     menu.addAction(&actionAbout);
+    {
+        QAction *sm = menu.addAction(tr("เมนูแบบง่าย (ซ่อนเครื่องมือช่างเสียง)"));
+        sm->setToolTip(tr("ซ่อน: เอฟเฟกต์ประสาน/ก้อง มาสเตอริ่ง ซาวด์ฟอนต์ VST บัส แยกเสียงมิดี้ คอนฟิก ไฟ DMX\nเอาติ๊กออกเพื่อแสดงทั้งหมด"));
+        sm->setCheckable(true);
+        sm->setChecked(simple);
+        connect(sm, &QAction::triggered, this, [this](bool on) { settings->setValue("Menu/Simple", on); });
+    }
     menu.addSeparator();
     menu.addAction(&actionExit);
 
@@ -691,6 +865,8 @@ void MainWindow::showContextMenuAt(const QPoint &globalPos)
 
 void MainWindow::showSettingsDialog()
 {
+    if (!requireShopUnlock(tr("ตั้งค่าระบบ")))
+        return;
     SettingsDialog d(dialogParent(), this);
     d.setModal(true);
     d.adjustSize();
@@ -705,7 +881,67 @@ void MainWindow::showSettingsDialog()
         }
     }
     d.setMinimumSize(d.size());
+    if (settingsStartTab >= 0) {
+        if (QTabWidget *tabs = d.findChild<QTabWidget *>("tabWidget"))
+            tabs->setCurrentIndex(qBound(0, settingsStartTab, tabs->count() - 1));
+        settingsStartTab = -1;
+    }
     d.exec();
+}
+
+// A new install with no songs in the library: what to do first, in three buttons
+// (shown a few seconds after the start; "ไม่ต้องแสดงอีก" keeps it away for good).
+void MainWindow::showFirstRunGuide()
+{
+    if (settings->value("FirstRun/Hide", false).toBool() || !db || db->isRunning() || db->hasAnySong())
+        return;
+    if (isShopLocked() || QApplication::activeModalWidget())
+        return;
+    QDialog dlg(dialogParent());
+    dlg.setWindowTitle(tr("ยินดีต้อนรับสู่ PTHK Karaoke"));
+    QVBoxLayout *l = new QVBoxLayout(&dlg);
+    QLabel *head = new QLabel(tr("<h2>ยังไม่มีเพลงในคลัง</h2>"
+        "<p>เลือกวิธีเริ่มต้นได้เลย (ทำทีหลังได้จาก <b>คลิกขวา › ตั้งค่า › ฐานข้อมูลเพลง</b> หรือปุ่ม <b>เพิ่มเพลง</b>)</p>"), &dlg);
+    head->setWordWrap(true);
+    l->addWidget(head);
+    auto big = [&dlg, l](const QString &text) {
+        QPushButton *b = new QPushButton(text, &dlg);
+        b->setMinimumHeight(52);
+        QFont f = b->font();
+        f.setPointSizeF(f.pointSizeF() * 1.15);
+        b->setFont(f);
+        b->setStyleSheet("text-align: left; padding: 6px 14px;");
+        l->addWidget(b);
+        return b;
+    };
+    QPushButton *lib = big(tr("1.  มีคลังเพลงคาราโอเกะในเครื่องอยู่แล้ว (NCN / EMK / SIB / วิดีโอ)\n"
+                              "     → ชี้โฟลเดอร์คลังเพลง แล้วกด \"ปรับปรุง\""));
+    QPushButton *add = big(tr("2.  เพิ่มเพลงทีละไฟล์ หรือทั้งโฟลเดอร์ (mp4 / mp3 / kar / zip ...)\n"
+                              "     → ลากไฟล์มาวางบนจอก็ได้"));
+    QPushButton *yt  = big(tr("3.  ร้องจาก YouTube ไปก่อน (ต้องต่ออินเทอร์เน็ต)  F10"));
+    QCheckBox *never = new QCheckBox(tr("ไม่ต้องแสดงหน้านี้อีก"), &dlg);
+    l->addSpacing(6);
+    l->addWidget(never);
+    QDialogButtonBox *bb = new QDialogButtonBox(QDialogButtonBox::Close, &dlg);
+    bb->button(QDialogButtonBox::Close)->setText(tr("ปิด"));
+    l->addWidget(bb);
+    int choice = 0;
+    connect(lib, &QPushButton::clicked, &dlg, [&]() { choice = 1; dlg.accept(); });
+    connect(add, &QPushButton::clicked, &dlg, [&]() { choice = 2; dlg.accept(); });
+    connect(yt,  &QPushButton::clicked, &dlg, [&]() { choice = 3; dlg.accept(); });
+    connect(bb, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    dlg.exec();
+    if (never->isChecked())
+        settings->setValue("FirstRun/Hide", true);
+    setFocus();
+    if (choice == 1) {
+        settingsStartTab = 2;               // "ฐานข้อมูลเพลง"
+        showSettingsDialog();
+    } else if (choice == 2) {
+        showImportDialog();
+    } else if (choice == 3) {
+        showYouTubeSearch();
+    }
 }
 
 void MainWindow::showRemoteDialog()
@@ -767,11 +1003,7 @@ void MainWindow::showReverbDialog()
 
 void MainWindow::showMapMidiChannelDialog()
 {
-    MapChannelDialog dlg(dialogParent(), player);
-    dlg.setModal(true);
-    dlg.adjustSize();
-    dlg.setMinimumSize(dlg.size());
-    dlg.exec();
+    showMidiMapper();       // the MIDI Mapper replaced the old channel table
 }
 
 void MainWindow::showBusGroupDialog()
@@ -995,6 +1227,11 @@ void MainWindow::setBackgroundVideoFolder(const QString &dir)
     }
 }
 
+bool MainWindow::simpleMenu() const
+{
+    return settings->value("Menu/Simple", true).toBool();
+}
+
 void MainWindow::fitControlBar()
 {
     QLayout *bar = ui->frameControl->layout();
@@ -1007,7 +1244,7 @@ void MainWindow::fitControlBar()
         b->setProperty("barOverflow", false);
         b->show();
     }
-    btnBarMore->hide();
+    btnBarMore->show();                     // always there: it holds the event sounds too
     auto need = [&]() {
         bar->invalidate();
         bar->activate();
@@ -1016,7 +1253,6 @@ void MainWindow::fitControlBar()
     const int avail = ui->frameControl->width();
     int hidden = 0;
     if (need() > avail) {
-        btnBarMore->show();
         for (QAbstractButton *b : barButtons) {
             if (need() <= avail)
                 break;
@@ -1037,10 +1273,9 @@ void MainWindow::minimizeWindow()
 
 void MainWindow::showMapSFDialog()
 {
-    MapSoundfontDialog msfDlg(dialogParent(), player->midiSynthesizer());
-    msfDlg.setModal(true);
-    msfDlg.setMinimumSize(msfDlg.size());
-    msfDlg.exec();
+    MultiSoundfontDialog dlg(dialogParent(), player->midiSynthesizer());
+    dlg.exec();
+    setFocus();
 }
 
 void MainWindow::showSecondMonitor()

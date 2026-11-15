@@ -16,6 +16,7 @@ class VocalRemover;
 #include <QLabel>
 #include <QPushButton>
 #include <QElapsedTimer>
+#include <QSet>
 #include <functional>
 #include <deque>
 #include <QImage>
@@ -64,6 +65,22 @@ public:
     ~MainWindow();
 
     SongDatabase* database() { return db; }
+
+    // MIDI routing by port name (MainWindow_Midi.cpp). Applied now and every 2 s: ports that show up
+    // later (loopMIDI started after PTHK) are connected then, and a missing port is never forgotten.
+    struct MidiRoute { QString port; bool dual = false; };   // port: "" = follow the main out, midiSynthPortKey() = SoundFont
+    static QString midiSynthPortKey();
+    QString midiOutWant() const;
+    void setMidiOutWant(const QString &name);
+    QString midiInWant() const;
+    void setMidiInWant(const QString &name);
+    MidiRoute midiChannelWant(int ch) const;
+    void setMidiChannelWant(int ch, const MidiRoute &r);
+    void applyMidiRouting();
+    void showMidiMapper();              // "แยกเสียงมิดี้ (MIDI Mapper)" window
+    bool isMidiRoutedOut();             // anything set to go to an external port
+    void resetMidiRoutingToSoundfont(); // everything back to the SoundFont (MIDI in is kept)
+    void saveSynthMixerSettings();
     MidiPlayer* midiPlayer() { return player; }
     Background *backgroundWidget() { return bgWidget; }
     void showSlideshowDialog();         // background slideshow settings (MainWindow_Menu.cpp)
@@ -125,6 +142,43 @@ public:
     QString ytFetchId;                          // the YouTube song being downloaded
     bool ytFetchOnline = false;                 // playing online while its copy downloads (no cut until the AI is ready)
     int ytFetchPct = 0;                         // download progress of that copy
+    // Picture size of the copy by the internet speed (the AI needs the sound only; a 720p picture
+    // took 1.5-3 min at 150-280 KB/s, measured 2026-11-14): the speed of each download is
+    // remembered (setting YtNetSpeedKB) and the next copy is 720p / 480p / 360p by it.
+    double ytFetchSpeedSum = 0;                 // speed samples of the download (bytes/s)
+    int ytFetchSpeedN = 0;
+    // waiting = the song waits for this copy (or plays online meanwhile): a small picture, there
+    // in ~15 s; not waiting = a queued song with time to spare: a better picture
+    int ytCopyHeight(bool waiting);
+    int ytFetchHeight = 0;                      // picture height of the copy downloading now
+    void ytRememberSpeed(double kbps);
+    bool ytFetchConverting = false;             // its sound is being made into AAC (YtTools::convertForWindows)
+    QString ytFetchTemp;                        // the .mkv being converted (removed when cancelled)
+    void ytCopyReady(const QString &id, const QString &file);
+    // The copy is ready but the song goes on online (no break): the AI separates the copy from where
+    // the song is, and playing moves to the copy only when the cut is on and the AI is ready there.
+    QString ytCopyPending;
+    QString ytFetchError;                       // yt-dlp's last ERROR line (for the log)
+    void ytFetchGaveUp(const QString &why);     // no copy for this song: the online cut works again
+    // yt-dlp + sound conversion of one clip into the YouTube folder (one at a time: ytFetch); done ->
+    // ytCopyReady, failed -> ytFetchGaveUp. Used for the playing song and for songs in the queue.
+    void startYtFetch(const QString &id, bool waiting = true);
+    // "Wait until ready": a YouTube song with the cut on and no AI sound yet does not play online; it
+    // waits (progress on the cut button and in the detail box) for its copy and the AI's first seconds,
+    // then plays from the copy, cut from the first note. Too slow (2 min) / failed: online as before.
+    QString ytPrepId, ytPrepFile;
+    QElapsedTimer ytPrepClock;
+    int ytPrepPct = 0;
+    bool ytSkipPrepOnce = false;
+    void startYtPrep(const QString &id, const QString &file);
+    void ytPrepTick();
+    void ytPrepGiveUp(const QString &why);
+    bool aiReadyAtStart(const QString &file);
+    // songs in the queue are prepared while others play: their copies downloaded, their AI made
+    QSet<QString> ytPrefetchFailed;
+    void ytQueueTick();
+    bool ytCopyAiReadyAt(qint64 ms, int *percent);  // the AI of that copy at a play position
+    void ytCopyPendingTick();
     bool aiPrepareVideo() const;                // the AI separates the playing video song now
     void updateCutButton();                     // the cut button shows whether the AI cut is ready
     void applyCornerDisplay();                  // clock / beat box shown or hidden (settings)
@@ -133,6 +187,33 @@ public:
     void fitQueue();                            // the queue: at the left, as tall as its songs
     void updateBarStatus();                     // the bar: song line, play / pause, key, drum hold, AI ring
     void changeSongKey(int step);               // key down / up for any kind of song
+    // per-song key / speed, remembered automatically (song_prefs in the song database)
+    void applyRememberedPrefs(Song *s);         // a song entering the queue: its remembered key / speed
+    int  rememberedKey();                       // the playing song's key: its own, else the remembered one
+    void rememberPlayingKey(int transpose);
+    void rememberPlayingSpeed(int bpmSpeed);
+    // same loudness for every song (Midi/SongLevel.h; MainWindow_Audio.cpp)
+    void startSongLevel();                      // a song starts: its gain from its measured loudness + its own dB
+    void finishSongLevel();                     // it ends: a first measurement during play is remembered
+    void changeSongLevel(double stepDb);        // Alt + Up / Down: this song louder / quieter (remembered)
+    void measureSongFile(Song *s);              // a video / MP3 song queued: measured in the background
+    void onSongFileMeasured(const QString &type, const QString &path, double lufs);
+    void applySongLevelGain(double glideMs);
+    double autoLevelDbFor(double lufs) const;
+    void setSongLevelOn(bool on);
+    void setSongLevelTarget(double lufs);
+    // sound pads ("แป้นเสียงเชียร์", Midi/SoundPads.h): Alt + 1..9 and the on-screen panel
+    void ensureSoundPads();
+    void triggerSoundPad(int index);
+    void nextSoundBank();                       // Alt + 0
+    void stopAllSoundPads();                    // Alt + Backspace
+    void showSoundPadsPanel(bool show);
+    void openSoundPadsSettings();
+    void openSoundFxManager();                  // "เพิ่มเสียงเอฟเฟกต์": the shop's own sound files
+    // scrolling text ("ข้อความวิ่ง", Widgets/TickerBar.h): the shop's messages + the next songs
+    void updateTicker();
+    void openTickerSettings();
+    QString tickerText();
     bool songIsRunning();                       // a song plays (not paused, not stopped)
     void startSibBackfill();
     // automatic update (GitHub Releases)
@@ -323,6 +404,22 @@ private:
     bool aiCutNoticeShown = false;              // "AI is preparing" shown for this song
     class AiStemMaker *aiStems = nullptr;       // background AI separation of video songs
     class SibBackfill *sibFill = nullptr;
+    // "ค้นจากเนื้อร้อง" (LyricsIndex.h): the index builder, and the search running in the background
+    class LyricsIndex *lyricsIndex = nullptr;
+    QTimer *lyricsSearchTimer = nullptr;        // waits for a pause in the typing
+    class QThreadPool *lyricsPool = nullptr;
+    int lyricsSearchGen = 0;                    // only the newest search's answer is shown
+    QString lyricsSearchText;
+    class SearchModeChips *searchChips = nullptr;
+    class SearchResultsList *searchResults = nullptr;
+    QString searchFooter;
+    void setSearchMode(SearchType mode);
+    void updateSearchResults();
+    void startLyricsIndex();
+    void searchLyricsLater(const QString &text, bool quiet = false);
+    void onLyricsFound(const QString &text, const QVector<qint64> &rows, qint64 ms);
+    void showSearchMessage(const QString &msg);
+    QString lyricsDbPath() const;
     class AudioBandMeter *audioMeter = nullptr;  // audio songs' levels for the synth mixer       // fills SIB lyrics preview / tempo in the background
     int   videoPitch = 0;
 
@@ -375,16 +472,77 @@ private:
     QElapsedTimer afterLyricsClock;
     int midiBaseVolume = -1;
 #endif
+    // same loudness for every song (see startSongLevel)
+    bool songLevelOn = true;                // settings "SongLevelOn"
+    double songLevelTarget = -16.0;         // LUFS, settings "SongLevelTarget"
+    QTimer *songLevelTimer = nullptr;       // first play: sets the gain once ~10 s of music was heard
+    QString levelType, levelPath;           // the song being measured
+    bool levelKnown = false;                // its loudness came from the database / its file
+    bool levelAdjusted = false;             // measured while playing, gain set
+    double levelAutoDb = 0.0;               // from its loudness
+    double levelOffsetDb = 0.0;             // the operator's own (Alt + Up / Down)
+    QSet<QString> levelMeasuring;           // "type|path" files being measured
+    class QThreadPool *levelPool = nullptr;
+    class SoundPads *soundPads = nullptr;
+    class SoundPadsPanel *padsPanel = nullptr;
+    QPointer<class TickerBar> tickerMain, tickerSecond;    // the 2nd one goes with the 2nd screen
+    QTimer *tickerTimer = nullptr;
     class BarButton *btnMuteVocal = nullptr;
     class BarButton *btnPlayPause = nullptr;
     class BarButton *btnDrumHold = nullptr;
     class KeyControl *keyControl = nullptr;
+    class KeyControl *tempoControl = nullptr;    // "ความเร็ว −/+" (MIDI songs)
+    void changeSongTempo(int step);
+    void openSearchBox();                        // the search button / arrow keys: open an empty search
+    void pickSearchRow(int row, bool add);       // a click on the search results list
+    int searchListFrom = 0;                      // result index of the list's first row
+    void openPortableDrive();                    // "สร้างไดรฟ์พกพา" (Dialogs/PortableDriveDialog.h)
+    void openEventSounds();                      // "เสียงพิธีการ / เอฟเฟกต์" (the bar's "อื่น ๆ")
+    void showFirstRunGuide();                    // no songs yet: where to start
+    int settingsStartTab = -1;                   // the next settings dialog opens on this tab
+    bool simpleMenu() const;                     // right-click menu without the sound engineer's tools
     QLabel *barTitle = nullptr;                  // the bar's song line
     QLabel *barMeta = nullptr;
     bool cutWaiting = false;                     // the AI cut is not ready yet (ring on the cut button)
     class BarButton *btnMedley = nullptr;
     class BarButton *btnSecondScreen = nullptr;
     class BarButton *btnSubtitles = nullptr;
+    class BarButton *btnShopLock = nullptr;
+
+    // Screen lock for shops + automatic idle background music (see Dialogs/ShopModeDialog.h)
+    QTimer *idleTimer = nullptr;
+    QElapsedTimer idleClock;
+    bool idlePlaying = false;
+    bool idleSwitching = false;
+    QString lastIdlePath;
+    class IdleSmart *idleSmart = nullptr;       // smart idle music (IdleSmart.h, IdleMusic/Source 4)
+    QString idleSeedKey;                        // the customer song the smart idle music follows now
+    // idle music keeps its singer (IdleMusic/KeepVocal) until the operator presses the vocal cut
+    // during it: then the cut button rules again (until the next song)
+    bool idleVocalByUser = false;
+    bool keepIdleVocal() const;
+    int importSkippedOther = 0;         // non-song files of a chosen / dropped folder (MainWindow_Import.cpp)
+    QString sibImportFolder();
+    // Is YouTube reachable? Checked in the background (checkYouTubeOnline: every minute, every 20 s
+    // while it is not). Without it idle music plays library songs: a YouTube clip would wait 25 s on a
+    // black screen before it is skipped.
+    bool ytOnline = true;
+    bool ytOnlineChecking = false;
+    QElapsedTimer ytOnlineClock;
+    void checkYouTubeOnline();
+    // medley rules (locked tempo, intro / outro cut, bridge) for the song playing now: not idle music,
+    // which plays at its own tempo, whole, with a fade-in
+    bool songInMedley();
+    bool isShopLocked() const;
+    bool isShopStrictLocked() const;
+    bool requireShopUnlock(const QString &actionName = QString());
+    void notifyShopStrictLocked(const QString &actionName);
+    void toggleShopLock();
+    void openShopModeSettings();
+    void updateShopLockUi();
+    void checkIdleMusic();
+    bool pickIdleSong(Song *out);
+    void startNextIdleSong();
     SongDatabase *db;
     QTimer *timer1, *timer2, *positionTimer, *lyricsTimer;
     QTimer *detailTimer;
@@ -418,7 +576,7 @@ private:
 //    QString bgImg = "", bgColor = "#525252";
     bool remove_playlist = true;
     bool auto_playnext = true;
-    int search_timeout = 5000;
+    int search_timeout = 15000;
     int playlist_timeout = 5000;
     int songDetail_timeout = 4000;
 

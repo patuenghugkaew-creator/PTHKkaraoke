@@ -82,6 +82,8 @@
 #include "FXDialogs/EQ15BandDialog.h"
 #include "FXDialogs/EQ31BandDialog.h"
 #include "FXDialogs/ReverbFXDialog.h"
+#include "Midi/AudioBandMeter.h"
+#include "Midi/FaderTaper.h"
 
 #ifndef __linux__
 #include <bass_vst.h>
@@ -285,6 +287,12 @@ SynthMixerDialog::SynthMixerDialog(QWidget *parent, MainWindow *mainWin) : //, M
     settingTimer.setInterval(10 * 60000);
     settingTimer.start();
     connect(&settingTimer, SIGNAL(timeout()), this, SLOT(settingValues()));
+
+    // audio song faders (see setAudioMode)
+    loadAudioFaders();
+    audioSaveTimer.setSingleShot(true);
+    audioSaveTimer.setInterval(1500);
+    connect(&audioSaveTimer, &QTimer::timeout, this, [this]() { saveAudioFaders(); });
 
     this->mainWin = mainWin;
     this->player = mainWin->midiPlayer();
@@ -550,6 +558,7 @@ SynthMixerDialog::SynthMixerDialog(QWidget *parent, MainWindow *mainWin) : //, M
             synth->setSolo(t, s);
             synth->setUseVSTi(t, v);
             synth->setExtMidiOut(t, st.value("ExtMidiOut", "").toString());
+            synth->setExtMidiDual(t, st.value("ExtMidiDual", false).toBool());
             synth->setSpeaker(t, static_cast<SpeakerType>(sp));
 
             #ifdef __linux__
@@ -931,6 +940,7 @@ void SynthMixerDialog::reloadFromSettings()
             synth->setUseVSTi(t, v);
         if (synth->extMidiOut(t) != ext)
             synth->setExtMidiOut(t, ext);
+        synth->setExtMidiDual(t, st.value("ExtMidiDual", false).toBool());
         if (static_cast<int>(synth->speaker(t)) != sp)
             synth->setSpeaker(t, static_cast<SpeakerType>(sp));
     }
@@ -951,6 +961,13 @@ void SynthMixerDialog::reloadFromSettings()
         synth->setDrumTune(g, app.value(QString("DrumTune%1").arg(g), 0).toInt());
     synth->setIgnoreDrumPitch(app.value("IgnoreDrumPitch", true).toBool());
     syncQuickChecks();
+
+    // audio song faders (a loaded config may carry them)
+    loadAudioFaders();
+    for (int i = 0; i < kAudioStrips; ++i)
+        pushAudioGain(i);
+    if (audioMode)
+        showFaderSet();
 
     skipSave = false;
 }
@@ -987,6 +1004,7 @@ void SynthMixerDialog::settingValues()
     st.setValue("ScrollBusGroup", ui->scrollArea_2->horizontalScrollBar()->value());
 
     st.setValue("WindowNoParent", parent() == 0);
+    saveAudioFaders();
     st.setValue("WindowStaysOnTop", staysOnTop);
 
     // soundfont presets
@@ -1089,6 +1107,7 @@ void SynthMixerDialog::settingValues()
         st.setValue("Bus", synth->busGroup(t));
         st.setValue("VSTi", synth->useVSTi(t));
         st.setValue("ExtMidiOut", synth->extMidiOut(t));
+        st.setValue("ExtMidiDual", synth->isExtMidiDual(t));
 
         QList<uint> fxU = synth->fxUids(t);
         QList<bool> fxB = synth->fxBypass(t);
@@ -1153,6 +1172,12 @@ void SynthMixerDialog::showChorusDialog()
 
 void SynthMixerDialog::setMute(InstrumentType t, bool m)
 {
+    if (audioMode && isAudioStrip(t)) {     // audio song: mute = cut this instrument's band
+        audioMute[int(t)] = m;
+        pushAudioGain(int(t));
+        audioSaveTimer.start();
+        return;
+    }
     synth->setMute(t, m);
 
     if (!isBusType(t))
@@ -1168,6 +1193,10 @@ void SynthMixerDialog::setMute(InstrumentType t, bool m)
 
 void SynthMixerDialog::setSolo(InstrumentType t, bool s)
 {
+    if (audioMode && isAudioStrip(t)) {     // no solo in a finished mix
+        chInstMap[t]->setSoloButton(false);
+        return;
+    }
     synth->setSolo(t, s);
 
     if (!isBusType(t))
@@ -1183,36 +1212,117 @@ void SynthMixerDialog::setSolo(InstrumentType t, bool s)
 
 void SynthMixerDialog::setMixLevel(InstrumentType t, int level)
 {
+    if (audioMode && isAudioStrip(t)) {
+        audioLevel[int(t)] = level;
+        pushAudioGain(int(t));
+        audioSaveTimer.start();
+        return;
+    }
     synth->setVolume(t, level);
 }
 
 void SynthMixerDialog::resetMixLevel(InstrumentType t)
 {
     chInstMap[t]->setSliderLevel(50);
+    if (audioMode && isAudioStrip(t)) {
+        audioLevel[int(t)] = 50;
+        pushAudioGain(int(t));
+        audioSaveTimer.start();
+        return;
+    }
     synth->setVolume(t, 50);
 }
 
-void SynthMixerDialog::showAudioBands(const int *bands, int count, int total)
+// ---- audio songs (YouTube / video / MP3): their own fader set drives an EQ band per instrument
+
+void SynthMixerDialog::loadAudioFaders()
 {
-    using T = InstrumentType;
-    static const QVector<QVector<T>> byBand = {
-        { T::Bass, T::BassDrum, T::LowTom },                                                     // 60-250 Hz
-        { T::Piano, T::Organ, T::Accordion, T::AcousticGuitarNylon, T::AcousticGuitarSteel,
-          T::Strings, T::Ensemble, T::SynthPad, T::MidTom, T::Conga },                           // 250-700 Hz
-        { T::ElectricGuitarJazz, T::ElectricGuitarClean, T::OverdrivenGuitar, T::DistortionGuitar,
-          T::Trumpet, T::Brass, T::Saxophone, T::Reed, T::Pipe, T::SynthLead, T::Ethnic,
-          T::HighTom, T::Bongo, T::Timbale },                                                    // 0.7-2.5 kHz
-        { T::Snare, T::SideStick, T::ChromaticPercussion, T::HarmonicsGuitar, T::SynthBrass,
-          T::Cowbell, T::SynthEffects },                                                         // 2.5-6 kHz
-        { T::Hihat, T::CrashCymbal, T::RideCymbal, T::SmallCupShapedCymbals, T::ThaiChap,
-          T::Percussive, T::PercussionEtc, T::SoundEffects },                                   // 6-14 kHz
-    };
-    for (int b = 0; b < count && b < byBand.size(); ++b) {
-        if (bands[b] <= 0)
+    QSettings st(Config::CONFIG_SYNTH_FILE_PATH, QSettings::IniFormat);
+    st.beginGroup("AudioSong");
+    for (int i = 0; i < kAudioStrips; ++i) {
+        audioLevel[i] = qBound(0, st.value(QString("Level%1").arg(i), 50).toInt(), 100);
+        audioMute[i] = st.value(QString("Mute%1").arg(i), false).toBool();
+    }
+    st.endGroup();
+}
+
+void SynthMixerDialog::saveAudioFaders()
+{
+    QSettings st(Config::CONFIG_SYNTH_FILE_PATH, QSettings::IniFormat);
+    st.beginGroup("AudioSong");
+    for (int i = 0; i < kAudioStrips; ++i) {
+        st.setValue(QString("Level%1").arg(i), audioLevel[i]);
+        st.setValue(QString("Mute%1").arg(i), audioMute[i]);
+    }
+    st.endGroup();
+}
+
+void SynthMixerDialog::pushAudioGain(int strip)
+{
+    if (!audioEq)
+        return;
+    // fader dB (50 = 0 dB, top +12 dB); a band can be cut by 24 dB at most, mute = that cut
+    const int lv = audioLevel[strip];
+    const double db = (audioMute[strip] || FaderTaper::isSilent(lv)) ? -24.0 : qMax(-24.0, FaderTaper::db(lv));
+    audioEq->setStripGain(strip, float(db));
+}
+
+void SynthMixerDialog::setAudioEq(AudioBandMeter *eq)
+{
+    audioEq = eq;
+    for (int i = 0; i < kAudioStrips; ++i)
+        pushAudioGain(i);
+}
+
+void SynthMixerDialog::setAudioMode(bool on)
+{
+    if (on == audioMode)
+        return;
+    audioMode = on;
+    showFaderSet();
+    if (titleBar)
+        titleBar->setTitle(on ? tr("PTHK Karaoke - Mixer : เพลง YouTube / วิดีโอ (เฟดเดอร์ชุดเพลงเสียง)")
+                              : tr("PTHK Karaoke - Mixer"));
+}
+
+void SynthMixerDialog::showFaderSet()
+{
+    for (int i = 0; i < kAudioStrips; ++i) {
+        const InstrumentType t = static_cast<InstrumentType>(i);
+        InstCh *ich = chInstMap.value(t, nullptr);
+        if (!ich)
             continue;
-        for (T t : byBand[b])
-            if (InstCh *c = chInstMap.value(t, nullptr))
-                c->peak(bands[b]);
+        if (audioMode) {
+            ich->setTrimValue(0.0);         // the MIDI trim is not used on audio songs
+            ich->setSliderLevel(audioLevel[i]);
+            ich->setMuteButton(audioMute[i]);
+            ich->setSoloButton(false);
+        } else {
+            ich->setTrimValue(synth->trim(t));
+            ich->setSliderLevel(synth->volume(t));
+            ich->setMuteButton(synth->isMute(t));
+            ich->setSoloButton(synth->isSolo(t));
+        }
+    }
+}
+
+// a strip's meter after its fader (the meters showed the level before it: a fader pulled down
+// made the sound quieter but the meter kept jumping as high). 0 when muted or at -inf.
+static int afterFader(int v, int level, bool mute, double trimDb = 0.0)
+{
+    if (mute || FaderTaper::isSilent(level) || v <= 0)
+        return 0;
+    const double g = FaderTaper::gain(level) * std::pow(10.0, trimDb / 20.0);
+    return qBound(0, int(v * g + 0.5), 127);
+}
+
+void SynthMixerDialog::showAudioStrips(const int *levels, int count, int total)
+{
+    for (int i = 0; i < count && i < kAudioStrips; ++i) {
+        const int v = audioMode ? afterFader(levels[i], audioLevel[i], audioMute[i]) : levels[i];
+        if (v > 0)
+            if (InstCh *c = chInstMap.value(static_cast<InstrumentType>(i), nullptr))
+                c->peak(v);
     }
     if (masterStrip && total > 0)
         masterStrip->peak(qMin(127, total));
@@ -1220,12 +1330,16 @@ void SynthMixerDialog::showAudioBands(const int *bands, int count, int total)
 
 void SynthMixerDialog::showPeakVU(InstrumentType t, int bus,  int ch, int note, int velocity)
 {
-    chInstMap[t]->peak(velocity);
-    if (masterStrip)
-        masterStrip->peak(qMin(127, int(velocity * player->effectiveGain())));
+    const int v = afterFader(velocity, synth->volume(t), synth->isMute(t), synth->trim(t));
+    if (v > 0)
+        chInstMap[t]->peak(v);
+    if (masterStrip && v > 0)
+        masterStrip->peak(qMin(127, int(v * player->effectiveGain())));
     if(bus > -1) {
         InstrumentType bType = static_cast<InstrumentType>(bus + synth->HANDLE_MIDI_COUNT);
-        chInstMap[bType]->peak(velocity);
+        const int bv = afterFader(v, synth->volume(bType), synth->isMute(bType), synth->trim(bType));
+        if (bv > 0)
+            chInstMap[bType]->peak(bv);
     }
 }
 
@@ -2651,6 +2765,16 @@ void SynthMixerDialog::showVuDlg()
 
 void SynthMixerDialog::resetChannel()
 {
+    if (audioMode) {        // audio song: reset its own set only
+        for (int i = 0; i < kAudioStrips; ++i) {
+            audioLevel[i] = 50;
+            audioMute[i] = false;
+            pushAudioGain(i);
+        }
+        showFaderSet();
+        saveAudioFaders();
+        return;
+    }
     for (InstrumentType t : chInstMap.keys())
     {
         resetMixLevel(t);

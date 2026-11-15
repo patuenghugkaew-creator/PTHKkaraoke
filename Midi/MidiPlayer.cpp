@@ -22,10 +22,9 @@ MidiPlayer::MidiPlayer(QObject *parent) : QObject(parent)
 
     loadMedleySettings();
 
-    if (midiDevices().size() > 0)
-    {
-        setMidiOut(0);
-    }
+    // start on the SoundFont synthesizer (MainWindow then applies the saved routing). The old code opened
+    // the first MIDI device here for nothing, which could hold a port another program needs.
+    setMidiOut(-1);
 }
 
 MidiPlayer::~MidiPlayer()
@@ -35,11 +34,15 @@ MidiPlayer::~MidiPlayer()
     if (_midiSeqTemp != nullptr)
         delete _midiSeqTemp;
 
-    for (MidiOut *out : _midiOuts.values()) {
-        if (out) {
-            out->closePort();
-            delete out;
+    {
+        QMutexLocker lk(&_outsMx);
+        for (MidiOut *out : _midiOuts.values()) {
+            if (out) {
+                out->closePort();
+                delete out;
+            }
         }
+        _midiOuts.clear();
     }
 
     delete _midiSynth;
@@ -54,8 +57,10 @@ QStringList MidiPlayer::midiDevices()
     for (UINT i=0; i<outCount; i++)
     {
         MIDIOUTCAPS outCaps;
-        if (midiOutGetDevCaps(i, &outCaps, sizeof(MIDIOUTCAPS))  != MMSYSERR_NOERROR)
+        if (midiOutGetDevCaps(i, &outCaps, sizeof(MIDIOUTCAPS))  != MMSYSERR_NOERROR) {
+            outName.append(QString("(MIDI %1)").arg(i));      // keep the index = the device number
             continue;
+        }
         outName.append(QString::fromStdWString(outCaps.szPname));
     }
     #else
@@ -77,8 +82,10 @@ QStringList MidiPlayer::midiInDevices()
     for (UINT i=0; i<inCount; i++)
     {
         MIDIINCAPS inCaps;
-        if (midiInGetDevCaps(i, &inCaps, sizeof(MIDIINCAPS))  != MMSYSERR_NOERROR)
+        if (midiInGetDevCaps(i, &inCaps, sizeof(MIDIINCAPS))  != MMSYSERR_NOERROR) {
+            inName.append(QString("(MIDI %1)").arg(i));       // keep the index = the device number
             continue;
+        }
         inName.append(QString::fromStdWString(inCaps.szPname));
     }
     #else
@@ -225,17 +232,13 @@ bool MidiPlayer::setMidiOut(int portNumber)
         _midiPortNum = -1;
         result = true;
     } else {
-        MidiOut *out = _midiOuts[portNumber];
-        if (!out) {
-            out = new MidiOut();
-            out->openPort(portNumber);
-            _midiOuts[portNumber] = out;
-        }
-        out->setVolume(qMin(1.0f, effectiveGain()));
-        result = out->isPortOpen();
+        QMutexLocker lk(&_outsMx);
+        MidiOut *out = openOut(portNumber);
+        result = out != nullptr;
         _midiPortNum = result ? portNumber : _midiPortNum;
     }
 
+    QMutexLocker lk(&_outsMx);
     for (int i=0; i<16; i++) {
         if (_midiChannels[i].port() != oldPort)
             continue;
@@ -373,6 +376,7 @@ void MidiPlayer::setVolume(int v)
     else _volume = v;
 
     _midiSynth->setVolume(synthGain());
+    QMutexLocker lk(&_outsMx);
     for (MidiOut *out : _midiOuts.values()) {
         if (!out) continue;
         out->setVolume(qMin(1.0f, effectiveGain()));
@@ -419,6 +423,7 @@ void MidiPlayer::setInstrument(int ch, int i)
     else v = i;
 
     _midiSynth->sendProgramChange(ch, v);
+    QMutexLocker lk(&_outsMx);
     for (MidiOut *out : _midiOuts.values()) {
         if (!out) continue;
         out->sendProgramChange(ch, v);
@@ -640,6 +645,7 @@ void MidiPlayer::setMapChannelOutput(int ch, int port)
     if (port != -1 && port >= midiDevices().size())
         return;
 
+    QMutexLocker lk(&_outsMx);
     if (port == _midiChannels[ch].port())
         return;
 
@@ -660,13 +666,9 @@ void MidiPlayer::setMapChannelOutput(int ch, int port)
     }
     else
     {
-        MidiOut *out = _midiOuts[port];
-        if (!out) {
-            out = new MidiOut();
-            out->openPort(port);
-            out->setVolume(qMin(1.0f, effectiveGain()));
-            _midiOuts[port] = out;
-        }
+        MidiOut *out = openOut(port);
+        if (!out)
+            return;             // missing / busy port: the channel keeps its output
 
         if (!this->isPlayerStopped()) {
             out->sendProgramChange(ch, _midiChannels[ch].instrument());
@@ -687,6 +689,99 @@ void MidiPlayer::setMapChannelOutput(int ch, int port)
     }
 
     this->calculateUsedPort();
+}
+
+// opens (or reuses) the output for a port number; nullptr when it can not be opened. _outsMx held.
+MidiOut *MidiPlayer::openOut(int port)
+{
+    MidiOut *out = _midiOuts.value(port, nullptr);
+    if (out && !out->hasFailed())
+        return out;
+    if (out) {                      // a dead handle (the port went away and came back): open again
+        out->closePort();
+        delete _midiOuts.take(port);
+    }
+    const QStringList names = midiDevices();
+    out = new MidiOut();
+    if (!out->openSafe(port, port < names.size() ? names[port] : QString())) {
+        delete out;
+        return nullptr;
+    }
+    out->setVolume(qMin(1.0f, effectiveGain()));
+    _midiOuts[port] = out;
+    return out;
+}
+
+void MidiPlayer::setChannelDual(int ch, bool dual)
+{
+    if (ch < 0 || ch >= 16)
+        return;
+    QMutexLocker lk(&_outsMx);
+    if (_chDual[ch] == dual)
+        return;
+    if (!dual && _midiChannels[ch].port() != -1)
+        _midiSynth->sendAllNotesOff(ch);            // the synth stops playing this channel
+    _chDual[ch] = dual;
+    if (dual && !_midiSynth->isOpened()) {
+        _midiSynth->open();
+        _midiSynth->setVolume(synthGain());
+    }
+    if (dual && !isPlayerStopped()) {               // the synth needs the channel's sound now
+        _midiSynth->sendProgramChange(ch, _midiChannels[ch].instrument());
+        _midiSynth->sendController(ch, 7, _midiChannels[ch].volume());
+        _midiSynth->sendController(ch, 10, _midiChannels[ch].pan());
+    }
+    calculateUsedPort();
+}
+
+QString MidiPlayer::channelPortName(int ch)
+{
+    QMutexLocker lk(&_outsMx);
+    MidiOut *o = (ch >= 0 && ch < 16) ? outFor(ch) : nullptr;
+    return o ? o->portName() : QString();
+}
+
+bool MidiPlayer::setMidiOutLive(int portNumber)
+{
+    QMutexLocker lk(&_outsMx);
+    if (portNumber == -1) {
+        if (!_midiSynth->isOpened()) {
+            _midiSynth->open();
+            _midiSynth->setVolume(synthGain());
+        }
+    } else if (!openOut(portNumber)) {
+        return false;
+    }
+    _midiPortNum = portNumber;
+    calculateUsedPort();
+    return true;
+}
+
+void MidiPlayer::reopenFailedOutputs()
+{
+    QMutexLocker lk(&_outsMx);
+    QStringList names;
+    for (int port : _midiOuts.keys()) {
+        MidiOut *o = _midiOuts.value(port);
+        if (!o || !o->hasFailed())
+            continue;
+        if (names.isEmpty())
+            names = midiDevices();
+        if (port < names.size() && names[port] == o->portName()) {
+            try { o->closePort(); } catch (...) {}
+            o->openSafe(port, o->portName());
+            o->setVolume(qMin(1.0f, effectiveGain()));
+        }
+    }
+}
+
+bool MidiPlayer::hasFailedOutput()
+{
+    QMutexLocker lk(&_outsMx);
+    for (MidiOut *o : _midiOuts.values())
+        if (o && o->hasFailed())
+            return true;
+    return false;
 }
 
 void MidiPlayer::receiveMidiIn(std::vector<unsigned char> *message)
@@ -773,10 +868,13 @@ int MidiPlayer::fitLockedBpm(int lockBpm, int songBpm, bool keepFar)
 {
     if (lockBpm <= 0 || songBpm <= 0)
         return songBpm;
-    // "Keep far songs" unticked = the operator wants every song at exactly this tempo
-    // (e.g. an 80 BPM song played as a 151 BPM medley), so do just that.
-    if (!keepFar)
-        return lockBpm;
+    // "Keep far songs" unticked = the operator wants every song at this tempo (a 120 BPM song
+    // plays at 145). A slow song (65% of the lock or less) plays at half of it: the same drum
+    // pulse, but not twice its own speed (a 69 BPM ballad at 142 sounded rushed).
+    if (!keepFar) {
+        const int half = int(lockBpm * 0.5 + 0.5);
+        return (songBpm <= lockBpm * 0.65 && half >= 30) ? half : lockBpm;
+    }
     // Ticked: a slow song uses half the lock (same pulse, keeps its feel), a very fast
     // one double; a song far from both keeps its own tempo.
     int best = lockBpm;
@@ -802,42 +900,52 @@ bool MidiPlayer::loadNextMedley(const QString &file, int cutStartBar, int cutEnd
 
     MidiSequencer::timingLog(QString("next song queued: %1").arg(QFileInfo(file).fileName()));
 
-    if (_midiSeqTemp != nullptr)
-        delete _midiSeqTemp;
-
-    _midiSeqTemp = new MidiSequencer();
-    if (!_midiSeqTemp->load(file, true))
+    // Prepare the new song fully before it becomes the next song, so the playing
+    // song's thread never sees a half-made (or failed) sequencer.
+    MidiSequencer *seq = new MidiSequencer();
+    if (!seq->load(file, true) || seq->midiFile()->events().isEmpty()) {
+        MidiSequencer::timingLog(QString("next song could not be loaded: %1").arg(QFileInfo(file).fileName()));
+        delete seq;
+        unloadNextMedley();
         return false;
+    }
 
-    _midiSeqTemp->midiFile()->setSingleTempo(true);
+    seq->midiFile()->setSingleTempo(true);
 
-    const int sourceBpm = _midiSeqTemp->currentBpm();
+    const int sourceBpm = seq->currentBpm();
     // Easy Medley's 0 BPM mode keeps each queued song at its own tempo.
     // midiSpeed is the per-song adjustment set from the playlist.
     const int songBpm = qBound(20, sourceBpm + midiSpeed, 250);
     const int targetBpm = _medleyBPM > 0 ? fitLockedBpm(_medleyBPM, songBpm, _medleyKeepFarSongs) : songBpm;
     MidiSequencer::timingLog(QString("tempo: song %1 BPM, lock %2 -> plays at %3 BPM")
                              .arg(songBpm).arg(_medleyBPM).arg(targetBpm));
-    _midiSeqTemp->setBpmSpeed(targetBpm - sourceBpm);
-    _midiTransposeTemp = transpose;
+    seq->setBpmSpeed(targetBpm - sourceBpm);
 
-    _midiSeqTemp->setCutStartBar(cutStartBar);
-    _midiSeqTemp->setCutEndBar(cutEndBar);
-    _midiSeqTemp->setMedleyTransition(true, _medleyTransitionBars, _medleyFillPattern, targetBpm, _medleyFillVolume, _medleyTempoMode, _medleyPreserveEffectsTail);
+    seq->setCutStartBar(cutStartBar);
+    seq->setCutEndBar(cutEndBar);
+    seq->setMedleyTransition(true, _medleyTransitionBars, _medleyFillPattern, targetBpm, _medleyFillVolume, _medleyTempoMode, _medleyPreserveEffectsTail);
 
-
-
+    MidiSequencer *old = nullptr;
+    {
+        QMutexLocker lock(&_medleyMutex);
+        old = _midiSeqTemp;
+        _midiSeqTemp = seq;
+        _midiTransposeTemp = transpose;
+    }
+    delete old;     // outside the lock: its stop() waits for its thread
     return true;
 }
 
 void MidiPlayer::unloadNextMedley()
 {
-
-    if (_midiSeqTemp != nullptr) {
-        delete _midiSeqTemp;
+    MidiSequencer *old = nullptr;
+    {
+        QMutexLocker lock(&_medleyMutex);
+        old = _midiSeqTemp;
         _midiSeqTemp = nullptr;
         _midiTransposeTemp = 0;
     }
+    delete old;     // outside the lock: its stop() waits for its thread
 }
 
 void MidiPlayer::sendEvent(MidiEvent e)
@@ -874,29 +982,38 @@ void MidiPlayer::onSeqFinished()
         return;
 
     if (_useMedley) {
-        if (_midiSeq->isSeqFinished() && (_midiSeqTemp != nullptr)) {
-            const bool preStarted = _midiSeqTemp->isRunning();
+        // Take the next song under the lock (after the thread check above, and no
+        // delete while holding it), then hand off with our own pointer.
+        MidiSequencer *next = nullptr;
+        int nextTranspose = 0;
+        if (_midiSeq->isSeqFinished()) {
+            QMutexLocker lock(&_medleyMutex);
+            next = _midiSeqTemp;
+            nextTranspose = _midiTransposeTemp;
+            _midiSeqTemp = nullptr;
+            _midiTransposeTemp = 0;
+        }
+        if (next != nullptr) {
+            const bool preStarted = next->isRunning();
             if (!preStarted) {
-                _midiSeqTemp->setOutgoingGroove(_midiSeq->extractOutgoingGroove());
-                _midiSeqTemp->setMedleyFromBpm(_midiSeq->currentBpm());
-                _midiSeqTemp->setMedleyStartClockMs(_midiSeq->idealEndClockMs());
+                next->setOutgoingGroove(_midiSeq->extractOutgoingGroove());
+                next->setMedleyFromBpm(_midiSeq->currentBpm());
+                next->setMedleyStartClockMs(_midiSeq->idealEndClockMs());
             }
             _midiSeq->deleteLater();
-            _midiSeq = _midiSeqTemp;
-            _midiSeqTemp = nullptr;
+            _midiSeq = next;
 
             if (!preStarted)
                 connectSequencer(_midiSeq);
 
-            _midiTranspose = _midiTransposeTemp;
-            _midiTransposeTemp = 0;
+            _midiTranspose = nextTranspose;
 
             // Do NOT call compactSoundfont() during medley transition to prevent audio stutter!
             emit nextMedleyStarted();
             if (!preStarted)
                 _midiSeq->start(QThread::TimeCriticalPriority);
             emit nextMedleyAfterStarted();
-        } else if (_midiSeq->isSeqFinished() && (_midiSeqTemp == nullptr)) {
+        } else if (_midiSeq->isSeqFinished()) {
             emit finished();
         }
     } else {
@@ -937,6 +1054,8 @@ void MidiPlayer::onSeqEndApproaching(double endClockMs)
 {
     if (QThread::currentThread() != static_cast<QThread*>(_midiSeq) || !_useMedley)
         return;
+    // Held while starting it, so MedleyLoader can't swap it out half way.
+    QMutexLocker lock(&_medleyMutex);
     MidiSequencer *next = _midiSeqTemp;
     if (next == nullptr || next->isRunning() || !next->isMedleyTransition())
         return;
@@ -956,37 +1075,35 @@ void MidiPlayer::onSeqBpmChanged(int bpm)
 
 void MidiPlayer::sendEventToDevices(MidiEvent evt)
 {
+    QMutexLocker lk(&_outsMx);
     MidiEvent *e = &evt;
     int ch = e->channel();
 
     switch (e->eventType()) {
         case MidiEventType::NoteOff: {
             int n = getNoteNumberToPlay(ch, e->data1());
-            if (_midiChannels[ch].port() == -1) {
+            if (toSynth(ch))
                 _midiSynth->sendNoteOff(ch, n, e->data2());
-            } else {
-                _midiOuts[_midiChannels[ch].port()]->sendNoteOff(ch, n, e->data2());
-            }
+            if (MidiOut *o = outFor(ch))
+                o->sendNoteOff(ch, n, e->data2());
             break;
         }
         case MidiEventType::NoteOn: {
             if (_midiChannels[ch].isChangingPort())
                 break;
             int n = getNoteNumberToPlay(ch, e->data1());
-            if (_midiChannels[ch].port() == -1) {
+            if (toSynth(ch))
                 _midiSynth->sendNoteOn(ch, n, e->data2());
-            } else {
-                _midiOuts[_midiChannels[ch].port()]->sendNoteOn(ch, n, e->data2());
-            }
+            if (MidiOut *o = outFor(ch))
+                o->sendNoteOn(ch, n, e->data2());
             break;
         }
         case MidiEventType::NoteAftertouch: {
             int n = getNoteNumberToPlay(ch, e->data1());
-            if (_midiChannels[ch].port() == -1) {
+            if (toSynth(ch))
                 _midiSynth->sendNoteAftertouch(ch, n, e->data2());
-            } else {
-                _midiOuts[_midiChannels[ch].port()]->sendNoteAftertouch(ch, n, e->data2());
-            }
+            if (MidiOut *o = outFor(ch))
+                o->sendNoteAftertouch(ch, n, e->data2());
             break;
         }
         case MidiEventType::Controller: {
@@ -1008,11 +1125,10 @@ void MidiPlayer::sendEventToDevices(MidiEvent evt)
             default: break;
             }
 
-            if (_midiChannels[ch].port() == -1) {
+            if (toSynth(ch))
                 _midiSynth->sendController(ch, e->data1(), e->data2());
-            } else {
-                _midiOuts[_midiChannels[ch].port()]->sendController(ch, e->data1(), e->data2());
-            }
+            if (MidiOut *o = outFor(ch))
+                o->sendController(ch, e->data1(), e->data2());
             break;
         }
         case MidiEventType::ProgramChange: {
@@ -1037,27 +1153,24 @@ void MidiPlayer::sendEventToDevices(MidiEvent evt)
                 _midiChannels[ch].setInstrumentType(MidiHelper::getInstrumentType(programe));
             }
 
-            if (_midiChannels[ch].port() == -1) {
+            if (toSynth(ch))
                 _midiSynth->sendProgramChange(ch, programe);
-            } else {
-                _midiOuts[_midiChannels[ch].port()]->sendProgramChange(ch, programe);
-            }
+            if (MidiOut *o = outFor(ch))
+                o->sendProgramChange(ch, programe);
             break;
         }
         case MidiEventType::ChannelAftertouch: {
-            if (_midiChannels[ch].port() == -1) {
+            if (toSynth(ch))
                 _midiSynth->sendChannelAftertouch(ch, e->data1());
-            } else {
-                _midiOuts[_midiChannels[ch].port()]->sendChannelAftertouch(ch, e->data1());
-            }
+            if (MidiOut *o = outFor(ch))
+                o->sendChannelAftertouch(ch, e->data1());
             break;
         }
         case MidiEventType::PitchBend: {
-            if (_midiChannels[ch].port() == -1) {
+            if (toSynth(ch))
                 _midiSynth->sendPitchBend(ch, e->data1());
-            } else {
-                _midiOuts[_midiChannels[ch].port()]->sendPitchBend(ch, e->data1());
-            }
+            if (MidiOut *o = outFor(ch))
+                o->sendPitchBend(ch, e->data1());
             break;
         }
         default:
@@ -1067,11 +1180,11 @@ void MidiPlayer::sendEventToDevices(MidiEvent evt)
 
 void MidiPlayer::sendAllNotesOff(int ch)
 {
-    if (_midiChannels[ch].port() == -1) {
+    QMutexLocker lk(&_outsMx);
+    if (toSynth(ch))
         _midiSynth->sendAllNotesOff(ch);
-    } else {
-        _midiOuts[_midiChannels[ch].port()]->sendAllNotesOff(ch);
-    }
+    if (MidiOut *o = outFor(ch))
+        o->sendAllNotesOff(ch);
 }
 
 void MidiPlayer::sendAllNotesOff()
@@ -1083,11 +1196,11 @@ void MidiPlayer::sendAllNotesOff()
 
 void MidiPlayer::sendAllSoundOff(int ch)
 {
-    if (_midiChannels[ch].port() == -1) {
+    QMutexLocker lk(&_outsMx);
+    if (toSynth(ch))
         _midiSynth->sendController(ch, 120, 0);
-    } else {
-        _midiOuts[_midiChannels[ch].port()]->sendController(ch, 120, 0);
-    }
+    if (MidiOut *o = outFor(ch))
+        o->sendController(ch, 120, 0);
 }
 
 void MidiPlayer::sendAllSoundOff()
@@ -1099,11 +1212,11 @@ void MidiPlayer::sendAllSoundOff()
 
 void MidiPlayer::sendResetAllControllers(int ch)
 {
-    if (_midiChannels[ch].port() == -1) {
-            _midiSynth->sendResetAllControllers(ch);
-    } else {
-        _midiOuts[_midiChannels[ch].port()]->sendResetAllControllers(ch);
-    }
+    QMutexLocker lk(&_outsMx);
+    if (toSynth(ch))
+        _midiSynth->sendResetAllControllers(ch);
+    if (MidiOut *o = outFor(ch))
+        o->sendResetAllControllers(ch);
 }
 
 void MidiPlayer::sendResetAllControllers()
@@ -1140,12 +1253,13 @@ void MidiPlayer::calculateUsedPort()
 {
     // calculate used port
     // list port all channel
+    QMutexLocker lk(&_outsMx);
     bool usedSynth = false;
     QList<int> usedPort;
     for (int i=0; i<16; i++) {
         int p = _midiChannels[i].port();
         usedPort.append(p);
-        if (p == -1)
+        if (p == -1 || _chDual[i])
             usedSynth = true;
     }
 

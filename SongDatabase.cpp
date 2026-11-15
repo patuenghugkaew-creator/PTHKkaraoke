@@ -2,6 +2,7 @@
 #include "PTHKCore.h"
 #include "SongDatabase.h"
 #include "SongFuzzy.h"
+#include "SongFormats.h"
 
 #include "Midi/MidiFile.h"
 #include "Midi/HNKFile.h"
@@ -13,7 +14,10 @@
 #include <QDirIterator>
 #include <QFile>
 #include <QSqlQuery>
+#include <QRandomGenerator>
+#include <QUuid>
 #include <algorithm>
+#include <cmath>
 #include <QLocale>
 #include <QHash>
 #include <QCollator>
@@ -93,7 +97,130 @@ void SongDatabase::createListTables()
            "songtype TEXT, path TEXT, played INTEGER)");
     q.exec("CREATE INDEX IF NOT EXISTS history_idx ON history(songtype, path)");
     q.exec("CREATE INDEX IF NOT EXISTS type_path_idx ON songs(songtype, path)");
+    q.exec("CREATE TABLE IF NOT EXISTS song_prefs ("
+           "songtype TEXT, path TEXT, transpose INTEGER DEFAULT 0, bpm_speed INTEGER DEFAULT 0,"
+           " loudness REAL, gain_db REAL DEFAULT 0,"
+           " PRIMARY KEY (songtype, path))");
+    // tables made before the loudness columns (an error here = the column is there already)
+    q.exec("ALTER TABLE song_prefs ADD COLUMN loudness REAL");
+    q.exec("ALTER TABLE song_prefs ADD COLUMN gain_db REAL DEFAULT 0");
     q.finish();
+}
+
+bool SongDatabase::songPrefs(const QString &type, const QString &path, int *transpose, int *bpmSpeed)
+{
+    if (!db.isOpen() || path.isEmpty())
+        return false;
+    QSqlQuery q(db);
+    q.prepare("SELECT transpose, bpm_speed FROM song_prefs WHERE songtype = ? AND path = ?");
+    q.bindValue(0, type);
+    q.bindValue(1, path);
+    const bool found = q.exec() && q.next();
+    if (found) {
+        if (transpose) *transpose = q.value(0).toInt();
+        if (bpmSpeed) *bpmSpeed = q.value(1).toInt();
+    }
+    q.finish();
+    return found;
+}
+
+// One column of a song's row (made when missing); the others are kept. A row with nothing left
+// to remember (key 0, speed 0, gain 0, no loudness) is removed.
+// `column` is one of the fixed names below, never user text.
+static void writeSongPref(QSqlDatabase &db, const QString &type, const QString &path,
+                          const char *column, const QVariant &value)
+{
+    QSqlQuery q(db);
+    q.prepare("INSERT OR IGNORE INTO song_prefs (songtype, path) VALUES (?, ?)");
+    q.bindValue(0, type);
+    q.bindValue(1, path);
+    q.exec();
+    q.prepare(QString("UPDATE song_prefs SET %1 = ? WHERE songtype = ? AND path = ?").arg(QLatin1String(column)));
+    q.bindValue(0, value);
+    q.bindValue(1, type);
+    q.bindValue(2, path);
+    q.exec();
+    q.prepare("DELETE FROM song_prefs WHERE songtype = ? AND path = ? AND IFNULL(transpose, 0) = 0"
+              " AND IFNULL(bpm_speed, 0) = 0 AND IFNULL(gain_db, 0) = 0 AND loudness IS NULL");
+    q.bindValue(0, type);
+    q.bindValue(1, path);
+    q.exec();
+    q.finish();
+}
+
+void SongDatabase::rememberSongKey(const QString &type, const QString &path, int transpose)
+{
+    if (!db.isOpen() || path.isEmpty())
+        return;
+    int t = 0;
+    songPrefs(type, path, &t, nullptr);
+    if (t != transpose)
+        writeSongPref(db, type, path, "transpose", transpose);
+}
+
+void SongDatabase::rememberSongSpeed(const QString &type, const QString &path, int bpmSpeed)
+{
+    if (!db.isOpen() || path.isEmpty())
+        return;
+    int sp = 0;
+    songPrefs(type, path, nullptr, &sp);
+    if (sp != bpmSpeed)
+        writeSongPref(db, type, path, "bpm_speed", bpmSpeed);
+}
+
+bool SongDatabase::songLevel(const QString &type, const QString &path, double *loudness, double *gainDb)
+{
+    if (loudness) *loudness = std::nan("");
+    if (gainDb) *gainDb = 0.0;
+    if (!db.isOpen() || path.isEmpty())
+        return false;
+    QSqlQuery q(db);
+    q.prepare("SELECT loudness, gain_db FROM song_prefs WHERE songtype = ? AND path = ?");
+    q.bindValue(0, type);
+    q.bindValue(1, path);
+    const bool found = q.exec() && q.next();
+    if (found) {
+        if (loudness && !q.value(0).isNull()) *loudness = q.value(0).toDouble();
+        if (gainDb) *gainDb = q.value(1).toDouble();
+    }
+    q.finish();
+    return found;
+}
+
+void SongDatabase::rememberSongLoudness(const QString &type, const QString &path, double lufs)
+{
+    if (!db.isOpen() || path.isEmpty())
+        return;
+    writeSongPref(db, type, path, "loudness", std::round(lufs * 10.0) / 10.0);
+}
+
+void SongDatabase::rememberSongGain(const QString &type, const QString &path, double gainDb)
+{
+    if (!db.isOpen() || path.isEmpty())
+        return;
+    writeSongPref(db, type, path, "gain_db", gainDb);
+}
+
+double SongDatabase::typicalLoudness(const QStringList &types)
+{
+    if (!db.isOpen() || types.isEmpty())
+        return std::nan("");
+    QStringList marks;
+    for (int i = 0; i < types.size(); i++)
+        marks << "?";
+    QSqlQuery q(db);
+    q.prepare("SELECT loudness FROM song_prefs WHERE loudness IS NOT NULL AND songtype IN (" + marks.join(',') + ")");
+    for (int i = 0; i < types.size(); i++)
+        q.bindValue(i, types[i]);
+    QVector<double> v;
+    if (q.exec())
+        while (q.next())
+            v << q.value(0).toDouble();
+    q.finish();
+    if (v.size() < 3)
+        return std::nan("");
+    std::sort(v.begin(), v.end());
+    return v[v.size() / 2];
 }
 
 void SongDatabase::removeSongFile(const QString &type, const QString &path)
@@ -226,6 +353,82 @@ QList<Song> SongDatabase::songList(ListKind kind, int limit)
     }
     q.finish();
     return list;
+}
+
+bool SongDatabase::randomSong(Song *out)
+{
+    if (!db.isOpen() || !out)
+        return false;
+    QSqlQuery q(db);
+    if (!q.exec("SELECT MAX(rowid) FROM songs") || !q.next())
+        return false;
+    const qint64 maxRow = q.value(0).toLongLong();
+    q.finish();
+    if (maxRow <= 0)
+        return false;
+
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        // QRandomGenerator: qrand() is never seeded here, so it gave the same songs every start
+        const qint64 target = 1 + qint64(QRandomGenerator::global()->generate64() % quint64(maxRow));
+        q.prepare("SELECT * FROM songs WHERE rowid >= ? LIMIT 1");
+        q.bindValue(0, target);
+        if (q.exec() && q.next()) {
+            setSong(out, &q);
+            q.finish();
+            return true;
+        }
+        q.finish();
+    }
+    return false;
+}
+
+static QVector<SongDatabase::SungSong> readSung(QSqlQuery &q)
+{
+    QVector<SongDatabase::SungSong> out;
+    if (q.exec()) {
+        while (q.next()) {
+            SongDatabase::SungSong s;
+            s.type = q.value(0).toString();
+            s.path = q.value(1).toString();
+            s.name = q.value(2).toString();
+            s.artist = q.value(3).toString();
+            s.tempo = q.value(4).toInt();
+            s.n = q.value(5).toLongLong();
+            out << s;
+        }
+    }
+    q.finish();
+    return out;
+}
+
+QVector<SongDatabase::SungSong> SongDatabase::sungSince(qint64 from, int limit)
+{
+    QSqlQuery q(db);
+    q.prepare("SELECT h.songtype, h.path, s.name, s.artist, s.tempo, MAX(h.played) AS p FROM history h "
+              "JOIN songs s ON s.songtype = h.songtype AND s.path = h.path WHERE h.played >= ? "
+              "GROUP BY h.songtype, h.path ORDER BY p DESC LIMIT ?");
+    q.bindValue(0, from);
+    q.bindValue(1, limit);
+    return readSung(q);
+}
+
+QVector<SongDatabase::SungSong> SongDatabase::sungAtHour(int hour, bool weekend, int weeks, int limit)
+{
+    // the hour and the day of the week (0 = Sunday) in local time, by SQLite
+    QSqlQuery q(db);
+    q.prepare("SELECT h.songtype, h.path, s.name, s.artist, s.tempo, COUNT(*) AS c FROM history h "
+              "JOIN songs s ON s.songtype = h.songtype AND s.path = h.path "
+              "WHERE h.played >= ? "
+              "AND ((CAST(strftime('%H', h.played, 'unixepoch', 'localtime') AS INTEGER) - ? + 24) % 24 <= 1 "
+              "  OR (? - CAST(strftime('%H', h.played, 'unixepoch', 'localtime') AS INTEGER) + 24) % 24 <= 1) "
+              "AND (strftime('%w', h.played, 'unixepoch', 'localtime') IN ('0', '6')) = ? "
+              "GROUP BY h.songtype, h.path ORDER BY c DESC LIMIT ?");
+    q.bindValue(0, QDateTime::currentSecsSinceEpoch() - qint64(weeks) * 7 * 24 * 3600);
+    q.bindValue(1, hour);
+    q.bindValue(2, hour);
+    q.bindValue(3, weekend ? 1 : 0);
+    q.bindValue(4, limit);
+    return readSung(q);
 }
 
 QList<Song> SongDatabase::findSongs(const QString &text, int limit)
@@ -939,14 +1142,38 @@ bool SongDatabase::insertKAR(const QString &karPath, const QString &songId, cons
     return true;
 }
 
+QString SongDatabase::emkFolder() const
+{
+    return _hnkPath.isEmpty() ? QFileInfo(_ncnPath).dir().absoluteFilePath("EMK") : _hnkPath;
+}
+
+bool SongDatabase::hasAnySong()
+{
+    QSqlQuery q(db);
+    return q.exec("SELECT 1 FROM songs LIMIT 1") && q.next();
+}
+
+bool SongDatabase::hasSongType(const QString &type)
+{
+    QSqlQuery q(db);
+    q.prepare("SELECT 1 FROM songs WHERE songtype = ? LIMIT 1");
+    q.bindValue(0, type);
+    return q.exec() && q.next();
+}
+
+QMap<QString, int> SongDatabase::countByType()
+{
+    QMap<QString, int> m;
+    QSqlQuery q(db);
+    if (q.exec("SELECT songtype, count(*) FROM songs GROUP BY songtype"))
+        while (q.next())
+            m.insert(q.value(0).toString(), q.value(1).toInt());
+    return m;
+}
+
 QStringList SongDatabase::videoFilters()
 {
-    // (a named list: a range-for over "QStringList() << ..." would iterate a destroyed temporary)
-    const QStringList exts = { "mp4", "mkv", "avi", "mpg", "mpeg", "wmv", "vob", "dat" };
-    QStringList f;
-    for (const QString &ext : exts)
-        f << "*." + ext << "*." + ext.toUpper();
-    return f;
+    return SongFormats::globs(SongFormats::videoExts());     // the same list as adding songs
 }
 
 bool SongDatabase::insertVideo(const QString &videoPath, const QString &videoFilePath, const QString &fileName,
@@ -1028,11 +1255,108 @@ Song* SongDatabase::nextType(const QString &s)
         sg = search(_searchText);
         break;
     case SearchType::ByVideo:
+        searchType = SearchType::ByLyrics;
+        sg = search(_searchText);
+        break;
+    case SearchType::ByLyrics:
+        searchType = SearchType::ByTempo;
+        sg = search(_searchText);
+        break;
+    case SearchType::ByTempo:
         searchType = SearchType::ByAll;
         sg = search(_searchText);
         break;
     }
     return sg;
+}
+
+bool SongDatabase::showRows(const QVector<qint64> &rows, const QString &text, int pos, int lyricsFrom)
+{
+    fuzzyMode = false;
+    listMode = false;
+    fuzzyRows.clear();
+    fuzzyPos = 0;
+    lyricsStart = -1;
+    lastFound = false;
+    _searchText = text;
+    if (rows.isEmpty())
+        return false;
+    pos = qBound(0, pos, rows.size() - 1);
+    // the song at pos, else the next one there is (songs can be deleted since)
+    for (int i = pos; i < rows.size() + pos; ++i) {
+        const int k = i % rows.size();
+        if (loadRow(rows[k])) {
+            fuzzyRows = rows;
+            fuzzyPos = k;
+            fuzzyMode = true;
+            listMode = true;
+            lyricsStart = lyricsFrom;
+            lastFound = true;
+            break;
+        }
+    }
+    return lastFound;
+}
+
+
+QVector<qint64> SongDatabase::rowsForKeys(const QString &dbFile, const QVector<QPair<QString, QString>> &keys)
+{
+    QVector<qint64> out;
+    const QString conn = "rowsforkeys-" + QUuid::createUuid().toString();
+    {
+        QSqlDatabase d = QSqlDatabase::addDatabase("QSQLITE", conn);
+        d.setDatabaseName(dbFile);
+        d.setConnectOptions("QSQLITE_OPEN_READONLY;QSQLITE_BUSY_TIMEOUT=3000");
+        if (d.open()) {
+            out = rowsForOn(d, keys);
+            d.close();
+        }
+    }
+    QSqlDatabase::removeDatabase(conn);
+    return out;
+}
+
+QVector<qint64> SongDatabase::rowsFor(const QVector<QPair<QString, QString>> &keys)
+{
+    return rowsForOn(db, keys);
+}
+
+// NCN first, then EMK, then SIB, by name
+QVector<qint64> SongDatabase::rowsForOn(QSqlDatabase &db, const QVector<QPair<QString, QString>> &keys)
+{
+    struct R { qint64 row; int type; QString name; };
+    QVector<R> found;
+    QSqlQuery q(db);
+    q.prepare("SELECT rowid, name FROM songs WHERE songtype = ? AND path = ?");
+    for (const auto &k : keys) {
+        q.bindValue(0, k.first);
+        q.bindValue(1, k.second);
+        if (q.exec() && q.next())
+            found.append({ q.value(0).toLongLong(), k.first == "NCN" ? 0 : (k.first == "EMK" ? 1 : 2), q.value(1).toString() });
+        q.finish();
+    }
+    std::stable_sort(found.begin(), found.end(), [](const R &a, const R &b) {
+        return a.name != b.name ? a.name < b.name : a.type < b.type;
+    });
+    QVector<qint64> out;
+    for (const R &r : found)
+        out.append(r.row);
+    return out;
+}
+
+QVector<qint64> SongDatabase::rowsByTempo(int bpm, int within)
+{
+    QVector<qint64> out;
+    QSqlQuery q(db);
+    q.prepare("SELECT rowid FROM songs WHERE tempo BETWEEN ? AND ? AND songtype NOT IN ('VIDEO', 'MP3') "
+              "ORDER BY abs(tempo - ?), name, artist LIMIT 3000");
+    q.bindValue(0, bpm - within);
+    q.bindValue(1, bpm + within);
+    q.bindValue(2, bpm);
+    if (q.exec())
+        while (q.next())
+            out.append(q.value(0).toLongLong());
+    return out;
 }
 
 void setSong(Song *s, QSqlQuery *qry) {
@@ -1118,6 +1442,7 @@ bool SongDatabase::loadRow(qint64 rowid)
 Song *SongDatabase::searchFuzzy(const QString &s)
 {
     fuzzyMode = false;
+    listMode = false;
     fuzzyRows.clear();
     fuzzyPos = 0;
     if (!fuzzy || !fuzzy->isReady())
@@ -1139,9 +1464,20 @@ Song *SongDatabase::search(const QString &s)
 {
     QString sql = "";
     fuzzyMode = false;
+    listMode = false;
     _searchText = s;
     currentResultIndex = 0;
     lastFound = false;
+
+    if (searchType == SearchType::ByLyrics)
+        return song;                    // searched in the background (MainWindow, LyricsIndex)
+    if (searchType == SearchType::ByTempo) {
+        bool ok = false;
+        const int bpm = QString(s).remove(QRegExp("[^0-9]")).toInt(&ok);
+        if (ok && bpm >= 30 && bpm <= 300)
+            showRows(rowsByTempo(bpm), s);
+        return song;
+    }
 
     if (songByCode(s, song)) {          // a code by artist (see assignArtistCodes)
         lastFound = true;
@@ -1183,6 +1519,76 @@ Song *SongDatabase::search(const QString &s)
     query.clear();
 
     return song;
+}
+
+QVector<SongDatabase::ResultRow> SongDatabase::resultWindow(int from, int count)
+{
+    QVector<ResultRow> out;
+    from = qMax(0, from);
+    auto take = [&out](QSqlQuery &q) {
+        // columns as in setSong(): id, name, artist, keyname, tempo, songtype, ...
+        ResultRow r;
+        r.id = q.value(0).toString();
+        r.name = q.value(1).toString();
+        r.artist = q.value(2).toString();
+        r.tempo = q.value(4).toInt();
+        r.type = q.value(5).toString();
+        out.append(r);
+    };
+    if (fuzzyMode) {                        // a list of rows (fuzzy, lyrics, tempo)
+        QSqlQuery q(db);
+        q.prepare("SELECT * FROM songs WHERE rowid = ?");
+        for (int i = from; i < fuzzyRows.size() && out.size() < count; ++i) {
+            q.bindValue(0, fuzzyRows[i]);
+            if (q.exec() && q.next())
+                take(q);
+            q.finish();
+        }
+        return out;
+    }
+    if (!lastFound)
+        return out;
+    QString sql;
+    switch (searchType) {                   // as searchNext(), a window of it
+    case SearchType::ByAll:    sql = byAllSql(); break;
+    case SearchType::ById:     sql = "SELECT * FROM songs WHERE id LIKE ? ORDER BY id, name, artist"; break;
+    case SearchType::ByName:   sql = "SELECT * FROM songs WHERE name LIKE ? ORDER BY name, artist, id"; break;
+    case SearchType::ByArtist: sql = "SELECT * FROM songs WHERE artist LIKE ? ORDER BY artist, name, id"; break;
+    case SearchType::ByVideo:  sql = kByVideoSql; break;
+    default: return out;
+    }
+    // No OFFSET: Qt 5.15's SQLite gets "LIMIT 6 OFFSET 0" wrong on these UNION ALL queries (22 rows
+    // came back). LIMIT alone is right; the first `from` rows are skipped here, and the count is
+    // kept here too.
+    QSqlQuery q(db);
+    q.prepare(sql + QString(" LIMIT %1").arg(from + count));
+    bindSearch(q, searchType, _searchText);
+    if (q.exec()) {
+        int i = 0;
+        while (q.next() && out.size() < count)
+            if (i++ >= from)
+                take(q);
+    }
+    return out;
+}
+
+QVector<qint64> SongDatabase::currentRows(int max)
+{
+    if (fuzzyMode)
+        return fuzzyRows.mid(0, max);
+    QVector<qint64> out;
+    if (!lastFound)
+        return out;
+    if (searchType != SearchType::ByAll)
+        return out;                         // (only "ทั้งหมด" puts the lyrics after its songs)
+    QSqlQuery q(db);
+    q.prepare(QString(byAllSql()).replace("SELECT * FROM songs", "SELECT rowid AS rid, * FROM songs")
+              + QString(" LIMIT %1").arg(max));
+    bindSearch(q, searchType, _searchText);
+    if (q.exec())
+        while (q.next() && out.size() < max)    // (the count kept here as well: see resultWindow)
+            out.append(q.value(0).toLongLong());
+    return out;
 }
 
 Song *SongDatabase::searchNext()
@@ -1387,11 +1793,18 @@ void SongDatabase::run()
             iter2.next();
             count++;
         }
-        QDirIterator iterEmk((_hnkPath.isEmpty() ? QFileInfo(_ncnPath).dir().absoluteFilePath("EMK") : _hnkPath), QStringList() << "*.emk" << "*.EMK",
+        QDirIterator iterEmk(emkFolder(), QStringList() << "*.emk" << "*.EMK",
                              QDir::Files, QDirIterator::Subdirectories);
         while (iterEmk.hasNext()) {
             iterEmk.next();
             count++;
+        }
+        if (!_sibPath.isEmpty() && QDir(_sibPath).exists()) {
+            QDirIterator iterSib(_sibPath, QStringList() << "*.sib" << "*.SIB", QDir::Files, QDirIterator::Subdirectories);
+            while (iterSib.hasNext()) {
+                iterSib.next();
+                count++;
+            }
         }
     }
 
@@ -1411,7 +1824,7 @@ void SongDatabase::run()
         }
     }
 
-    const QStringList mp3Filters = QStringList() << "*.mp3" << "*.MP3";
+    const QStringList mp3Filters = SongFormats::globs(SongFormats::audioExts());   // MP3, WAV, FLAC, M4A ...
     QDir mp3Dir(_mp3Path);
     if (!_mp3Path.isEmpty()) {
         QDirIterator iter5(mp3Dir.path(), mp3Filters, QDir::Files, QDirIterator::Subdirectories);
@@ -1426,13 +1839,24 @@ void SongDatabase::run()
 
     upTing = true;
 
-    QSqlQuery q(db);
-    if (mediaOnly) {
-        q.exec("DELETE FROM songs WHERE songtype IN ('KAR', 'VIDEO', 'MP3')");
-    } else {
-        q.exec("DELETE FROM songs");
-        q.exec("vacuum");
+    // Only the types whose folder is on this computer now are deleted and read again. The old code
+    // deleted every song (also EMK and SIB, which it never read again: ~220,000 songs gone), and a
+    // folder on an unplugged drive emptied that type.
+    auto here = [](const QString &p) { return !p.isEmpty() && QDir(p).exists(); };
+    QStringList rescan;
+    if (!mediaOnly) {
+        rescan << "NCN";
+        if (here(_hnkPath)) rescan << "HNK";
+        if (here(emkFolder())) rescan << "EMK";
+        if (here(_sibPath)) rescan << "SIB";
     }
+    if (here(_karPath)) rescan << "KAR";
+    if (here(_videoPath)) rescan << "VIDEO";
+    if (here(_mp3Path)) rescan << "MP3";
+    QSqlQuery q(db);
+    q.exec("DELETE FROM songs WHERE songtype IN ('" + rescan.join("','") + "')");
+    if (!mediaOnly)
+        q.exec("vacuum");
     q.finish();
     q.clear();
 
@@ -1481,6 +1905,33 @@ void SongDatabase::run()
 
         if (!result)
             erCount ++;
+    }
+
+    // Update EMK
+    if (!mediaOnly && rescan.contains("EMK")) {
+        const QString emkDir = emkFolder();
+        QDirIterator itE(emkDir, QStringList() << "*.emk" << "*.EMK", QDir::Files, QDirIterator::Subdirectories);
+        while (itE.hasNext()) {
+            itE.next();
+            i++;
+            emit updatePositionChanged(i);
+            emit updateSongNameChanged(itE.fileName());
+            if (!insertEMK(emkDir, itE.fileName().section(".", 0, 0), itE.filePath()))
+                erCount++;
+        }
+    }
+
+    // Update SIB
+    if (!mediaOnly && rescan.contains("SIB")) {
+        QDirIterator itS(_sibPath, QStringList() << "*.sib" << "*.SIB", QDir::Files, QDirIterator::Subdirectories);
+        while (itS.hasNext()) {
+            itS.next();
+            i++;
+            emit updatePositionChanged(i);
+            emit updateSongNameChanged(itS.fileName());
+            if (!insertSIB(_sibPath, itS.fileName().section(".", 0, 0), itS.filePath()))
+                erCount++;
+        }
     }
 
     // Update KAR
@@ -1556,7 +2007,7 @@ void SongDatabase::runNewSongs()
     QSet<QString> known;
     {
         QSqlQuery q(db);
-        q.exec("SELECT songtype, path FROM songs WHERE songtype IN ('NCN', 'HNK', 'EMK')");
+        q.exec("SELECT songtype, path FROM songs WHERE songtype IN ('NCN', 'HNK', 'EMK', 'SIB')");
         while (q.next())
             known.insert(q.value(0).toString() + "|" + q.value(1).toString().toLower());
         q.finish();
@@ -1589,11 +2040,12 @@ void SongDatabase::runNewSongs()
             if (!known.contains(key))
                 todo.append({ "HNK", it2.fileName().section(".", 0, 0), it2.filePath() });
         }
-        QDirIterator itEmk((_hnkPath.isEmpty() ? QFileInfo(_ncnPath).dir().absoluteFilePath("EMK") : _hnkPath), QStringList() << "*.emk" << "*.EMK", QDir::Files, QDirIterator::Subdirectories);
+        const QString emkDir = emkFolder();
+        QDirIterator itEmk(emkDir, QStringList() << "*.emk" << "*.EMK", QDir::Files, QDirIterator::Subdirectories);
         while (itEmk.hasNext()) {
             itEmk.next();
             QString rel = itEmk.filePath();
-            rel = rel.replace(_ncnPath, "");
+            rel = rel.replace(emkDir, "");      // as insertEMK stores it (it was compared to the NCN folder)
             const QString key = "EMK|" + rel.toLower();
             seen.insert(key);
             if (!known.contains(key))
@@ -1601,7 +2053,23 @@ void SongDatabase::runNewSongs()
         }
     } else {
         for (const QString &k : known)      // no HNK folder set: keep its songs as they are
-            if (k.startsWith("HNK|"))
+            if (k.startsWith("HNK|") || k.startsWith("EMK|"))
+                seen.insert(k);
+    }
+    if (!_sibPath.isEmpty() && QDir(_sibPath).exists()) {
+        QDirIterator itSib(_sibPath, QStringList() << "*.sib" << "*.SIB", QDir::Files, QDirIterator::Subdirectories);
+        while (itSib.hasNext()) {
+            itSib.next();
+            QString rel = itSib.filePath();
+            rel = rel.replace(_sibPath, "");
+            const QString key = "SIB|" + rel.toLower();
+            seen.insert(key);
+            if (!known.contains(key))
+                todo.append({ "SIB", itSib.fileName().section(".", 0, 0), itSib.filePath() });
+        }
+    } else {
+        for (const QString &k : known)      // no SIB folder here: keep its songs as they are
+            if (k.startsWith("SIB|"))
                 seen.insert(k);
     }
 
@@ -1655,6 +2123,10 @@ void SongDatabase::runNewSongs()
             PTHKCore::EmkSong s = PTHKCore::readEmk(f.file);
             sTitle = s.title.trimmed();
             sArtist = s.artist.trimmed();
+        } else if (f.type == "SIB") {
+            PTHKCore::SibSong s = PTHKCore::readSib(f.file);
+            sTitle = s.title.trimmed();
+            sArtist = s.artist.trimmed();
         }
         const QString songKey = makeSongKey(sTitle, sArtist);
         if (!songKey.isEmpty() && existingKeys.contains(songKey)) {
@@ -1664,7 +2136,8 @@ void SongDatabase::runNewSongs()
 
         const bool ok = (f.type == "NCN") ? insertNCN(_ncnPath, f.id, f.file)
                                           : (f.type == "HNK") ? insertHNK(_hnkPath, f.id, f.file)
-                                          : insertEMK((_hnkPath.isEmpty() ? QFileInfo(_ncnPath).dir().absoluteFilePath("EMK") : _hnkPath), f.id, f.file);
+                                          : (f.type == "SIB") ? insertSIB(_sibPath, f.id, f.file)
+                                          : insertEMK(emkFolder(), f.id, f.file);
         if (ok) {
             if (!songKey.isEmpty())
                 existingKeys.insert(songKey);

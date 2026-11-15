@@ -33,7 +33,7 @@ void MainWindow::openMedleySettings()
 // gets its medley start / end, and the next song of the queue is prepared.
 void MainWindow::applyMedleyToPlayingSong()
 {
-    if (!player->isUseMedley())
+    if (!songInMedley())         // (idle music keeps its own tempo)
         return;
     if (player->midiFile() && !player->midiFile()->events().isEmpty()) {
         player->midiFile()->setSingleTempo(true);
@@ -170,8 +170,12 @@ void MainWindow::loadMedleySet(const QString &name)
     // the queue: everything after the playing song is replaced by the set
     const bool playing = isSongPlaying();       // any song: MIDI, video, MP3, YouTube
     const int from = playing ? (remove_playlist ? 0 : playingIndex + 1) : 0;
+    if ((medleyLoader != nullptr) && medleyLoader->isRunning())
+        medleyLoader->wait();       // it may be reading one of the songs deleted here
     while (playlist.size() > from)
         delete playlist.takeLast();
+    for (Song *s : songs)
+        applyRememberedPrefs(s);
     playlist << songs;
     if (!playing)
         playingIndex = -1;
@@ -522,10 +526,23 @@ bool MainWindow::editMedleySet(const QString &name)
 void MainWindow::turnOffMedley()
 {
     if (!player) return;
+    const bool wasMedley = songInMedley();
     player->setUseMedley(false);
     player->unloadNextMedley();
     if (!player->isPlayerStopped() && player->midiSequencer()) {
         player->midiSequencer()->setEndTick(0);
+        // the playing song leaves the medley's locked tempo: back to its own (or the speed
+        // remembered for it)
+        if (wasMedley && player->midiFile() && !player->midiFile()->events().isEmpty()) {
+            int key = 0, speed = 0;
+            db->songPrefs(playingSong.songType(), playingSong.path(), &key, &speed);
+            player->setBpmSpeed(speed);
+            playingSong.setBpmSpeed(speed);
+            ui->songDetail->setDetail(&playingSong);
+            ui->songDetail->adjustSize();
+            MidiSequencer::timingLog(QString("medley off: the playing song back to its own tempo (%1 BPM)")
+                                     .arg(player->currentBpm()));
+        }
     }
     if (btnMedley) {
         QSignalBlocker b(btnMedley);
@@ -550,29 +567,37 @@ void MainWindow::openEasyMedley()
 
 void MainWindow::loadNextMedley(Song *song)
 {
+    // A loader still running uses the next song: let it finish before that song is
+    // replaced or unloaded (also when the new next song is not a MIDI song).
+    if ((medleyLoader != nullptr) && medleyLoader->isRunning())
+        medleyLoader->wait();
+
     if (!song || (song->songType() != "NCN" && song->songType() != "EMK" && song->songType() != "HNK" && song->songType() != "KAR" && song->songType() != "SIB")) {
         player->unloadNextMedley();
         nextMedleyTitle.clear();
         return;
     }
     nextMedleyTitle = song->name() + (song->artist().isEmpty() ? QString() : " - " + song->artist());
-    if ((medleyLoader != nullptr) && medleyLoader->isRunning())
-        medleyLoader->wait();
 
-    medleyLoader = new MedleyLoader(this, song, db, player, lyrWidget, secondLyr);
-    connect(medleyLoader, &MedleyLoader::finished, [this](){
-        medleyLoader->deleteLater();
-        medleyLoader = nullptr;
+    // `this` as context: the clean-up runs on the GUI thread, and only clears
+    // medleyLoader if it still points at this loader.
+    MedleyLoader *loader = new MedleyLoader(this, song, db, player, lyrWidget, secondLyr);
+    medleyLoader = loader;
+    connect(loader, &MedleyLoader::finished, this, [this, loader]() {
+        loader->deleteLater();
+        if (medleyLoader == loader)
+            medleyLoader = nullptr;
     });
-    medleyLoader->start();
+    loader->start();
 }
 
 void MainWindow::addToPlaylist(Song *song)
 {
     Song *songToAdd = new Song();
     *songToAdd = *song;
+    applyRememberedPrefs(songToAdd);
 
-    if (player->isUseMedley() && player->midiFile() && !player->midiFile()->events().isEmpty()) {
+    if (!idlePlaying && player->isUseMedley() && player->midiFile() && !player->midiFile()->events().isEmpty()) {
         player->midiFile()->setSingleTempo(true);
         const int baseBpm = player->currentBpm() - player->bpmSpeed();
         const int targetBpm = player->medleyBPM() > 0 ? MidiPlayer::fitLockedBpm(player->medleyBPM(), baseBpm, player->medleyKeepFarSongs()) : player->currentBpm();
@@ -583,14 +608,42 @@ void MainWindow::addToPlaylist(Song *song)
     playlist.append(songToAdd);
     ui->playlistWidget->addSong(songToAdd);
 
+    // If background idle music is playing, smoothly fade it out and start the customer's queued song!
+    if (idlePlaying && auto_playnext && !idleSwitching) {
+        idleSwitching = true;
+        ui->detail->setDetail(tr("เริ่มเพลงในคิว"), songToAdd->name());
+        ui->detail->show();
+        detailTimer->start(2500);
+        startFade(0.0, 1000, [this]() {
+            if (!idlePlaying) {
+                idleSwitching = false;
+                return;
+            }
+            idlePlaying = false;
+            idleSwitching = false;
+            const int nextIdx = remove_playlist ? 0 : (playingIndex + 1);
+            if (nextIdx >= 0 && nextIdx < playlist.count())
+                play(nextIdx);
+            else if (!playlist.isEmpty())
+                play(0);
+            else
+                stop();
+        });
+        return;
+    }
+
     const int nextMedleyIdx = (remove_playlist ? 0 : playingIndex + 1);
-    if (player->isUseMedley() && !player->isPlayerStopped() && (playlist.size() == (nextMedleyIdx + 1))) {
+    if (!idlePlaying && player->isUseMedley() && !player->isPlayerStopped() && (playlist.size() == (nextMedleyIdx + 1))) {
         loadNextMedley(songToAdd);
     }
 }
 
 void MainWindow::removeFromPlaylist(int index)
 {
+    // MedleyLoader may still be reading this Song: let it finish first.
+    if ((medleyLoader != nullptr) && medleyLoader->isRunning())
+        medleyLoader->wait();
+
     delete playlist.takeAt(index);
     ui->playlistWidget->removeRow(index);
 
@@ -633,6 +686,7 @@ void MainWindow::showFrameSearch()
     ui->playlistWidget->hide();
 
     ui->frameSearch->show();
+    updateSearchResults();
 }
 
 void MainWindow::showPlaylist()
@@ -641,6 +695,8 @@ void MainWindow::showPlaylist()
     ui->expandChMix->hide();
     ui->songDetail->hide();
     ui->frameSearch->hide();
+    if (searchResults)
+        searchResults->hide();
 
     fitQueue();
     ui->playlistWidget->show();
@@ -651,6 +707,8 @@ void MainWindow::showSongDetail()
     ui->chMix->hide();
     ui->expandChMix->hide();
     ui->frameSearch->hide();
+    if (searchResults)
+        searchResults->hide();
     ui->playlistWidget->hide();
 
     ui->songDetail->show();
@@ -695,6 +753,8 @@ void MainWindow::onChMixLockChanged(bool lock)
 void MainWindow::hideUIFrame()
 {
     ui->frameSearch->hide();
+    if (searchResults)
+        searchResults->hide();
     ui->playlistWidget->hide();
     ui->songDetail->hide();
 
@@ -713,22 +773,133 @@ void MainWindow::showCurrentTime()
 
 void MainWindow::setFrameSearch(Song *s)
 {
+    if (searchChips)
+        searchChips->setCurrent(int(db->currentSearchType()));
     ui->lbId->setText(s->id());
     ui->lbName->setText(" " + s->name());
     ui->lbBtw->setText("-");
     ui->lbArtist->setText(s->artist());
-    if (s->key() != "")
-        ui->lbTempoKey->setText(" (" + QString::number(s->tempo()) + "-" + s->key() + ")");
-    else
-        ui->lbTempoKey->setText(" (" + QString::number(s->tempo()) + ")");
-    ui->lbType->setText("[" + s->songType() + "]");
-    ui->lbLyrics->setText(s->lyrics().replace("\r\n", " "));
-    ui->frame_3->setVisible(!ui->lbLyrics->text().trimmed().isEmpty());    // video songs have no lyrics line
-
-    if (s->artist().length() == 0) {
-        ui->lbBtw->hide();
+    {
+        QString tk;
+        if (s->tempo() > 0)
+            tk = QString::number(s->tempo()) + " BPM";
+        if (s->key() != "")
+            tk += (tk.isEmpty() ? QString() : QString::fromUtf8(" · ")) + tr("คีย์ ") + s->key();
+        ui->lbTempoKey->setText(tk.isEmpty() ? QString() : "   " + tk);
     }
+    ui->lbType->setText("[" + s->songType() + "]");
+    if (db->lyricsFrom() >= 0 && db->resultIndex() >= db->lyricsFrom())
+        ui->lbType->setText(ui->lbType->text() + tr("  ♪ จากเนื้อร้อง"));   // found by its lyrics
+    const QString lyrics = s->lyrics().replace("\r\n", " ").simplified();
+    ui->lbLyrics->setText(lyrics);
+    ui->lbLyrics->setToolTip(lyrics);
+    ui->frame_3->setVisible(!lyrics.isEmpty());    // video songs have no lyrics line
+
+    ui->lbBtw->setVisible(s->artist().length() > 0);   // (was hidden for good after one song with no artist)
     fitSearchBar();
+    // the lyrics line: cut at a word with "…", not in the middle of a word at the frame's edge
+    if (!lyrics.isEmpty()) {
+        // the label's real width once the bar is laid out at its new width
+        if (ui->frameSearch->layout())
+            ui->frameSearch->layout()->activate();
+        if (ui->frame_3->layout())
+            ui->frame_3->layout()->activate();
+        const int room = ui->lbLyrics->contentsRect().width() - 6;
+        const QFontMetrics fm(ui->lbLyrics->font());
+        if (room > 80 && fm.horizontalAdvance(lyrics) > room) {
+            QString cut = lyrics;
+            while (!cut.isEmpty() && fm.horizontalAdvance(cut + QString::fromUtf8(" …")) > room) {
+                const int sp = cut.lastIndexOf(' ');
+                cut = sp > 0 ? cut.left(sp) : cut.left(cut.size() - 1);
+            }
+            ui->lbLyrics->setText(cut + QString::fromUtf8(" …"));
+        }
+    }
+    updateSearchResults();
+}
+
+void MainWindow::updateSearchResults()
+{
+    if (!searchResults)
+        return;
+    // The big song line (frame_4) shows the song only when there is no list: the list's marked
+    // row is the same song, shown twice before. Messages (nothing found, searching...) stay there.
+    auto showSongLine = [this](bool listShown) {
+        if (ui->frame_4->isHidden() != listShown) {
+            ui->frame_4->setVisible(!listShown);
+            ui->frameSearch->setFixedHeight(listShown ? 168 - ui->frame_4->sizeHint().height() - 6 : 168);
+        }
+    };
+    if (!ui->frameSearch->isVisible() || ui->lbId->text().isEmpty()) {
+        searchResults->hide();
+        showSongLine(false);
+        return;
+    }
+    // not over the lyrics: at most 5 songs, and the list ends above 60% of the screen's height
+    // (a smaller window shows fewer)
+    const QPoint below = ui->centralWidget->mapFromGlobal(ui->frameSearch->mapToGlobal(QPoint(0, ui->frameSearch->height())));
+    const int fit = (int(ui->centralWidget->height() * 0.60) - below.y() - 10) / qMax(1, searchResults->rowHeight()) - 1;
+    const int kWin = qBound(2, fit, 5);
+    const int cur = db->resultIndex();
+    int from = qMax(0, cur - 1);
+    // still in sight away from the edges (or picked with the mouse): the list stays put, so a click
+    // and a click again on the same place are the same song
+    const QVariant pickedAt = searchResults->property("clickedIndex");
+    const bool clicked = pickedAt.isValid() && pickedAt.toInt() == cur;
+    if (searchResults->isVisible() && cur >= searchListFrom && cur < searchListFrom + kWin
+            && (clicked || (cur > searchListFrom && cur < searchListFrom + kWin - 1)))
+        from = searchListFrom;
+    if (db->resultCount() > 0)
+        from = qBound(0, from, qMax(0, db->resultCount() - kWin));
+    const auto win = db->resultWindow(from, kWin);
+    const int lyricsFrom = db->lyricsFrom();       // songs from here on were found by their lyrics
+    QVector<SearchResultsList::Row> rows;
+    rows.reserve(win.size());
+    for (int i = 0; i < win.size(); ++i) {
+        const auto &r = win[i];
+        SearchResultsList::Row row;
+        row.id = r.id;
+        row.title = r.artist.isEmpty() ? r.name : (r.name + QString::fromUtf8(" — ") + r.artist);
+        if (lyricsFrom >= 0 && from + i >= lyricsFrom)
+            row.title = QString::fromUtf8("♪ ") + row.title;
+        row.detail = (r.tempo > 0 ? QString::number(r.tempo) + " BPM " : QString()) + "[" + r.type + "]";
+        if (from + i == cur) {
+            // the marked song: its key (the song line is hidden while the list shows), and the key /
+            // speed given to it here (Ctrl + arrows) before it goes into the queue
+            Song *s = db->currentSong();
+            QString extra;
+            if (!s->key().isEmpty())
+                extra += tr("คีย์ ") + s->key();
+            if (s->transpose() != 0)
+                extra += QString(" (%1%2)").arg(s->transpose() > 0 ? "+" : "").arg(s->transpose());
+            if (s->bpmSpeed() != 0)
+                extra += tr("  ความเร็ว %1%2").arg(s->bpmSpeed() > 0 ? "+" : "").arg(s->bpmSpeed());
+            if (!extra.isEmpty())
+                row.detail = extra.trimmed() + "   " + row.detail;
+        }
+        rows.append(row);
+    }
+    QString foot = searchFooter;
+    if (foot.isEmpty() && rows.size() > 1) {
+        if (db->resultCount() > 0)
+            foot = tr("เพลงที่ %1 จาก %2   ↑ ↓ หรือคลิก = เลือก   Enter หรือคลิกซ้ำ = เพิ่มเข้าคิว").arg(cur + 1).arg(db->resultCount());
+        else
+            foot = tr("↑ ↓ หรือคลิก = เลือกเพลง   Enter หรือคลิกซ้ำ = เพิ่มเข้าคิว");
+    }
+    if (rows.isEmpty() && foot.isEmpty()) {
+        searchResults->hide();
+        showSongLine(false);
+        return;
+    }
+    searchListFrom = from;
+    showSongLine(!rows.isEmpty());
+    searchResults->setRows(rows, cur - from, foot);
+    searchResults->setFixedWidth(ui->frameSearch->width());
+    searchResults->setFixedHeight(searchResults->wantedHeight());
+    searchResults->show();
+    uiLog(QString("search list: %1 rows (from %2, current %3, results %4), panel %5 x %6, row %7")
+          .arg(rows.size()).arg(from).arg(cur).arg(db->resultCount())
+          .arg(searchResults->width()).arg(searchResults->height()).arg(searchResults->rowHeight()));
 }
 
 // The song search bar (typing a code or a name): see-through over the video, rounded, at the left,
@@ -749,6 +920,34 @@ void MainWindow::styleSearchBar()
     ui->frameSearch->setAttribute(Qt::WA_TranslucentBackground, false);
     ui->frameSearch->setAutoFillBackground(false);
     ui->verticalLayoutMain->setAlignment(ui->frameSearch, Qt::AlignLeft);
+    // the typing box stays at the left: with no lyrics line next to it (video / MP3 songs) the
+    // layout centred it, and it moved while the bar's width followed the song found
+    ui->horizontalLayout_5->setAlignment(ui->frame_2, Qt::AlignLeft | Qt::AlignVCenter);
+    if (!searchChips) {
+        searchChips = new SearchModeChips(ui->frameSearch);
+        searchChips->setFixedHeight(34);
+        searchChips->setModes({     // in the order of SearchType
+            tr("ทั้งหมด (รหัส ชื่อ เนื้อร้อง)"), tr("รหัส"), tr("ชื่อเพลง"),
+            tr("ศิลปิน"), tr("วิดีโอ/MP3"), tr("เนื้อร้อง"), tr("ความเร็ว")
+        });
+        searchChips->onPick = [this](int i) {
+            setSearchMode(static_cast<SearchType>(i));
+            setFocus();
+        };
+        ui->verticalLayout->insertWidget(0, searchChips);
+        ui->frameSearch->setFixedHeight(168);
+        ui->frameSearch->installEventFilter(this);
+    }
+    if (!searchResults) {
+        searchResults = new SearchResultsList(ui->centralWidget);
+        searchResults->onPick = [this](int row, bool again) { pickSearchRow(row, again); };
+        searchResults->onWheel = [this](int step) {
+            setFrameSearch(step > 0 ? db->searchNext() : db->searchPrevious());
+            timer2->start(search_timeout);
+        };
+        const int idx = ui->verticalLayoutMain->indexOf(ui->frameSearch);
+        ui->verticalLayoutMain->insertWidget(idx + 1, searchResults, 0, Qt::AlignLeft);
+    }
     fitSearchBar();
     ui->playlistWidget->applyOverlayStyle();
     ui->verticalLayoutMain->setAlignment(ui->playlistWidget, Qt::AlignLeft);
@@ -764,6 +963,64 @@ void MainWindow::fitQueue()
     ui->playlistWidget->setFixedHeight(ui->playlistWidget->fittingHeight(305));
 }
 
+// A click in the search results: the first one picks the song, a click on the picked song
+// (or a double-click) puts it in the queue, the same as Enter.
+void MainWindow::pickSearchRow(int row, bool add)
+{
+    static QElapsedTimer lastAdd;
+    if (!ui->frameSearch->isVisible())
+        return;
+    const int target = searchListFrom + row;
+    int cur = db->resultIndex();
+    for (int guard = 0; cur != target && guard < 10; ++guard) {
+        if (cur < target)
+            db->searchNext();
+        else
+            db->searchPrevious();
+        const int now = db->resultIndex();
+        if (now == cur)
+            break;                      // the end of the list
+        cur = now;
+    }
+    if (searchBoxChangeBpm) {
+        searchBoxChangeBpm = false;
+        ui->lbSearch->setText(db->searchText() + "_");
+    }
+    searchResults->setProperty("clickedIndex", db->resultIndex());
+    setFrameSearch(db->currentSong());
+    timer2->start(search_timeout);
+    setFocus();
+    if (!add)
+        return;
+    if (lastAdd.isValid() && lastAdd.elapsed() < 600)
+        return;                         // the second half of a double-click
+    lastAdd.start();
+    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    keyPressEvent(&enter);
+}
+
+// the search button: an empty search box (click again to close it)
+void MainWindow::openSearchBox()
+{
+    setFocus();
+    if (ui->frameSearch->isVisible()) {
+        hideUIFrame();
+        return;
+    }
+    searchBoxChangeBpm = false;
+    searchFooter.clear();
+    db->currentSong()->setBpmSpeed(0);
+    db->currentSong()->setTranspose(0);
+    ui->playlistWidget->hide();
+    db->setSearchType(SearchType::ByAll);
+    ui->lbSearch->setText("_");
+    showFrameSearch();
+    showSearchMessage(tr("พิมพ์รหัส ชื่อเพลง ศิลปิน หรือท่อนเนื้อร้อง"));
+    ui->chMix->hide();
+    ui->expandChMix->hide();
+    timer2->start(search_timeout);
+}
+
 void MainWindow::fitSearchBar()
 {
     const int avail = qMax(400, ui->centralWidget->width() - 40);
@@ -771,5 +1028,8 @@ void MainWindow::fitSearchBar()
     int want = ui->frame_4->sizeHint().width() + 24;
     if (ui->frame_3->isVisible())
         want = qMax(want, int(avail * 0.75));   // MIDI songs: room for the lyrics line
-    ui->frameSearch->setFixedWidth(qBound(640, want, avail));     // aligned: it keeps exactly this width
+    const int minW = searchChips ? qMax(760, searchChips->wantedWidth() + 20) : 760;
+    ui->frameSearch->setFixedWidth(qBound(minW, want, avail));     // aligned: it keeps exactly this width
+    if (searchResults)
+        searchResults->setFixedWidth(ui->frameSearch->width());
 }

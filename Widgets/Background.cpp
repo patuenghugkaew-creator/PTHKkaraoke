@@ -374,7 +374,12 @@ void Background::paintEvent(QPaintEvent *event)
     }
     case Video:
         painter.fillRect(rect(), Qt::black);
-        if (!_frame.isNull()) {
+        if (_frame.isNull()) {
+            // no video yet (loading, or the folder is missing / empty on this computer, e.g. a new
+            // install): the default picture instead of a blank screen
+            if (!_image.isNull())
+                painter.drawImage(rect(), _image);
+        } else {
             // fill the whole area, keep the picture's proportions (crop the overflow)
             QSize s = _frame.size().scaled(size(), Qt::KeepAspectRatioByExpanding);
             QRect target(QPoint((width() - s.width()) / 2, (height() - s.height()) / 2), s);

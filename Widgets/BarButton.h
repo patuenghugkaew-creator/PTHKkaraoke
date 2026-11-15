@@ -237,6 +237,34 @@ inline void fullscreen(QPainter &p, const QRectF &r, const QColor &c)
     p.drawPolyline(QPolygonF({ at(r, a, b - k), at(r, a, b), at(r, a + k, b) }));
     p.drawPolyline(QPolygonF({ at(r, b - k, b), at(r, b, b), at(r, b, b - k) }));
 }
+inline void lock(QPainter &p, const QRectF &r, const QColor &c)
+{
+    p.setPen(pen(r, c));
+    p.setBrush(Qt::NoBrush);
+    p.drawRoundedRect(box(r, 5, 11, 14, 9.5), r.width() / 12, r.width() / 12);
+    p.drawArc(box(r, 8, 4.5, 8, 10), 0, 180 * 16);
+    p.setBrush(c);
+    p.drawEllipse(at(r, 12, 15.5), r.width() / 16, r.width() / 16);
+}
+
+inline void search(QPainter &p, const QRectF &r, const QColor &c)
+{
+    p.setPen(pen(r, c));
+    p.setBrush(Qt::NoBrush);
+    p.drawEllipse(QRectF(at(r, 4, 4), at(r, 16, 16)));
+    p.drawLine(at(r, 14.5, 14.5), at(r, 20.5, 20.5));
+}
+// metronome: tempo
+inline void tempo(QPainter &p, const QRectF &r, const QColor &c)
+{
+    p.setPen(pen(r, c));
+    p.setBrush(Qt::NoBrush);
+    QPainterPath b;
+    b.moveTo(at(r, 9.5, 3)); b.lineTo(at(r, 14.5, 3)); b.lineTo(at(r, 19, 21));
+    b.lineTo(at(r, 5, 21)); b.closeSubpath();
+    p.drawPath(b);
+    p.drawLine(at(r, 12, 17), at(r, 17.5, 6));
+}
 
 // the line icon of each bar function, by name (also used for the "more" menu)
 inline Fn byName(const QString &n)
@@ -246,7 +274,7 @@ inline Fn byName(const QString &n)
         { "end", endSong }, { "mic", mic }, { "micOff", micOff }, { "note", note }, { "medley", medley },
         { "drum", drum }, { "songs", songs }, { "youtube", youtube }, { "mixer", mixer }, { "more", more },
         { "restart", restart }, { "addSong", addSong }, { "subtitles", subtitles }, { "screen2", screen2 },
-        { "fullscreen", fullscreen },
+        { "fullscreen", fullscreen }, { "lock", lock }, { "search", search }, { "tempo", tempo },
     };
     return all.value(n);
 }
@@ -401,16 +429,19 @@ private:
     int ring = -1;
 };
 
-// "คีย์ −/+": click the left half to lower the key, the right half to raise it
+// "คีย์ −/+" (or "ความเร็ว −/+"): click the left half to step down, the right half to step up
 class KeyControl : public QWidget
 {
 public:
-    explicit KeyControl(QWidget *parent = nullptr) : QWidget(parent)
+    explicit KeyControl(QWidget *parent = nullptr, const QString &label = QString(),
+                        BarIcons::Fn icon = BarIcons::note, const QString &tip = QString())
+        : QWidget(parent), name(label.isEmpty() ? QObject::tr("คีย์") : label), drawIcon(std::move(icon))
     {
         setCursor(Qt::PointingHandCursor);
         setAttribute(Qt::WA_Hover);
         setMouseTracking(true);
-        setToolTip(QObject::tr("เปลี่ยนคีย์เพลง: ซ้าย = ลดคีย์ (Delete), ขวา = เพิ่มคีย์ (Insert)"));
+        setFocusPolicy(Qt::NoFocus);
+        setToolTip(tip.isEmpty() ? QObject::tr("เปลี่ยนคีย์เพลง: ซ้าย = ลดคีย์ (Delete), ขวา = เพิ่มคีย์ (Insert)") : tip);
     }
     std::function<void(int)> onStep;
     void setValue(int v) { if (v != value) { value = v; update(); } }
@@ -442,7 +473,7 @@ protected:
         }
         const double icon = 24 * s;
         const QRectF ir(all.center().x() - icon / 2, all.top() + 5 * s, icon, icon);
-        BarIcons::note(p, ir, BarButton::fg());
+        drawIcon(p, ir, BarButton::fg());
         // − and + at the sides
         p.setPen(BarIcons::pen(ir, BarButton::fg()));
         const double y = ir.center().y();
@@ -452,7 +483,7 @@ protected:
         p.drawLine(QPointF(xr, y - d), QPointF(xr, y + d));
         p.setFont(BarButton::labelFont(font()));
         p.setPen(value != 0 ? BarButton::accent().lighter(150) : BarButton::dim());
-        const QString t = value == 0 ? QObject::tr("คีย์") : QObject::tr("คีย์ %1%2").arg(value > 0 ? "+" : "").arg(value);
+        const QString t = value == 0 ? name : QString("%1 %2%3").arg(name).arg(value > 0 ? "+" : "").arg(value);
         p.drawText(QRectF(all.left(), all.bottom() - fm.height() - 5 * s, all.width(), fm.height()), Qt::AlignCenter, t);
     }
     void mouseMoveEvent(QMouseEvent *) override { update(); }
@@ -465,6 +496,8 @@ protected:
 
 private:
     int value = 0;
+    QString name;
+    BarIcons::Fn drawIcon;
 };
 
 #endif // BARBUTTON_H

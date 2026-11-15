@@ -28,6 +28,12 @@
 #include <QDesktopServices>
 #include <QUrl>
 #include <QFile>
+#include <QElapsedTimer>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QDateTime>
+#include <QTime>
 #include <cmath>
 #include <atomic>
 #include <bass.h>
@@ -46,6 +52,20 @@
 #endif
 
 void registerMetaType();
+
+// start-up timing (developer log, only with debug-logs.txt next to the exe): where the seconds go
+static void startLog(const QString &what)
+{
+    static QElapsedTimer clock;
+    static const bool on = QFile::exists(QCoreApplication::applicationDirPath() + "/debug-logs.txt");
+    if (!clock.isValid())
+        clock.start();
+    if (!on)
+        return;
+    QFile f(QCoreApplication::applicationDirPath() + "/ui-timing.log");
+    if (f.open(QIODevice::Append | QIODevice::Text))
+        f.write((QTime::currentTime().toString("HH:mm:ss.zzz") + QString(" start-up %1 ms: %2\n").arg(clock.elapsed()).arg(what)).toUtf8());
+}
 
 void checkDatabase(QSplashScreen *splash, SongDatabase *db);
 void loadSoundfonts(QSplashScreen *splash, MidiSynthesizer *synth);
@@ -76,6 +96,7 @@ int main(int argc, char *argv[])
     #endif
 
     QApplication a(argc, argv);
+    startLog("QApplication");
 
     // Started by "Open config": give the previous instance time to release audio/MIDI devices.
     if (a.arguments().contains("--delay"))
@@ -154,18 +175,25 @@ int main(int argc, char *argv[])
 
     // Player edition: MainWindow is the visible karaoke player (search, playlist,
     // lyrics); the synth mixer is a second window that only hides when closed.
+    startLog("before the main window");
     MainWindow w;
+    startLog("main window built");
     qApp->setWindowIcon(QIcon(":/Icons/App/pthk.png"));
 
     checkDatabase(splash, w.database());
+    startLog("database checked");
     loadSoundfonts(splash, w.midiPlayer()->midiSynthesizer());
+    startLog("soundfonts loaded");
 
     #ifndef __linux__
     loadVSTi(splash, w.midiPlayer()->midiSynthesizer());
+    startLog("VSTi loaded");
     makeVSTList(splash, w.midiPlayer()->midiSynthesizer());
+    startLog("VST list made");
     w.synthMixerDialog()->setVSTVendorMenu();
     #endif
     w.synthMixerDialog()->setFXToSynth();
+    startLog("effects set");
 
     SynthMixerDialog *mixer = w.synthMixerDialog();
     mixer->setWindowTitle("PTHK Karaoke - Mixer");
@@ -176,6 +204,7 @@ int main(int argc, char *argv[])
         if (st.value("ShowMixerAtStart", false).toBool())
             mixer->show();
     }
+    startLog("window shown");
     w.activateWindow();     // keyboard (song number search) goes to the player, not the mixer
     {   // auto-hide of the mixer while the karaoke program is used (Settings)
         QSettings ahs(Config::CONFIG_APP_FILE_PATH, QSettings::IniFormat);
@@ -209,6 +238,7 @@ int main(int argc, char *argv[])
     delete splash;
     delete pixmap;
 
+    QTimer::singleShot(0, &w, []() { startLog("event loop running"); });
     const int ret = a.exec();
 #ifdef _WIN32
     timeEndPeriod(1);
@@ -311,6 +341,10 @@ void loadSoundfonts(QSplashScreen *splash, MidiSynthesizer *synth)
             sfDrumMap = synth->getDrumMapSfIndex(i);
 
         synth->setMapSoundfontIndex(i, sfMap, sfDrumMap);
+        // multi soundfont: the sound in the file and the level of each program
+        const QString n = i > 0 ? QString::number(i) : QString();
+        synth->setMapSoundExtras(i, settings.value("SynthSoundfontsSrc" + n).value<QList<int>>(),
+                                 settings.value("SynthSoundfontsVol" + n).value<QList<int>>());
     }
 }
 
@@ -369,6 +403,18 @@ void makeVSTList(QSplashScreen *splash, MidiSynthesizer *synth)
 
     QMap<uint, VSTNamePath> vstList;
 
+    // Each plugin was checked by starting VSTChecker at every start (several seconds with a few
+    // plugins). The answers are kept in vst-cache.json by path, size and date: a plugin is checked
+    // again only when its file changes. Failed checks are kept too, so a bad DLL is not retried.
+    const QString cachePath = Config::CONFIG_DIR_PATH + "/vst-cache.json";
+    QJsonObject cacheIn, cacheOut;
+    {
+        QFile cf(cachePath);
+        if (cf.open(QIODevice::ReadOnly))
+            cacheIn = QJsonDocument::fromJson(cf.readAll()).object();
+    }
+    int checked = 0;
+
     for (const QString &dir : vstDirs)
     {
         QDirIterator it(dir, QStringList() << "*.DLL" << "*.dll" << "*.vst3" << "*.VST3",
@@ -386,11 +432,34 @@ void makeVSTList(QSplashScreen *splash, MidiSynthesizer *synth)
             if (!Utils::is64BitDll(it.filePath()))
                 continue;
 #endif
-            splash->showMessage("กำลังตรวจสอบ : " + it.fileName(), Qt::AlignBottom|Qt::AlignRight, QColor("#cfd3dc"));
-            splash->repaint();
-
+            const QFileInfo fi(it.filePath());
+            const QString stamp = QString("%1|%2").arg(fi.size()).arg(fi.lastModified().toMSecsSinceEpoch());
+            const QString key = it.filePath().toLower();
             QList<VSTNamePath> infos;
-            if (!Utils::vstInfos(it.filePath(), &infos))
+            const QJsonObject hit = cacheIn.value(key).toObject();
+            if (hit.value("stamp").toString() == stamp) {
+                for (const QJsonValue &v : hit.value("infos").toArray()) {
+                    const QJsonObject o = v.toObject();
+                    VSTNamePath info;
+                    info.uniqueID = uint(o.value("id").toDouble());
+                    info.vstName = o.value("name").toString();
+                    info.vstvendor = o.value("vendor").toString();
+                    info.vstPath = o.value("path").toString();
+                    infos.append(info);
+                }
+                cacheOut.insert(key, hit);
+            } else {
+                splash->showMessage("กำลังตรวจสอบ : " + it.fileName(), Qt::AlignBottom|Qt::AlignRight, QColor("#cfd3dc"));
+                splash->repaint();
+                ++checked;
+                Utils::vstInfos(it.filePath(), &infos);
+                QJsonArray arr;
+                for (const VSTNamePath &info : infos)
+                    arr.append(QJsonObject{ { "id", double(info.uniqueID) }, { "name", info.vstName },
+                                            { "vendor", info.vstvendor }, { "path", info.vstPath } });
+                cacheOut.insert(key, QJsonObject{ { "stamp", stamp }, { "infos", arr } });
+            }
+            if (infos.isEmpty())
                 continue;
 
             for (const VSTNamePath &info : infos)
@@ -398,6 +467,11 @@ void makeVSTList(QSplashScreen *splash, MidiSynthesizer *synth)
         }
     }
 
+    if (checked > 0 || cacheOut.size() != cacheIn.size()) {
+        QFile cf(cachePath);
+        if (cf.open(QIODevice::WriteOnly | QIODevice::Truncate))
+            cf.write(QJsonDocument(cacheOut).toJson(QJsonDocument::Compact));
+    }
     synth->setVSTList(vstList);
 }
 

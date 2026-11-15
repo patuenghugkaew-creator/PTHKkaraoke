@@ -82,6 +82,8 @@
 #include "Dialogs/MasteringDialog.h"
 #include "PTHKCore.h"
 #include "Dialogs/MapSoundfontDialog.h"
+#include "Dialogs/MultiSoundfontDialog.h"
+#include "SongFormats.h"
 #include "Dialogs/MapChannelDialog.h"
 #include "Dialogs/BusDialog.h"
 #include "Dialogs/SpeakerDialog.h"
@@ -119,6 +121,7 @@ inline void uiLog(const QString &line)
 #include "Midi/AiStems.h"
 #include "Midi/AudioBandMeter.h"
 #include "SibBackfill.h"
+#include "LyricsIndex.h"
 #include "Dialogs/DuplicateSongsDialog.h"
 #include "Dialogs/EasyMedleyDialog.h"
 #include "Dialogs/SongListsDialog.h"
@@ -126,6 +129,17 @@ inline void uiLog(const QString &line)
 #include "Midi/YtAudio.h"
 #include "Midi/AiVocal.h"
 #include "Midi/MicInput.h"
+#include "Midi/SongLevel.h"
+#include "Dialogs/SoundPadsDialog.h"
+#include "Dialogs/SoundFxManager.h"
+#include "Dialogs/EventSoundsDialog.h"
+#include "Dialogs/PortableDriveDialog.h"
+#include "Dialogs/TickerDialog.h"
+#include "IdleSmart.h"
+#include "Dialogs/ShopModeDialog.h"     // (uses IdleSmart)
+#include "Widgets/TickerBar.h"
+#include "Widgets/SearchPanel.h"
+#include <QThreadPool>
 #include "Midi/OutputRecorder.h"
 #include "Dmx/DmxLights.h"
 #include <QSerialPortInfo>
@@ -145,5 +159,11 @@ inline void uiLog(const QString &line)
 #include <thread>
 #endif
 
+// A full path of its own (drive letter or network share). Video / MP3 songs are kept relative to
+// their folder ("/YouTube/clip.mp4"), and QFileInfo::isAbsolute() is true for those on Windows too.
+inline bool isFullPath(const QString &p)
+{
+    return (p.size() >= 3 && p.at(1) == ':') || p.startsWith("//") || p.startsWith("\\\\");
+}
 
 #endif // MAINWINDOW_P_H

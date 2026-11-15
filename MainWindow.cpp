@@ -57,6 +57,7 @@ MainWindow::MainWindow(QWidget *parent) :
     updateDetail = new Detail(this);
 
     ui->setupUi(this);
+    uiLog("start-up: main window: screen built");
 
     #ifdef _WIN32
     taskbarButton = new QWinTaskbarButton();
@@ -80,15 +81,18 @@ MainWindow::MainWindow(QWidget *parent) :
                                             + "/PTHK Karaoke Songs/KAR").toString();
 
     db = new SongDatabase();
+    uiLog("start-up: main window: song database open");
     kar = Config::relocatePath(useAppSongs && !settings->contains("KARPath") ? (appSongs + "/KAR") : kar);
     settings->setValue("KARPath", kar);
-    QString sib = Config::relocatePath(settings->value("SIBPath", "D:/REA/SIBSIB KARAOKE/SONG/MIDI/SIB").toString());
+    // a new install: a "SIB" folder next to the KAR one (the old default was the developer's own folder)
+    QString sib = Config::relocatePath(settings->value("SIBPath", QFileInfo(kar).dir().absoluteFilePath("SIB")).toString());
     settings->setValue("SIBPath", sib);
     db->setNcnPath(ncn);
     db->setHNKPath(hnk);
     db->setKarPath(kar);
     db->setSibPath(sib);
-    if (db->songPaths("SIB").isEmpty() && QFile::exists("D:/REA/SIBSIB KARAOKE/DATA/sibsib_songs.dat")) {
+    // (the file first: reading every SIB path just to see if there is one took time at each start)
+    if (QFile::exists("D:/REA/SIBSIB KARAOKE/DATA/sibsib_songs.dat") && !db->hasSongType("SIB")) {
         db->importSibDatabase("D:/REA/SIBSIB KARAOKE/DATA/sibsib_songs.dat", sib);
     }
 
@@ -107,7 +111,9 @@ MainWindow::MainWindow(QWidget *parent) :
     detailTimer = new QTimer();
     detailTimer->setSingleShot(true);
 
+    uiLog("start-up: main window: before the player");
     player = new MidiPlayer();
+    uiLog("start-up: main window: player made");
 
     locale = QLocale(QLocale::English, QLocale::UnitedStates);
 
@@ -134,7 +140,7 @@ MainWindow::MainWindow(QWidget *parent) :
 
 
     { // UI window size
-        int sTime = settings->value("SearchTimeout", 5).toInt();
+        int sTime = settings->value("SearchTimeout", 15).toInt();     // long enough to read the list
         int pTime = settings->value("PlaylistTimeout", 5).toInt();
         setSearchTimeout(sTime);
         setPlaylistTimeout(pTime);
@@ -172,22 +178,6 @@ MainWindow::MainWindow(QWidget *parent) :
 
 
     { // Player
-        // MIDI-out is remembered by device name; no name, or a device that is
-        // not present now, means the SoundFont synthesizer (-1).
-        int oPort   = -1;
-        QString outName = settings->value("MidiOutName", "").toString();
-        if (!outName.isEmpty())
-            oPort = MidiPlayer::midiDevices().indexOf(outName);
-        settings->setValue("MidiOut", oPort);
-        int iPort   = settings->value("MidiIn", -1).toInt();
-        // MIDI-in is remembered by device name, because port numbers shift
-        // depending on which program/virtual cable was started first.
-        QString inName = settings->value("MidiInName", "").toString();
-        if (!inName.isEmpty()) {
-            int idx = MidiPlayer::midiInDevices().indexOf(inName);
-            if (idx >= 0)
-                iPort = idx;
-        }
         int vl      = settings->value("MidiVolume", 50).toInt();
         bool lDrum  = settings->value("MidiLockDrum", false).toBool();
         bool lSnare = settings->value("MidiLockSnare", false).toBool();
@@ -196,29 +186,18 @@ MainWindow::MainWindow(QWidget *parent) :
         int synBuf  = settings->value("SynthBuffer", 100).toInt();
 
         BASS_SetConfig(BASS_CONFIG_BUFFER, synBuf);
-        player->setMidiOut(oPort);
-        player->setMidiIn(iPort);
         player->setVolume(vl);
         player->setMasterMute(settings->value("MasterMute", false).toBool());
         player->midiSynthesizer()->setIgnoreDrumPitch(settings->value("IgnoreDrumPitch", true).toBool());
 
-        // Auto (re)connect the MIDI-in device by name, so the mixer works no
-        // matter whether the karaoke program / virtual MIDI cable starts first.
-        QTimer *midiInWatcher = new QTimer(this);
-        midiInWatcher->setInterval(2000);
-        connect(midiInWatcher, &QTimer::timeout, this, [this]() {
-            QString name = settings->value("MidiInName", "").toString();
-            if (name.isEmpty())
-                return;
-            int idx = MidiPlayer::midiInDevices().indexOf(name);
-            if (idx < 0) {
-                if (player->midiInPortNumber() != -1)
-                    player->setMidiIn(-1);
-            } else if (idx != player->midiInPortNumber()) {
-                player->setMidiIn(idx);
-            }
-        });
-        midiInWatcher->start();
+        // MIDI out / in / channels by port name (MainWindow_Midi.cpp), then every 2 s: works whichever
+        // starts first, PTHK or loopMIDI / the other karaoke program. Instruments follow once the
+        // mixer has loaded its settings (the same timer).
+        applyMidiRouting();
+        QTimer *midiRouteTimer = new QTimer(this);
+        midiRouteTimer->setInterval(2000);
+        connect(midiRouteTimer, &QTimer::timeout, this, [this]() { applyMidiRouting(); });
+        midiRouteTimer->start();
 
         if (lDrum) {
             int ldNum = settings->value("MidiLockDrumNumber", 0).toInt();
@@ -237,16 +216,6 @@ MainWindow::MainWindow(QWidget *parent) :
             player->setLockBass(true, lbNum);
         }
 
-        // Midi Channel Mapper
-        QList<int> ports = settings->value("MidiChannelMapper").value<QList<int>>();
-        if (ports.count() == 16) {
-            for (int i=0; i<16; i++) {
-                // saved port numbers may point to another device after a restart,
-                // so every channel follows the selected MIDI out (oPort)
-                Q_UNUSED(ports)
-                player->setMapChannelOutput(i, player->midiOutPortNumber());
-            }
-        }
 
         connect(player, SIGNAL(finished()), this, SLOT(onPlayerThreadFinished()));
         connect(player, SIGNAL(bpmChanged(int)), ui->rhmWidget, SLOT(setBpm(int)));
@@ -294,6 +263,8 @@ MainWindow::MainWindow(QWidget *parent) :
         bool useFX = false;      // fixed: the old global reverb / chorus switch stays off
         synth->setUsetFloattingPoint(useFloat);
         synth->setUseFXRC(useFX);
+        // the saved mastering (PRO) and the safety limiter (everyone): it was never applied at start-up
+        MasteringDialog::applySaved(synth);
 
 
         // Soundfonts and Soundfonts map
@@ -304,9 +275,15 @@ MainWindow::MainWindow(QWidget *parent) :
         // Synth reverb -> move to SynthMixer
 
         // Create synth mixer
+        uiLog("start-up: main window: synth set");
         synthMix = new SynthMixerDialog(nullptr, this);
+        uiLog("start-up: main window: mixer made");
     }
 
+
+    // the karaoke maker's name at the start of songs shown as PTHK KARAOKE (Widgets/LyricsWidget.cpp)
+    LyricsWidget::brandText() = settings->value("Lyrics/BrandOn", true).toBool()
+        ? settings->value("Lyrics/BrandText", "PTHK KARAOKE").toString() : QString();
 
     { // Lyrics
         QString family  = settings->value("LyricsFamily", font().family()).toString();
@@ -637,6 +614,10 @@ MainWindow::MainWindow(QWidget *parent) :
         connect(ui->playlistWidget, &PlaylistWidget::rowDoubleClicked, this, [this](int row) {
             if (row < 0 || row >= playlist.size())
                 return;
+            if (isShopStrictLocked() && isSongPlaying() && !idlePlaying) {
+                notifyShopStrictLocked(tr("ข้ามไปเล่นเพลงในคิว"));
+                return;
+            }
             ui->playlistWidget->hide();
             play(row);
             setFocus();
@@ -657,15 +638,26 @@ MainWindow::MainWindow(QWidget *parent) :
             upd->start();
             QTimer::singleShot(20000, this, due);
         }
-        connect(db, &SongDatabase::finished, this, [this]() { startSibBackfill(); db->startFuzzyIndex(); });
+        connect(db, &SongDatabase::finished, this, [this]() {
+            startSibBackfill();
+            db->startFuzzyIndex();
+            QTimer::singleShot(30000, this, [this]() { startLyricsIndex(); });     // new songs into the lyrics index
+        });
+        // full lyrics for "ค้นจากเนื้อร้อง" (see LyricsIndex.h): new songs only, after the start is over
+        QTimer::singleShot(60000, this, [this]() { startLyricsIndex(); });
         QTimer::singleShot(3000, this, [this]() { db->startFuzzyIndex(); });   // approximate search
+        QTimer::singleShot(2500, this, [this]() { showFirstRunGuide(); });     // no songs yet: where to start
 
         // Audio songs (YouTube / video / MP3) on the synth mixer: band levels (see AudioBandMeter.h)
         {
             audioMeter = new AudioBandMeter();
+            audioMeter->setClear(settings->value("AudioClear", true).toBool());   // "เสียงใส"
+            if (synthMix)
+                synthMix->setAudioEq(audioMeter);       // the audio song faders drive its EQ
             QTimer *meterTimer = new QTimer(this);
             meterTimer->setInterval(40);
             connect(meterTimer, &QTimer::timeout, this, [this]() {
+                static int idleTicks = 0;
                 DWORD h = 0;
 #ifdef KM_HAVE_PROCLOOP
                 if (ytActive && ytAudio && ytAudio->running())
@@ -676,12 +668,18 @@ MainWindow::MainWindow(QWidget *parent) :
                 if (!h && mp3Stream)
                     h = mp3Stream;
                 audioMeter->attach(h);
+                // the mixer shows the audio song faders while one plays (back to MIDI ~1 s after it ends,
+                // so a short gap while YouTube buffers does not flip them)
+                idleTicks = h ? 0 : idleTicks + 1;
+                if (synthMix && (h || idleTicks > 25))
+                    synthMix->setAudioMode(h != 0);
                 if (!h || !synthMix || !synthMix->isVisible())
                     return;
-                int bands[AudioBandMeter::kBands];
-                for (int b = 0; b < AudioBandMeter::kBands; ++b)
-                    bands[b] = audioMeter->bandLevel(b);
-                synthMix->showAudioBands(bands, AudioBandMeter::kBands, audioMeter->totalLevel());
+                const int total = audioMeter->totalLevel();     // first: the strips compare with it
+                int lv[AudioBandMeter::kStrips];
+                for (int s = 0; s < AudioBandMeter::kStrips; ++s)
+                    lv[s] = audioMeter->stripLevel(s);
+                synthMix->showAudioStrips(lv, AudioBandMeter::kStrips, total);
             });
             meterTimer->start();
         }
@@ -691,7 +689,7 @@ MainWindow::MainWindow(QWidget *parent) :
             showDrumHoldBanner(st);
             switch (st) {
             case 1:
-                ui->detail->setDetail(tr("ค้างจังหวะกลอง"), tr("ดนตรีจะหยุดที่ต้นห้องถัดไป เหลือแต่กลอง"));
+                ui->detail->setDetail(tr("ค้างจังหวะกลอง"), tr("ดนตรีจะหยุดในจังหวะถัดไป เหลือแต่กลอง"));
                 detailTimer->start(4000);
                 break;
             case 2:
@@ -817,6 +815,7 @@ MainWindow::MainWindow(QWidget *parent) :
 
         timer1->start(1000);
 
+        uiLog("start-up: main window: before the playback bar");
         { // Playback bar (see BarButton.h): the song, its position, and three groups of buttons:
           // playing, karaoke tools, songs and the program. Each button does what its key does.
             QFrame *bar = ui->frameControl;
@@ -860,10 +859,14 @@ MainWindow::MainWindow(QWidget *parent) :
 
             // playing
             BarButton *prev = mk(tr("ก่อนหน้า"), "prev", tr("เพลงก่อนหน้า (F8)"));
-            connect(prev, &QAbstractButton::clicked, this, [this]() { playPrevious(); });
+            connect(prev, &QAbstractButton::clicked, this, [this]() {
+                if (isShopStrictLocked()) { notifyShopStrictLocked(tr("เพลงก่อนหน้า")); return; }
+                playPrevious();
+            });
             btnPlayPause = mk(tr("เล่น"), "play", tr("เล่น / พัก (F5 / F6)"));
             btnPlayPause->setBig(true);
             connect(btnPlayPause, &QAbstractButton::clicked, this, [this]() {
+                if (isShopStrictLocked()) { notifyShopStrictLocked(tr("เล่น / พักเพลง")); return; }
                 if (songIsRunning())
                     pause();
                 else
@@ -871,13 +874,23 @@ MainWindow::MainWindow(QWidget *parent) :
                 updateBarStatus();
             });
             BarButton *stopBtn = mk(tr("หยุด"), "stop", tr("หยุด (F7)"));
-            connect(stopBtn, &QAbstractButton::clicked, this, [this]() { stop(); });
+            connect(stopBtn, &QAbstractButton::clicked, this, [this]() {
+                if (isShopStrictLocked()) { notifyShopStrictLocked(tr("หยุดเพลง")); return; }
+                stop();
+            });
             BarButton *nextBtn = mk(tr("ถัดไป"), "next", tr("เพลงถัดไป (F9)"));
-            connect(nextBtn, &QAbstractButton::clicked, this, [this]() { playNext(); });
+            connect(nextBtn, &QAbstractButton::clicked, this, [this]() {
+                if (isShopStrictLocked()) { notifyShopStrictLocked(tr("ข้ามไปเพลงถัดไป")); return; }
+                playNext();
+            });
             BarButton *end = mk(tr("จบเพลง"), "end", tr("จบเพลงนี้แบบค่อย ๆ เบาลง แล้วไปเพลงถัดไป (End)"));
-            connect(end, &QAbstractButton::clicked, this, [this]() { endSongSmoothly(); });
+            connect(end, &QAbstractButton::clicked, this, [this]() {
+                if (isShopStrictLocked()) { notifyShopStrictLocked(tr("จบเพลง")); return; }
+                endSongSmoothly();
+            });
             BarButton *restartBtn = mk(tr("เริ่มใหม่"), "restart", tr("เล่นเพลงนี้ใหม่ตั้งแต่ต้น (Home)"));
             connect(restartBtn, &QAbstractButton::clicked, this, [this]() {
+                if (isShopStrictLocked()) { notifyShopStrictLocked(tr("เริ่มเพลงใหม่")); return; }
                 if (playingSong.id() != "")
                     play(-1);
             });
@@ -888,6 +901,7 @@ MainWindow::MainWindow(QWidget *parent) :
             connect(btnMuteVocal, &QAbstractButton::toggled, this, [this](bool on) {
                 if (ui->chMix->isMuteVoice() != on)
                     ui->chMix->setMuteVoice(on);
+                on = ui->chMix->isMuteVoice();      // (idle music: a press may have turned it on instead)
 #ifdef KM_HAVE_PROCLOOP
                 applyYtVocalCut();
 #endif
@@ -904,6 +918,17 @@ MainWindow::MainWindow(QWidget *parent) :
                 detailTimer->start(3000);
             });
             connect(ui->chMix, &ChannelMixer::muteVoiceChanged, this, [this](bool on) {
+                // Idle music keeps its singer whatever the cut button says (IdleMusic/KeepVocal). A press
+                // during it means the operator wants the cut now: the button rules from here. If the cut
+                // was already "on" (from the last customer song), this press turned it off although the
+                // singer was heard all along: it means "cut", so it goes back on.
+                if (keepIdleVocal()) {
+                    idleVocalByUser = true;
+                    if (!on) {
+                        ui->chMix->setMuteVoice(true);  // (comes back here with on = true)
+                        return;
+                    }
+                }
                 if (btnMuteVocal && btnMuteVocal->isChecked() != on) {
                     QSignalBlocker block(btnMuteVocal);
                     btnMuteVocal->setChecked(on);
@@ -917,6 +942,9 @@ MainWindow::MainWindow(QWidget *parent) :
 
             keyControl = new KeyControl(bar);
             keyControl->onStep = [this](int step) { changeSongKey(step); updateBarStatus(); };
+            tempoControl = new KeyControl(bar, tr("ความเร็ว"), BarIcons::tempo,
+                tr("ความเร็วเพลง: ซ้าย = ช้าลง (Page Down), ขวา = เร็วขึ้น (Page Up) - เพลง MIDI"));
+            tempoControl->onStep = [this](int step) { changeSongTempo(step); updateBarStatus(); };
 
             btnMedley = mk(tr("เมดเลย์"), "medley", tr("เปิด / ปิด โหมดเมดเลย์ ต่อเพลงเนียนตามจังหวะ (F4)\n"
                                                         "ลูกศรด้านขวา: ตั้งค่าเมดเลย์"));
@@ -932,7 +960,7 @@ MainWindow::MainWindow(QWidget *parent) :
             // drum hold (MIDI songs): click = the band stops at the next bar, drums keep the beat;
             // click again = drum fill, then the song carries on (same as Ctrl+D / Pause)
             btnDrumHold = mk(tr("ค้างกลอง"), "drum",
-                tr("ค้างจังหวะกลอง: ดนตรีหยุดที่ต้นห้องถัดไป เหลือกลองตีรอ (เนื้อร้องรอด้วย)\n"
+                tr("ค้างจังหวะกลอง: ดนตรีหยุดในจังหวะถัดไป เหลือกลองตีรอ (เนื้อร้องรอด้วย)\n"
                    "กดอีกครั้ง = ลูกส่ง แล้วเข้าเพลงต่อพอดีจังหวะ (Ctrl+D) - เพลง MIDI"));
             btnDrumHold->setCheckable(true);
             connect(btnDrumHold, &QAbstractButton::clicked, this, [this]() {
@@ -949,7 +977,11 @@ MainWindow::MainWindow(QWidget *parent) :
             });
 
             // songs and the program
-            BarButton *lists = mk(tr("รายการเพลง"), "songs", tr("เพลงโปรด / เล่นล่าสุด / เพลงฮิต (F3)"));
+            BarButton *searchBtn = mk(tr("ค้นหา"), "search",
+                tr("ค้นหาเพลง: พิมพ์รหัส ชื่อเพลง ศิลปิน หรือท่อนเนื้อร้อง (พิมพ์บนแป้นได้เลยตลอดเวลา)\n"
+                   "คลิกเพลงในรายการเพื่อเลือก คลิกซ้ำ = เพิ่มเข้าคิว"));
+            connect(searchBtn, &QAbstractButton::clicked, this, [this]() { openSearchBox(); });
+            BarButton *lists =mk(tr("รายการเพลง"), "songs", tr("เพลงโปรด / เล่นล่าสุด / เพลงฮิต (F3)"));
             connect(lists, &QAbstractButton::clicked, this, [this]() {
                 QKeyEvent ev(QEvent::KeyPress, Qt::Key_F3, Qt::NoModifier);
                 keyPressEvent(&ev);
@@ -958,6 +990,8 @@ MainWindow::MainWindow(QWidget *parent) :
             connect(yt, &QAbstractButton::clicked, this, [this]() { showYouTubeSearch(); });
             BarButton *mixerBtn = mk(tr("มิกเซอร์"), "mixer", tr("เปิด / ปิด มิกเซอร์ปรับแต่งเสียงหลัก"));
             connect(mixerBtn, &QAbstractButton::clicked, this, [this]() {
+                if (!requireShopUnlock(tr("มิกเซอร์ปรับแต่งเสียงหลัก")))
+                    return;
                 if (synthMix->isVisible() && !synthMix->isMinimized()) {
                     synthMix->hide();
                 } else {
@@ -975,6 +1009,13 @@ MainWindow::MainWindow(QWidget *parent) :
             connect(btnSecondScreen, &QAbstractButton::clicked, this, [this]() { showSecondMonitor(); });
             BarButton *fullBtn = mk(tr("เต็มจอ"), "fullscreen", tr("เต็มจอ / หน้าต่างปกติ (ดับเบิลคลิกบนจอก็ได้)"));
             connect(fullBtn, &QAbstractButton::clicked, this, [this]() { showFullScreenOrNormal(); });
+            btnShopLock = mk(isShopLocked() ? tr("ล็อกอยู่") : tr("ล็อก"), "lock",
+                             tr("ล็อก / ปลดล็อกหน้าจอสำหรับร้าน (Ctrl+L)\n"
+                                "ลูกศรด้านขวา: ตั้งค่าล็อกหน้าจอ และเพลงคลอเมื่อคิวว่าง"));
+            btnShopLock->setCheckable(true);
+            btnShopLock->setChecked(isShopLocked());
+            connect(btnShopLock, &QAbstractButton::clicked, this, [this]() { toggleShopLock(); });
+            btnShopLock->setArrow([this]() { openShopModeSettings(); });
             btnSubtitles = mk(tr("ซับไตเติล"), "subtitles", tr("เปิด / ปิด ซับไตเติล YouTube (CC)"));
             btnSubtitles->setCheckable(true);
             btnSubtitles->setChecked(settings->value("YtShowSubtitles", false).toBool());
@@ -989,10 +1030,22 @@ MainWindow::MainWindow(QWidget *parent) :
                 detailTimer->start(3000);
             });
             // shown only when the window is too narrow for every button (see fitControlBar)
-            btnBarMore = mk(tr("อื่น ๆ"), "more", tr("ปุ่มที่ไม่พอที่บนแถบ"));
-            btnBarMore->hide();
+            btnBarMore = mk(tr("อื่น ๆ"), "more", tr("เสียงพิธีการ / เอฟเฟกต์ (เชิญประธาน เพลงชาติ ปรบมือ ...) และปุ่มที่ไม่พอที่บนแถบ"));
             connect(btnBarMore, &QAbstractButton::clicked, this, [this]() {
                 QMenu m(this);
+                {   // always first: the sounds of an event
+                    QAction *ev = m.addAction(MenuIcons::make(MenuIcons::Drum),
+                        tr("เสียงพิธีการ / เอฟเฟกต์ (เชิญประธาน เพลงชาติ ปรบมือ โห่ แก้วแตก ...)"));
+                    connect(ev, &QAction::triggered, this, [this]() {
+                        QTimer::singleShot(0, this, [this]() { openEventSounds(); });
+                    });
+                    QAction *pd = m.addAction(MenuIcons::make(MenuIcons::Download),
+                        tr("สร้างไดรฟ์พกพา (USB / External HD) พร้อมเพลงและค่าตั้ง..."));
+                    connect(pd, &QAction::triggered, this, [this]() {
+                        QTimer::singleShot(0, this, [this]() { openPortableDrive(); });
+                    });
+                    m.addSeparator();
+                }
                 for (QAbstractButton *b : barButtons) {        // buttons that did not fit on the bar
                     if (!b->property("barOverflow").toBool())
                         continue;
@@ -1029,11 +1082,11 @@ MainWindow::MainWindow(QWidget *parent) :
             row->addSpacing(int(6 * s));
             row->addWidget(sep());
             row->addSpacing(int(6 * s));
-            for (QWidget *w : std::initializer_list<QWidget *>{ btnMuteVocal, btnDrumHold, keyControl, btnMedley })
+            for (QWidget *w : std::initializer_list<QWidget *>{ btnMuteVocal, btnDrumHold, keyControl, tempoControl, btnMedley })
                 row->addWidget(w);
             row->addStretch(1);
-            for (QWidget *w : std::initializer_list<QWidget *>{ addSongBtn, lists, yt, btnSubtitles, mixerBtn,
-                                                                 btnSecondScreen, fullBtn, btnBarMore })
+            for (QWidget *w : std::initializer_list<QWidget *>{ searchBtn, addSongBtn, lists, yt, btnSubtitles, mixerBtn,
+                                                                 btnSecondScreen, fullBtn, btnShopLock, btnBarMore })
                 row->addWidget(w);
             row->addSpacing(int(6 * s));
             row->addWidget(sep());
@@ -1067,6 +1120,7 @@ MainWindow::MainWindow(QWidget *parent) :
     }
 
 
+    uiLog("start-up: main window: done");
     // Menu
     connect(this, SIGNAL(customContextMenuRequested(const QPoint&)), this, SLOT(showContextMenu(const QPoint&)));
 }
@@ -1131,6 +1185,10 @@ MainWindow::~MainWindow()
     aiStems = nullptr;
     delete sibFill;          // stops the SIB fill (resumes next start)
     sibFill = nullptr;
+    delete lyricsIndex;      // stops the lyrics index (resumes next start)
+    lyricsIndex = nullptr;
+    delete idleSmart;        // a library lookup still running drops its result
+    idleSmart = nullptr;
     delete audioMeter;
     audioMeter = nullptr;
 #ifdef KM_HAVE_PROCLOOP
@@ -1146,6 +1204,26 @@ MainWindow::~MainWindow()
 // (database entry only; the file stays on disk), so it doesn't come up again.
 void MainWindow::songUnplayable(const QString &reason)
 {
+    if (idlePlaying) {
+        uiLog(QString("idle song unplayable: %1 %2 (%3)").arg(playingSong.id(), playingSong.name(), reason));
+        // a few quick retries; after that the normal idle wait (checkIdleMusic) tries again,
+        // so a folder of broken files does not loop many times a second
+        static QElapsedTimer failClock;
+        static int fails = 0;
+        if (!failClock.isValid() || failClock.elapsed() > 30000)
+            fails = 0;
+        failClock.restart();
+        if (++fails > 3) {
+            idlePlaying = false;
+            idleClock.restart();
+            return;
+        }
+        QTimer::singleShot(250, this, [this]() {
+            if (idlePlaying && settings->value("IdleMusic/On", false).toBool())
+                startNextIdleSong();
+        });
+        return;
+    }
     QMessageBox box(QMessageBox::Warning, tr("ไม่สามารถเล่นเพลงได้"),
                     QString("%1  %2\n\n%3").arg(playingSong.id(), playingSong.name(), reason),
                     QMessageBox::NoButton, dialogParent());
@@ -1284,6 +1362,8 @@ void MainWindow::trashFilesRetry(QStringList left, int tries)
 
 void MainWindow::deletePlayingSong()
 {
+    if (!requireShopUnlock(tr("ลบเพลงออกจากคลัง")))
+        return;
     if (!songLoaded()) {
         ui->detail->setDetail(tr("ลบเพลง"), tr("ไม่มีเพลงที่กำลังเล่น"));
         ui->detail->show();
@@ -1324,6 +1404,10 @@ void MainWindow::deletePlayingSong()
 
 void MainWindow::deleteSearchSong()
 {
+    if (!requireShopUnlock(tr("ลบเพลงออกจากคลัง")))
+        return;
+    if (ui->lbId->text().isEmpty())
+        return;                                 // a message is shown, no song
     Song *cur = db->currentSong();
     if (!cur || cur->id().isEmpty())
         return;
@@ -1345,11 +1429,12 @@ void MainWindow::deleteSearchSong()
 
 void MainWindow::play(int index, int position)
 {
+    const bool wasIdle = idlePlaying;
     const bool targetIsMidi = (index >= 0 && index < playlist.size() &&
         (playlist[index]->songType() == "NCN" || playlist[index]->songType() == "EMK" ||
          playlist[index]->songType() == "SIB" ||
          playlist[index]->songType() == "HNK" || playlist[index]->songType() == "KAR"));
-    if (player->isUseMedley() && player->isPlayerPlaying() && targetIsMidi) {
+    if (!wasIdle && player->isUseMedley() && player->isPlayerPlaying() && targetIsMidi) {
         loadNextMedley(playlist[index]);
         connect(medleyLoader, &MedleyLoader::finished, [this, index](){
             MidiSequencer *seq = player->midiSequencer();
@@ -1360,6 +1445,8 @@ void MainWindow::play(int index, int position)
     }
 
     stop();
+    idlePlaying = (index == -2) ? true : (index == -1 ? wasIdle : false);
+    idleSwitching = false;
 
     // a new song: no fade left over; it fades in from silence
     fadeTimer->stop();
@@ -1367,7 +1454,7 @@ void MainWindow::play(int index, int position)
     endingSong = false;
     lastLyricPos = -2;
     afterLyrics = false;
-    const int effFadeIn = player->isUseMedley() ? 0 : fadeInMs;
+    const int effFadeIn = songInMedley() ? 0 : fadeInMs;    // (idle music fades in, medley or not)
     fadeGain = effFadeIn > 0 ? 0.0 : 1.0;
     applyVolume();
     if (effFadeIn > 0)
@@ -1377,14 +1464,21 @@ void MainWindow::play(int index, int position)
     if (fadeInMs > 0)
         startFade(1.0, fadeInMs);
 
+    if (index == -1)
+        startSongLevel();       // the same song again: its level (a song from the queue: below)
+
     if (index == -1 && playingSong.songType() == "VIDEO")
     {
-        playVideo(db->videoPath() + playingSong.path());
+        const QString p = isFullPath(playingSong.path())
+                              ? playingSong.path() : (db->videoPath() + playingSong.path());
+        playVideo(p);
         return;
     }
     if (index == -1 && playingSong.songType() == "MP3")
     {
-        playVideo(db->mp3Path() + playingSong.path(), false);
+        const QString p = isFullPath(playingSong.path())
+                              ? playingSong.path() : (db->mp3Path() + playingSong.path());
+        playVideo(p, false);
         return;
     }
     if (index == -1 && playingSong.songType() == "YOUTUBE")
@@ -1420,21 +1514,30 @@ void MainWindow::play(int index, int position)
         player->play();
         positionTimer->start();
         lyricsTimer->start();
-        resetScore();
-        scoreTimer->start();
+        if (!idlePlaying) {
+            resetScore();
+            scoreTimer->start();
+        }
         return;
     }
 
-    Song *s = playlist[index];
-    playingSong = *s;
-    playingIndex = index;
+    if (index >= 0) {
+        Song *s = playlist[index];
+        playingSong = *s;
+        playingIndex = index;
 
-    if (remove_playlist) {
-        delete s; // delete playlist in "index"
-        playlist.removeAt(index);
-        ui->playlistWidget->removeRow(index);
-        playingIndex = -1;
+        if (remove_playlist) {
+            if ((medleyLoader != nullptr) && medleyLoader->isRunning())
+                medleyLoader->wait();   // it may be reading this song
+            delete s; // delete playlist in "index"
+            playlist.removeAt(index);
+            ui->playlistWidget->removeRow(index);
+            playingIndex = -1;
+        }
     }
+    // index == -2 (idle music): playingIndex stays where the queue was, so the next song added
+    // (or "next") goes on after the songs already sung, not back to the first one.
+    startSongLevel();
 
 
     // NCN File
@@ -1633,7 +1736,8 @@ void MainWindow::play(int index, int position)
     }
     else if (playingSong.songType() == "VIDEO")
     {
-        QString p = db->videoPath() + playingSong.path();
+        QString p = isFullPath(playingSong.path())
+                        ? playingSong.path() : (db->videoPath() + playingSong.path());
         if (!QFile::exists(p)) {
             songUnplayable(tr("ไม่มีไฟล์ ") + p);
             return;
@@ -1643,7 +1747,8 @@ void MainWindow::play(int index, int position)
     }
     else if (playingSong.songType() == "MP3")
     {
-        QString p = db->mp3Path() + playingSong.path();
+        QString p = isFullPath(playingSong.path())
+                        ? playingSong.path() : (db->mp3Path() + playingSong.path());
         if (!QFile::exists(p)) {
             songUnplayable(tr("ไม่มีไฟล์ ") + p);
             return;
@@ -1691,7 +1796,10 @@ void MainWindow::play(int index, int position)
     player->setBpmSpeed(playingSong.bpmSpeed());
     player->setTranspose(playingSong.transpose());
 
-    if (player->isUseMedley() && player->midiFile() && !player->midiFile()->events().isEmpty()) {
+    // idle music in medley mode: its own tempo changes too (MidiPlayer::load made it one tempo)
+    if (idlePlaying && player->midiFile())
+        player->midiFile()->setSingleTempo(false);
+    if (songInMedley() && player->midiFile() && !player->midiFile()->events().isEmpty()) {
         player->midiFile()->setSingleTempo(true);
         const int baseBpm = player->currentBpm() - player->bpmSpeed();
         const int targetBpm = player->medleyBPM() > 0 ? MidiPlayer::fitLockedBpm(player->medleyBPM(), baseBpm, player->medleyKeepFarSongs()) : player->currentBpm();
@@ -1707,7 +1815,7 @@ void MainWindow::play(int index, int position)
                                                        player->medleyQuantizeBar(),
                                                        player->medleyIntroLeadInBars());
     }
-    if (player->isUseMedley()) {
+    if (songInMedley()) {
         if (false) player->midiSequencer()->setCutStartBar(playingSong.cutStartBar());
         if (false) player->midiSequencer()->setCutEndBar(playingSong.cutEndBar());
 
@@ -1717,9 +1825,11 @@ void MainWindow::play(int index, int position)
     }
 
     player->play();
-    db->addHistory(&playingSong);
-    resetScore();
-    scoreTimer->start();
+    if (!idlePlaying) {
+        db->addHistory(&playingSong);
+        resetScore();
+        scoreTimer->start();
+    }
     dmxLights->setPlaying(true);
 
     lyrWidget->show();
@@ -1731,7 +1841,7 @@ void MainWindow::play(int index, int position)
     lyricsTimer->start();
 
     const int nextMedleyIdx = (remove_playlist ? 0 : playingIndex + 1);
-    if (player->isUseMedley() && (nextMedleyIdx >= 0 && nextMedleyIdx < playlist.size())) {
+    if (songInMedley() && (nextMedleyIdx >= 0 && nextMedleyIdx < playlist.size())) {
         loadNextMedley(playlist[nextMedleyIdx]);
     }
 }
@@ -1749,57 +1859,78 @@ void MainWindow::showHelpDialog()
     text->setOpenExternalLinks(false);
     text->setHtml(tr(
         "<style>h3{color:#3a7bd5;margin:14px 0 4px 0} td{padding:3px 10px} td.k{font-weight:bold;white-space:nowrap}</style>"
-        "<h3>เริ่มร้องเพลง</h3>"
+        "<p><b>เริ่มง่าย ๆ 3 ขั้น:</b> 1) พิมพ์รหัสหรือชื่อเพลง (หรือกดปุ่ม <i>ค้นหา</i>)  2) กด Enter หรือคลิกเพลงซ้ำ = เข้าคิว  3) เพลงเล่นเอง</p>"
+
+        "<h3>ค้นหาและเพิ่มเพลง</h3>"
         "<table>"
-        "<tr><td class=k>พิมพ์รหัส / ชื่อเพลง / ศิลปิน</td><td>ค้นหาเพลง (พิมพ์ผิดแป้นภาษาอังกฤษ ระบบแปลงเป็นไทยให้)</td></tr>"
-        "<tr><td class=k>← →</td><td>ดูผลการค้นหาเพลงก่อนหน้า / ถัดไป</td></tr>"
-        "<tr><td class=k>Tab</td><td>เปลี่ยนการค้นหา: ทั้งหมด / รหัส / ชื่อเพลง / ศิลปิน</td></tr>"
+        "<tr><td class=k>พิมพ์ได้เลย</td><td>ค้นรหัส ชื่อเพลง ศิลปิน หรือท่อนเนื้อร้อง (ลืมเปลี่ยนแป้นเป็นไทย หรือพิมพ์ผิดเล็กน้อย ก็ยังเจอ)</td></tr>"
+        "<tr><td class=k>ปุ่ม ค้นหา</td><td>เปิดช่องค้นหาด้วยเมาส์ คลิกปุ่มโหมดด้านบนเพื่อเลือกวิธีค้น</td></tr>"
+        "<tr><td class=k>↑ ↓  หรือ ← →</td><td>เลื่อนไปเพลงก่อนหน้า / ถัดไปในผลการค้นหา (ล้อเมาส์บนรายการก็ได้)</td></tr>"
+        "<tr><td class=k>คลิกเพลงในรายการ</td><td>เลือกเพลงนั้น  คลิกซ้ำหรือดับเบิลคลิก = เพิ่มเข้าคิว</td></tr>"
+        "<tr><td class=k>Tab / Shift + Tab</td><td>เปลี่ยนโหมดค้นหา: ทั้งหมด / รหัส / ชื่อเพลง / ศิลปิน / วิดีโอ-MP3 / เนื้อร้อง / ความเร็ว (BPM)</td></tr>"
         "<tr><td class=k>Enter</td><td>เพิ่มเพลงเข้าคิว (ถ้ายังไม่มีเพลงเล่นอยู่ จะเล่นทันที)</td></tr>"
-        "<tr><td class=k>↑ ↓</td><td>เปิดคิวเพลง / เลือกเพลงในคิว แล้วกด Enter เพื่อเล่น</td></tr>"
+        "<tr><td class=k>Ctrl + ↑ ↓ / Ctrl + ← →</td><td>ตั้งคีย์ / ความเร็ว ให้เพลงที่เลือก ก่อนกด Enter</td></tr>"
         "<tr><td class=k>Esc</td><td>ปิดช่องค้นหา / คิวเพลง</td></tr>"
-        "<tr><td class=k>Ctrl + Delete</td><td>ลบเพลงที่แสดงในช่องค้นหาออกจากรายการเพลง (เลือกย้ายไฟล์ไปถังขยะได้)</td></tr>"
         "</table>"
 
-        "<h3>ระหว่างเล่นเพลง</h3>"
+        "<h3>ระหว่างเล่นเพลง (มีปุ่มบนแถบล่างทุกอย่าง)</h3>"
         "<table>"
+        "<tr><td class=k>F5 / F6 / F7</td><td>เล่น / พัก / หยุด</td></tr>"
+        "<tr><td class=k>F8 / F9</td><td>เพลงก่อนหน้า / ข้ามไปเพลงถัดไป</td></tr>"
         "<tr><td class=k>Home</td><td>เริ่มเพลงนี้ใหม่ตั้งแต่ต้น (ปุ่ม <i>เริ่มใหม่</i>)</td></tr>"
-        "<tr><td class=k>End</td><td>จบเพลงนี้ ไปเพลงถัดไปในคิว (ปุ่ม <i>จบเพลง</i>)</td></tr>"
-        "<tr><td class=k>F5 / F6 / F7</td><td>เล่น / หยุดชั่วคราว / หยุด</td></tr>"
-        "<tr><td class=k>F8 / F9</td><td>เพลงก่อนหน้า / เพลงถัดไป</td></tr>"
+        "<tr><td class=k>End</td><td>จบเพลงแบบค่อย ๆ เบาลง แล้วไปเพลงถัดไป (ปุ่ม <i>จบเพลง</i>)</td></tr>"
         "<tr><td class=k>*</td><td>ตัด / คืนเสียงร้องนำ (ปุ่ม <i>ตัดเสียงร้อง</i>)</td></tr>"
-        "<tr><td class=k>Insert / Delete</td><td>ขึ้นคีย์ / ลงคีย์</td></tr>"
-        "<tr><td class=k>Page Up / Page Down</td><td>เร็วขึ้น / ช้าลง</td></tr>"
-        "<tr><td class=k>Ctrl + ↑ / ↓</td><td>เพิ่ม / ลดเสียง</td></tr>"
+        "<tr><td class=k>Insert / Delete</td><td>ขึ้นคีย์ / ลงคีย์ (ปุ่ม <i>คีย์ − +</i>) ทุกชนิดเพลง</td></tr>"
+        "<tr><td class=k>Page Up / Page Down</td><td>เร็วขึ้น / ช้าลง (ปุ่ม <i>ความเร็ว − +</i>) กด Shift ด้วย = ทีละ 5 เฉพาะเพลง MIDI "
+        "ในเมดเลย์ เพลงถัดไปจะใช้ความเร็วใหม่นี้ด้วย</td></tr>"
+        "<tr><td class=k>Ctrl + ↑ / ↓</td><td>เพิ่ม / ลดเสียงหลัก</td></tr>"
+        "<tr><td class=k>Alt + ↑ / ↓</td><td>ปรับความดังเฉพาะเพลงนี้ (จำไว้ครั้งหน้า)</td></tr>"
         "<tr><td class=k>Space</td><td>แสดงรายละเอียดเพลงที่เล่นอยู่</td></tr>"
-        "<tr><td class=k>F4</td><td>เปิด / ปิด โหมดเมดเลย์ (เล่นต่อเนื่อง)</td></tr>"
-        "<tr><td class=k>Ctrl + D / Pause</td><td>ค้างจังหวะกลอง: ดนตรีหยุดที่ต้นห้องถัดไป เหลือกลองตีรอ (เนื้อร้องรอด้วย) กดอีกครั้ง = ลูกส่งแล้วเข้าเพลงต่อพอดีจังหวะ (เพลง MIDI)</td></tr>"
-        "<tr><td class=k>PageUp / PageDown</td><td>เพิ่ม / ลดความเร็วเพลงที่เล่นอยู่ (กด Shift ด้วย = ทีละ 5) — ในเมดเลย์ เพลงถัดไปจะใช้ความเร็วใหม่นี้ด้วย</td></tr>"
-        "<tr><td class=k>Ctrl + Delete</td><td>ลบเพลงที่กำลังเล่น (เช่น เพลงซ้ำตัวที่ไม่ดี) ออกจากรายการเพลงและคิว แล้วเล่นเพลงถัดไป เลือกย้ายไฟล์ไปถังขยะได้ (เมนูคลิกขวาก็มี)</td></tr>"
+        "<tr><td class=k>F4</td><td>เปิด / ปิด โหมดเมดเลย์ (ต่อเพลงเนียนตามจังหวะ)  F11 = ตั้งค่าเมดเลย์</td></tr>"
+        "<tr><td class=k>Ctrl + D / Pause</td><td>ค้างกลอง: ดนตรีหยุดในจังหวะถัดไป เหลือกลองตีรอ กดอีกครั้ง = ลูกส่งแล้วเข้าเพลงต่อพอดีจังหวะ (เพลง MIDI)</td></tr>"
+        "<tr><td class=k>Alt + 1 ... 9</td><td>แป้นเสียงเชียร์ / เสียงเอฟเฟกต์  Alt + 0 = ชุดถัดไป  Alt + Backspace = หยุดทั้งหมด</td></tr>"
+        "<tr><td class=k>F12</td><td>อัดเสียงร้อง (ดนตรี + ไมค์) เป็นไฟล์ WAV ใน Music\\PTHK Karaoke Recordings</td></tr>"
         "</table>"
 
-        "<h3>คิวเพลง (กด ↑ ↓ เพื่อเปิด)</h3>"
+        "<h3>คิวเพลง (กด ↑ ↓ เมื่อไม่ได้ค้นหา)</h3>"
         "<table>"
-        "<tr><td class=k>Delete</td><td>เอาเพลงที่เลือกออกจากคิว</td></tr>"
-        "<tr><td class=k>+ / -</td><td>เลื่อนเพลงที่เลือกขึ้น (ได้เล่นเร็วขึ้น) / ลง ในคิว</td></tr>"
-        "<tr><td class=k>Ctrl + ← → / ↑ ↓</td><td>ตั้งความเร็ว / คีย์ ของเพลงในคิว (หรือในช่องค้นหา) ก่อนเล่น</td></tr>"
+        "<tr><td class=k>↑ ↓ แล้ว Enter</td><td>เลือกเพลงในคิว แล้วเล่นเลย</td></tr>"
+        "<tr><td class=k>Delete</td><td>เอาเพลงที่เลือกออกจากคิว (ไม่ได้ลบไฟล์)</td></tr>"
+        "<tr><td class=k>+ / −</td><td>เลื่อนเพลงที่เลือกขึ้น (ได้เล่นเร็วขึ้น) / ลง</td></tr>"
+        "<tr><td class=k>Ctrl + ← → / ↑ ↓</td><td>ตั้งความเร็ว / คีย์ ของเพลงในคิวก่อนเล่น</td></tr>"
         "<tr><td class=k>Ctrl + S / Ctrl + O</td><td>บันทึก / เปิด รายการคิวเพลง</td></tr>"
+        "</table>"
+
+        "<h3>ปุ่ม Delete ทำงานต่างกันตามที่เปิดอยู่</h3>"
+        "<table>"
+        "<tr><td class=k>Delete ระหว่างเล่น</td><td>ลงคีย์ (ไม่ได้ลบอะไร)</td></tr>"
+        "<tr><td class=k>Delete ในคิวเพลง</td><td>เอาเพลงออกจากคิว</td></tr>"
+        "<tr><td class=k>Ctrl + Delete</td><td>ลบเพลงออกจากคลังเพลง (ถามยืนยันก่อน เลือกย้ายไฟล์ไปถังขยะได้)</td></tr>"
         "</table>"
 
         "<h3>ฟีเจอร์อื่น</h3>"
         "<table>"
         "<tr><td class=k>F2</td><td>เพิ่ม / เอาออก จากเพลงโปรด</td></tr>"
-        "<tr><td class=k>F3</td><td>เพลงโปรด / เล่นล่าสุด / เพลงฮิต</td></tr>"
+        "<tr><td class=k>F3</td><td>เพลงโปรด / เล่นล่าสุด / เพลงฮิต (ปุ่ม <i>รายการเพลง</i>)</td></tr>"
         "<tr><td class=k>F10</td><td>ค้นหาเพลงจาก YouTube แล้วเล่นสด หรือเพิ่มเข้าคิว (ต้องต่ออินเทอร์เน็ต)</td></tr>"
-        "<tr><td class=k>F12</td><td>บันทึกเสียงร้อง (ดนตรี + ไมค์) เป็นไฟล์ WAV ใน Music\\PTHK Karaoke Recordings</td></tr>"
+        "<tr><td class=k>ปุ่ม อื่น ๆ</td><td>เสียงพิธีการ / เอฟเฟกต์: เชิญประธาน เพลงชาติ เพลงสรรเสริญ ปรบมือ โห่ แก้วแตก ... "
+        "แต่ละหมวดคือโฟลเดอร์ใน <i>.PTHKKaraoke\\เสียงพิธีการ</i> ใส่ไฟล์เสียงลงไปแล้วปุ่มจะขึ้นเอง</td></tr>"
+        "<tr><td class=k>Ctrl + L</td><td>ล็อก / ปลดล็อกหน้าจอสำหรับร้าน (กั้นตั้งค่า มิกเซอร์ ลบเพลง ปิดโปรแกรม และเปิดเพลงคลอเมื่อคิวว่าง)</td></tr>"
+        "<tr><td class=k>ดับเบิลคลิกบนจอ</td><td>เต็มจอ / หน้าต่างปกติ</td></tr>"
+        "<tr><td class=k>คลิกขวา</td><td>เมนูทั้งหมด  เครื่องมือช่างเสียง (VST, บัส, LED, แยกเสียงมิดี้) อยู่ใน <i>เสียงและมิกเซอร์ › ขั้นสูง</i> "
+        "และซ่อนไว้เมื่อเลือก <i>เมนูแบบง่าย</i> ในเมนูคลิกขวา</td></tr>"
         "<tr><td class=k>F1</td><td>คู่มือนี้</td></tr>"
-        "<tr><td class=k>คลิกขวา</td><td>เมนูทั้งหมด (เพลง, YouTube, เมดเลย์, เสียงและมิกเซอร์, หน้าจอ, มือถือและไฟเวที, ตั้งค่า)</td></tr>"
         "</table>"
 
         "<h3>เพิ่มเพลง</h3>"
-        "<p>กดปุ่ม <b>+ เพิ่มเพลง</b> หรือลากไฟล์ / โฟลเดอร์มาวางบนจอ: วิดีโอ (mp4, mkv, avi, mpg, wmv, vob, dat), "
-        "MP3 (+ ไฟล์เนื้อร้อง .lrc ชื่อเดียวกัน) และ KAR / MID เข้าฐานข้อมูลทันที<br>"
+        "<p>กดปุ่ม <b>เพิ่มเพลง</b> หรือลากไฟล์ / โฟลเดอร์มาวางบนจอ เพลงเข้าคลังทันที:<br>"
+        "• คาราโอเกะ: NCN (.mid + .lyr + .cur), EMK, SIB, HNK, KAR / MIDI<br>"
+        "• วิดีโอ: mp4 mkv avi mpg mpeg wmv vob dat mov m4v ts<br>"
+        "• เพลงเสียง: mp3 wav flac m4a aac ogg wma (+ ไฟล์เนื้อร้อง .lrc ชื่อเดียวกัน)<br>"
+        "• ไฟล์บีบอัดที่มีเพลง: zip rar 7z<br>"
         "ตั้งชื่อไฟล์แบบ <b>รหัส ชื่อเพลง - ศิลปิน</b> เช่น <i>1001 ใจบางบาง - ศิลปิน.mp4</i> "
-        "แล้วค้นด้วยรหัส <b>V1001</b> (วิดีโอ) หรือ <b>M1001</b> (MP3)</p>"
+        "แล้วค้นด้วยรหัส <b>V1001</b> (วิดีโอ) หรือ <b>M1001</b> (เพลงเสียง)<br>"
+        "คลังเพลงทั้งโฟลเดอร์ (NCN / EMK / SIB ...) ตั้งได้ที่ <b>คลิกขวา › ตั้งค่า › ฐานข้อมูลเพลง</b></p>"
 
         "<h3>จอที่ 2 (ทีวี / โปรเจกเตอร์)</h3>"
         "<p>กดปุ่ม <b>จอที่ 2</b> เพื่อแสดงเนื้อร้องเต็มจอบนอีกจอ "
@@ -1807,6 +1938,7 @@ void MainWindow::showHelpDialog()
         "ปุ่มลัดทั้งหมดใช้ได้ทั้งบนจอหลักและจอที่ 2</p>"));
 
     QDialogButtonBox *bb = new QDialogButtonBox(QDialogButtonBox::Close, &dlg);
+    bb->button(QDialogButtonBox::Close)->setText(tr("ปิด"));
     connect(bb, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
 
     QVBoxLayout *l = new QVBoxLayout(&dlg);

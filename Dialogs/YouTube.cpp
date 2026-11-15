@@ -83,6 +83,74 @@ static QString findTool(const QString &exe)
 QString YtTools::ytdlpPath()  { return findTool("yt-dlp.exe"); }
 QString YtTools::ffmpegPath() { return findTool("ffmpeg.exe"); }
 
+QStringList YtTools::formatArgs(int maxHeight)
+{
+    const QString v = QString("bv*[vcodec^=avc1][height<=%1]").arg(maxHeight);
+    return {
+        "-f", v + "+ba[acodec=opus]/" + v + "+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b",
+        // a plain copy into .mkv (a second); the sound is made into AAC by convertForWindows
+        "--merge-output-format", "mkv",
+    };
+}
+
+QString YtTools::convertedName(const QString &in)
+{
+    const QFileInfo fi(in);
+    return fi.absolutePath() + "/" + fi.completeBaseName() + ".mp4";
+}
+
+QProcess *YtTools::convertForWindows(QObject *ctx, const QString &in, const std::function<void(int)> &onProgress,
+                                     const std::function<void(const QString &)> &onDone)
+{
+    if (QFileInfo(in).suffix().compare("mp4", Qt::CaseInsensitive) == 0) {
+        onDone(in);                                 // already a Windows file (an mp4 with AAC)
+        return nullptr;
+    }
+    const QString out = convertedName(in);
+    QProcess *p = new QProcess(ctx);
+    p->setProcessChannelMode(QProcess::MergedChannels);
+    auto durSec = std::make_shared<double>(0.0);
+    QObject::connect(p, &QProcess::readyRead, ctx, [p, durSec, onProgress]() {
+        static const QRegularExpression durRx("Duration:\\s*(\\d+):(\\d+):(\\d+(?:\\.\\d+)?)");
+        static const QRegularExpression posRx("^out_time_(?:us|ms)=(\\d+)");
+        while (p->canReadLine()) {
+            const QString line = QString::fromUtf8(p->readLine()).trimmed();
+            if (*durSec <= 0) {
+                const QRegularExpressionMatch d = durRx.match(line);
+                if (d.hasMatch())
+                    *durSec = d.captured(1).toDouble() * 3600 + d.captured(2).toDouble() * 60 + d.captured(3).toDouble();
+            }
+            const QRegularExpressionMatch m = posRx.match(line);
+            if (m.hasMatch() && *durSec > 0)
+                onProgress(qBound(0, int(m.captured(1).toDouble() / 1e6 / *durSec * 100.0), 100));
+        }
+    });
+    QObject::connect(p, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), ctx,
+                     [p, in, out, onDone](int code, QProcess::ExitStatus st) {
+        p->deleteLater();
+        const bool ok = st == QProcess::NormalExit && code == 0 && QFileInfo(out).size() > 0;
+        if (ok) {
+            QFile::remove(in);
+            onDone(out);
+        } else {
+            QFile::remove(out);
+            QFile::remove(in);
+            onDone(QString());
+        }
+    });
+    p->start(ffmpegPath(), {
+        "-y", "-hide_banner", "-i", in,
+        "-map", "0:v:0?", "-map", "0:a:0?",
+        "-c:v", "copy",
+        // the fast coder: 5.4 s instead of 12.6 s for a 5 min song, the same level and top end
+        // (measured 2026-11-14); the song waits for this before it starts
+        "-c:a", "aac", "-aac_coder", "fast", "-b:a", "256k", "-cutoff", "20000",     // full range: no top cut at 16 kHz
+        "-progress", "pipe:1", "-nostats",
+        out
+    });
+    return p;
+}
+
 bool YtTools::isYouTubeUrl(const QString &text)
 {
     QUrl u = QUrl::fromUserInput(text.trimmed());
@@ -320,7 +388,7 @@ void YouTubeDownloadDialog::runYtdlp()
     connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
             [this, log](int code, QProcess::ExitStatus st) {
         proc->deleteLater();
-        setBusy(false);
+        proc = nullptr;
 
         QString file;
         QFile pf(printFile);
@@ -334,12 +402,27 @@ void YouTubeDownloadDialog::runYtdlp()
 
         if (st == QProcess::NormalExit && code == 0 && !file.isEmpty() && QFile::exists(file)) {
             delete log;
-            progress->setValue(100);
-            lbStatus->setText(tr("ดาวน์โหลดเสร็จ: ") + QFileInfo(file).fileName());
-            emit downloaded(file, chkQueue->isChecked());
-            accept();
+            // the sound to AAC 256k (Windows plays it), with its own progress
+            progress->setValue(0);
+            lbStatus->setText(tr("กำลังแปลงเสียงให้ใส... 0%"));
+            proc = YtTools::convertForWindows(this, file, [this](int pct) {
+                progress->setValue(pct);
+                lbStatus->setText(tr("กำลังแปลงเสียงให้ใส... %1%").arg(pct));
+            }, [this](const QString &mp4) {
+                proc = nullptr;
+                setBusy(false);
+                if (mp4.isEmpty()) {
+                    lbStatus->setText(tr("แปลงเสียงไม่สำเร็จ ลองดาวน์โหลดใหม่"));
+                    return;
+                }
+                progress->setValue(100);
+                lbStatus->setText(tr("ดาวน์โหลดเสร็จ: ") + QFileInfo(mp4).fileName());
+                emit downloaded(mp4, chkQueue->isChecked());
+                accept();
+            });
             return;
         }
+        setBusy(false);
 
         QString err;
         for (const QString &l : *log)
@@ -352,15 +435,13 @@ void YouTubeDownloadDialog::runYtdlp()
     const QString ffmpegDir = QDir::toNativeSeparators(QFileInfo(YtTools::ffmpegPath()).absolutePath());
     QStringList args = {
         "--no-playlist", "--windows-filenames", "--no-mtime", "--newline",
-        // H.264 + AAC so Windows Media Foundation can play it
-        "-f", "bv*[vcodec^=avc1][height<=1080]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b",
-        "--merge-output-format", "mp4",
         "--ffmpeg-location", ffmpegDir,
         "--progress-template", "download:[PCT]%(progress._percent_str)s",
         "--print-to-file", "after_move:filepath", QDir::toNativeSeparators(printFile),
         "-o", QDir::toNativeSeparators(outDir) + "\\%(title).120s.%(ext)s",
         edUrl->text().trimmed()
     };
+    args = YtTools::formatArgs(1080) + args;       // H.264 + AAC (Windows plays it), best sound
     proc->start(YtTools::ytdlpPath(), args);
 }
 
@@ -1218,6 +1299,7 @@ void YouTubePlayer::playVideo(const QString &videoId, int volume)
     }
     active = true;
     started = false;
+    currentId = videoId;
     paused = false;
     duration = 0;
     waitedMs = 0;
@@ -1286,7 +1368,8 @@ void YouTubePlayer::playVideo(const QString &videoId, int volume)
         "onError:function(e){E=e.data;}"
         "}});}"
         "function pthkState(){if(!P||!P.getPlayerState)return JSON.stringify({s:-2,e:E});"
-        "return JSON.stringify({s:P.getPlayerState(),t:P.getCurrentTime(),d:P.getDuration(),e:E});}"
+        "var v='';try{v=P.getVideoData().video_id||'';}catch(x){}"
+        "return JSON.stringify({s:P.getPlayerState(),t:P.getCurrentTime(),d:P.getDuration(),e:E,v:v});}"
         "</script><script src='https://www.youtube.com/iframe_api'></script></body></html>")
         .arg(videoId).arg(clampedVol).arg(kPlayerOrigin).arg(vq).arg(showCc ? "true" : "false").arg(showCc ? "1" : "0");
     setHtml(html, QUrl(QString(kPlayerOrigin) + "/"));
@@ -1316,8 +1399,24 @@ void YouTubePlayer::poll()
             return;
         }
         const int state = o.isEmpty() ? -2 : o.value("s").toInt();
-        if (state == 1 || state == 2 || state == 3)
+        // The player is reused for the next clip (loadVideoById): for a moment it still reports the
+        // previous clip (playing, its time, even "ended"). Those reports are ignored, and the clip
+        // counts as started only once it really plays. Before, "buffering" / the old clip's state
+        // started it at once: the sound gate opened and the previous song's sound came in first.
+        const QString vid = o.value("v").toString();
+        const bool otherClip = !vid.isEmpty() && vid != currentId;
+        const double tNow = o.value("t").toDouble();
+        if (!otherClip && (state == 1 || ((state == 2 || state == 3) && tNow >= 0.3)))
             started = true;
+        if (otherClip && !started) {
+            waitedMs += pollTimer.interval();
+            if (waitedMs > 25000) {
+                active = false;
+                pollTimer.stop();
+                emit failed(tr("โหลดคลิปจาก YouTube ไม่ได้ ตรวจสอบอินเทอร์เน็ต"), false);
+            }
+            return;
+        }
         if (!started) {
             waitedMs += pollTimer.interval();
             if (waitedMs > 25000) {

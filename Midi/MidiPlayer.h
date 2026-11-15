@@ -7,6 +7,8 @@
 #include "MidiSynthesizer.h"
 
 #include <QObject>
+#include <QMutex>
+#include <QRecursiveMutex>
 
 enum class PlayerState
 {
@@ -101,6 +103,18 @@ public:
     void setLockBass(bool lock, int number = 32);
 
     void setMapChannelOutput(int ch, int port);
+    // a channel sent to an external port also plays on the SoundFont synthesizer
+    void setChannelDual(int ch, bool dual);
+    bool isChannelDual(int ch) const { return ch >= 0 && ch < 16 && _chDual[ch]; }
+    // name of the external port a channel / the main output uses ("" = the synthesizer)
+    QString channelPortName(int ch);
+    // an open output whose port went away (loopMIDI closed): the routing timer reconnects it
+    bool hasFailedOutput();
+    // the main output without stopping the song: only opens the port and remembers it as the main one
+    // (the caller then routes the channels with setMapChannelOutput). false when it can not be opened.
+    bool setMidiOutLive(int portNumber);
+    // ports whose sends failed (loopMIDI closed and opened again): open them again by name
+    void reopenFailedOutputs();
     void receiveMidiIn(std::vector< unsigned char > *message);
 
     bool isUseMedley() { return _useMedley; }
@@ -215,7 +229,17 @@ private:
 private:
     MidiSequencer *_midiSeq;
     MidiSequencer *_midiSeqTemp = nullptr;
+    // Guards _midiSeqTemp / _midiTransposeTemp: MedleyLoader, the GUI and the sequencer
+    // thread all touch them. Never delete a sequencer while holding it (its stop() waits
+    // for a thread whose finished() calls onSeqFinished(), which takes this lock).
+    QMutex _medleyMutex;
     QMap<int, MidiOut*> _midiOuts;
+    // _midiOuts is used by the sequencer thread, the MIDI-in thread and the GUI (routing changes)
+    QRecursiveMutex     _outsMx;
+    bool                _chDual[16] = {};
+    bool toSynth(int ch) { return _midiChannels[ch].port() == -1 || _chDual[ch]; }
+    MidiOut *outFor(int ch) { const int p = _midiChannels[ch].port(); return p == -1 ? nullptr : _midiOuts.value(p, nullptr); }
+    MidiOut *openOut(int port);
     MidiSynthesizer     *_midiSynth;
     RtMidiIn            *_midiIn = nullptr;
     Channel             _midiChannels[16];

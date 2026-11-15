@@ -103,10 +103,15 @@ public:
     void setOutgoingGroove(const QVector<RhythmBridgeEvent> &g) { _songGroove = g; }
     // Set when a drum bridge follows this song: end with a beat-1 hit that rings 1 beat.
     void setEndHitHold(bool on) { _endHitHold = on; }
+    // Band-style ending ("ลูกจบ", End key with no medley hand-off): at the cut-out the band
+    // lands on beat 1 and fades, the drums play one fill bar, then crash + kick and the song ends.
+    void setEndingFill(bool on) { _endingFill.store(on); }
+    bool isEndingFill() const { return _endingFill.load(); }
 
-    // Drum hold ("ค้างจังหวะกลอง"): first call - at the next bar line the band stops and only
-    // the song's own drum beat keeps going (lyrics wait too); second call - the next bar is a
-    // drum fill and the song continues from where it stopped, on beat 1.
+    // Drum hold ("ค้างจังหวะกลอง"): first call - on the next beat the band stops and only the
+    // song's own drum beat keeps going, in step with the song's bars (lyrics wait too); second
+    // call - the next bar is a drum fill, crash on beat 1, and the song continues from the beat
+    // where it stopped.
     void toggleDrumHold();
     bool isDrumHoldOn() const { return _holdRequested.load() || _holdActive.load(); }
 
@@ -168,9 +173,17 @@ private:
     QVector<RhythmBridgeEvent> _songGroove;
     int _downbeatOffset = -1;
     bool _endHitHold = false;
+    std::atomic<bool> _endingFill{false};
     std::atomic<bool> _holdRequested{false}, _releaseRequested{false}, _holdActive{false};
     int _holdTick = -1;
+    double _holdBeat = 0;       // where in its bar the hold starts, in beats (0 = beat 1; may be between beats)
+    int _skipNotesBefore = -1;  // after a hold: the song goes on from this tick; notes before it are skipped
+    double _holdPressMs = 0;    // when it was pressed (clockMs), for the log
     void runDrumHold(int fromIndex);
+    // the song's own drum beat (one bar, beats 0..4), or a plain kick/snare/hi-hat beat
+    QVector<RhythmBridgeEvent> grooveOrPlain();
+    // one fill bar from a groove: the beat on 1-2, snare 16ths on 3, toms high -> low on 4
+    static QVector<RhythmBridgeEvent> drumFillBar(const QVector<RhythmBridgeEvent> &groove);
     int _lastExpr[16] = { 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127 };
     // the band's "landing" when the music stops at tick `at`: its beat-1 notes, ring 1 beat,
     // fade over 1 beat, then silence (beats relative to that moment, melodic channels only)

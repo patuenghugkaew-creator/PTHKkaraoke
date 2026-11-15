@@ -258,7 +258,9 @@ MedleyDialog::MedleyDialog(QWidget *parent, MidiPlayer *player)
     g1->addWidget(_bpmChips, 2, 1);
 
     _chkKeepFar = new QCheckBox(tr("ไม่บังคับเพลงช้า (เพลงช้าเล่นครึ่งความเร็วนี้ เพลงที่ต่างมากเล่นความเร็วเดิม)"), card1);
-    _chkKeepFar->setToolTip(tr("ติ๊ก: เพลงช้าไม่ถูกเร่งเป็นเพลงเร็ว\nไม่ติ๊ก: ทุกเพลงเล่นที่ความเร็วที่ตั้งไว้พอดี"));
+    _chkKeepFar->setToolTip(tr("ติ๊ก: เพลงช้าไม่ถูกเร่งเป็นเพลงเร็ว\n"
+                               "ไม่ติ๊ก: ทุกเพลงเล่นที่ความเร็วที่ตั้งไว้ ยกเว้นเพลงช้ามาก (ไม่ถึง 65% ของความเร็วนี้) "
+                               "เล่นครึ่งความเร็ว ยังลงจังหวะกลองเดียวกัน"));
     g1->addWidget(_chkKeepFar, 3, 1);
 
     c1->addLayout(g1);

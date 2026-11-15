@@ -94,6 +94,11 @@ public:
         return maxCur;
     }
 
+    // The karaoke maker's name at the start of a song ("......เต่า คาราโอเกะ......", "SIB KARAOKE"):
+    // shown as this text instead ("" = as in the file). Set from the settings (Lyrics/BrandText).
+    static QString &brandText() { static QString t; return t; }
+    static void applyBrand(QStringList &lyrs, QVector<long> &curs);
+
     QFont   textFont()          { return font(); }
     QColor  textColor()         { return tColor; }
     QColor  textBorderColor()   { return tBorderColor; }

@@ -5,16 +5,22 @@
 
 #include <QObject>
 #include <QSqlDatabase>
+#include <QPair>
 #include <QSet>
+#include <QMap>
+#include <QVector>
 #include <QThread>
 
 
+// (the order is the order of the mode buttons over the search bar)
 enum class SearchType {
-    ByAll,
+    ByAll,          // code, name, artist; then the lyrics too, in the same list (MainWindow)
     ById,
     ByName,
     ByArtist,
-    ByVideo         // video / MP3 songs only, the text anywhere in the name or artist
+    ByVideo,        // video / MP3 songs only, the text anywhere in the name or artist
+    ByLyrics,       // any line of the lyrics only (LyricsIndex; searched by MainWindow in the background)
+    ByTempo         // a tempo: the songs within 5 BPM of it, closest first
 };
 
 enum class UpdateType {
@@ -80,6 +86,12 @@ public:
 
     // SIB songs (SIBSIB Karaoke AES-256 + ZIP); songtype "SIB"
     QString sibPath() { return _sibPath; }
+    // the EMK folder (the EMK / HNK setting; default "EMK" next to the NCN folder)
+    QString emkFolder() const;
+    // songs per type ("NCN" -> 101351 ...), for the settings page
+    QMap<QString, int> countByType();
+    bool hasSongType(const QString &type);      // at least one song of this type (one row read)
+    bool hasAnySong();
     void setSibPath(const QString &p) { _sibPath = p; }
     bool insertSIB(const QString &basePath, const QString &songId, const QString &sibFilePath);
     int importSibDatabase(const QString &datPath, const QString &sibBasePath);
@@ -94,7 +106,25 @@ public:
     // tone marks / spaces, sound-alike letters. Next / previous then step through its results.
     void startFuzzyIndex();
     Song *searchFuzzy(const QString &s);
-    bool isFuzzyResult() const { return fuzzyMode; }
+    bool isFuzzyResult() const { return fuzzyMode && !listMode; }
+    // a list of songs found elsewhere (lyrics, tempo): the one at `pos` is shown, Up / Down go
+    // through it. lyricsFrom: where the songs found by their lyrics begin (-1: none / all of them)
+    bool showRows(const QVector<qint64> &rows, const QString &text, int pos = 0, int lyricsFrom = -1);
+    int lyricsFrom() const { return listMode ? lyricsStart : -1; }
+    // the songs of the search shown now, as rows (to put more after them), at most `max`
+    QVector<qint64> currentRows(int max = 300);
+    // the songs of these (songtype, path), NCN first, by name
+    QVector<qint64> rowsFor(const QVector<QPair<QString, QString>> &keys);
+    // the same on any thread, with its own connection to the song database file
+    static QVector<qint64> rowsForKeys(const QString &dbFile, const QVector<QPair<QString, QString>> &keys);
+    static QVector<qint64> rowsForOn(QSqlDatabase &db, const QVector<QPair<QString, QString>> &keys);
+    QVector<qint64> rowsByTempo(int bpm, int within = 5);
+    int resultCount() const { return fuzzyMode ? fuzzyRows.size() : -1; }
+    int resultPos() const { return fuzzyPos; }
+    // the results around the one shown, for the list under the search bar
+    struct ResultRow { QString id, name, artist, type; int tempo = 0; };
+    QVector<ResultRow> resultWindow(int from, int count);
+    int resultIndex() const { return fuzzyMode ? fuzzyPos : currentResultIndex; }
     // text typed while the keyboard was still in English mode -> Thai (Kedmanee layout)
     static QString kedmaneeToThai(const QString &s);
 
@@ -102,6 +132,18 @@ public:
     void addHistory(Song *s);
     bool isFavorite(Song *s);
     bool toggleFavorite(Song *s);           // returns the new state
+
+    // Key and speed remembered per song (changed while it played; used when it is queued again).
+    // False when nothing is remembered for the song.
+    bool songPrefs(const QString &type, const QString &path, int *transpose, int *bpmSpeed);
+    void rememberSongKey(const QString &type, const QString &path, int transpose);
+    void rememberSongSpeed(const QString &type, const QString &path, int bpmSpeed);
+    // Loudness (LUFS, NaN when not measured yet) and the operator's own +/- dB for the song.
+    bool songLevel(const QString &type, const QString &path, double *loudness, double *gainDb);
+    void rememberSongLoudness(const QString &type, const QString &path, double lufs);
+    void rememberSongGain(const QString &type, const QString &path, double gainDb);
+    // the middle loudness (LUFS) of the songs of these types measured before; NaN with fewer than 3
+    double typicalLoudness(const QStringList &types);
     enum class ListKind { Favorites, History, Top };
     void removeFromList(ListKind kind, Song s);
     void clearList(ListKind kind);
@@ -109,6 +151,13 @@ public:
     // for the phone song requests: does not touch the search box state of the player
     QList<Song> findSongs(const QString &text, int limit = 30);
     bool songByPath(const QString &type, const QString &path, Song *out);
+    bool randomSong(Song *out);
+    // Songs the customers sang (for the smart idle music, IdleSmart.h): since `from` (secs since
+    // epoch), newest first; or at this hour of the day (+-1 h) on the same kind of day (weekend or
+    // not) in the last `weeks` weeks, most sung first.
+    struct SungSong { QString type, path, name, artist; int tempo = 0; qint64 n = 0; };    // n: when (secs) / how many times
+    QVector<SungSong> sungSince(qint64 from, int limit = 10);
+    QVector<SungSong> sungAtHour(int hour, bool weekend, int weeks = 8, int limit = 15);
 
     // Codes by artist (PTHK's own, beside the codes of the song files): every artist gets a run of
     // 7-digit codes, songs sorted by name, with spare numbers at the end of the run so the artist's
@@ -183,6 +232,8 @@ private:
     bool fuzzyMode = false;
     QVector<qint64> fuzzyRows;
     int fuzzyPos = 0;
+    bool listMode = false;          // fuzzyRows came from showRows (lyrics / tempo), not the fuzzy search
+    int lyricsStart = -1;           // showRows: the first of the songs found by their lyrics
     bool loadRow(qint64 rowid);
 
     void createListTables();

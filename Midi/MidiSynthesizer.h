@@ -3,8 +3,12 @@
 
 #include <QObject>
 #include <QMap>
+#include <QHash>
+#include <QSet>
 #include <QVector>
 #include <QTimer>
+#include <QRecursiveMutex>
+#include <atomic>
 
 #include <bass.h>
 #include <bassmidi.h>
@@ -69,6 +73,8 @@ public:
     bool isOpened() { return openned; }
     // main output mixer (after the master effects); 0 while the synth is closed
     DWORD mainMixerHandle() { return mixers.isEmpty() ? 0 : mixers[0].handle; }
+    // the loaded soundfonts, first = default (e.g. for the sound pads' own MIDI stream)
+    QList<HSOUNDFONT> soundfonts() const { return synth_HSOUNDFONT; }
 
     // ASIO output (-1 = normal Windows device)
     bool setAsioDevice(int asioIndex);
@@ -122,6 +128,18 @@ public:
     QList<int> getMapSoundfontIndex(int presetIndex) { return instmSf[presetIndex]; }
     QList<int> getDrumMapSfIndex(int presetIndex) { return drumSf[presetIndex]; }
 
+    // Multi soundfont (Dialogs/MultiSoundfontDialog.h), per preset and program (128 each):
+    //  src: the sound taken from the program's soundfont, bank * 128 + program; -1 = the same program
+    //  vol: its level in percent (100 = as the soundfont file; another level opens the file once more,
+    //       loading only the presets it plays, with its own volume)
+    void setMapSoundExtras(int presetIndex, const QList<int> &src, const QList<int> &vol);
+    QList<int> getMapSoundSource(int presetIndex) const { return instSrc.value(presetIndex); }
+    QList<int> getMapSoundVolume(int presetIndex) const { return instVol.value(presetIndex); }
+    HSOUNDFONT soundfontHandle(int sfIndex) const
+    { return sfIndex >= 0 && sfIndex < synth_HSOUNDFONT.count() ? synth_HSOUNDFONT.at(sfIndex) : 0; }
+    // presets of a soundfont: (bank << 16) | program, bank order
+    QVector<DWORD> soundfontPresetList(int sfIndex);
+
     // Per-strip soundfont: use one particular soundfont for a single instrument strip (0..41), whatever the preset
     // map says. Stored by file path so it survives re-ordering / removing soundfonts. Empty path = follow the preset.
     void setStripSoundfont(InstrumentType t, const QString &sfPath, bool apply = true);
@@ -169,9 +187,18 @@ public:
     void setSpeaker(InstrumentType t, SpeakerType speaker);
 
     // External MIDI out per instrument (empty name = internal synth only).
-    // When set, that instrument's notes are sent to the device instead of the SoundFont.
+    // When set, that instrument's notes are sent to the device instead of the SoundFont (or as well,
+    // with setExtMidiDual). The wanted port is kept even while it is missing (loopMIDI started after
+    // PTHK): reconnectExt() connects it when it shows up. The strip's mute / solo / fader work on the
+    // notes sent out (fader = note strength) and its meter shows them.
     void setExtMidiOut(InstrumentType t, const QString &deviceName);
-    QString extMidiOut(InstrumentType t) { return extOutName.value(t); }
+    QString extMidiOut(InstrumentType t);               // the wanted port ("" = none)
+    bool isExtMidiConnected(InstrumentType t);
+    void setExtMidiDual(InstrumentType t, bool dual);   // also play the SoundFont sound
+    bool isExtMidiDual(InstrumentType t);
+    // connect wanted ports that are present, drop ones that went away; never the MIDI-in port
+    // (that would loop). true when something changed.
+    bool reconnectExt(const QString &midiInName);
 
 
     static QStringList audioDevices();
@@ -263,11 +290,20 @@ private:
     HSTREAM getDrumHandleFromNote(int drumNote);
 
 private:
-    MidiOut *extPort(InstrumentType t);
+    MidiOut *extPort(InstrumentType t);                 // extMx held
     InstrumentType typeOf(int ch, int note);
     void extTeeAll(int status, int d1, int d2, bool oneData = false);
-    QMap<InstrumentType, QString> extOutName;
+    int extVelocity(InstrumentType t, int velocity);    // the strip's fader on a note sent out
+    bool connectExt(InstrumentType t, const QStringList &names, const QString &inName);   // extMx held
+    void dropUnusedExtPorts();                          // extMx held
+    QMap<InstrumentType, QString> extWant;              // what the user chose
+    QMap<InstrumentType, QString> extOutName;           // connected now
     QMap<QString, MidiOut*> extPorts;
+    QSet<int> extDual;                                  // InstrumentType as int
+    QString extInName;                                  // MIDI-in port: never sent to
+    // extOutName / extPorts are used by the sequencer and MIDI-in threads and changed by the GUI
+    QRecursiveMutex extMx;
+    std::atomic<int> extCount{0};                       // connected instruments (quick check)
 
     QTimer timer;
 
@@ -281,6 +317,11 @@ private:
     QMap<int, QString> stripSf;   // InstrumentType -> soundfont file chosen for that strip
     QList<QList<int>> instmSf;
     QList<QList<int>> drumSf;
+    QList<QList<int>> instSrc;      // multi soundfont: sound of the program (see setMapSoundExtras)
+    QList<QList<int>> instVol;      //  and its level (%)
+    QHash<QString, HSOUNDFONT> levelFonts;          // "file|percent" -> a handle with its own volume
+    HSOUNDFONT openFontFile(const QString &file) const;
+    HSOUNDFONT levelFont(int sfIndex, int percent, QSet<QString> &used);
     QMap<InstrumentType, Instrument> instMap;
     QMap<InstrumentType, Reverb2FX *> sendRv;       // per-channel reverb (free-verb on the channel stream)
     void attachSendReverb(InstrumentType t, DWORD stream);
@@ -337,6 +378,8 @@ private:
     int masterChannels = 2;
     HDSP masterDspHandle = 0;
     static void CALLBACK masterDspCallback(HDSP handle, DWORD channel, void *buffer, DWORD length, void *user);
+    HDSP songLevelHandle = 0;       // SongLevel: one steady gain per song (see Midi/SongLevel.h)
+    static void CALLBACK songLevelCallback(HDSP handle, DWORD channel, void *buffer, DWORD length, void *user);
     bool sfLoadAll = false;
 
     DWORD RPNType = 0;

@@ -2,6 +2,7 @@
 
 #include <QPainter>
 #include <QPainterPath>
+#include <QRegularExpression>
 
 
 LyricsWidget::LyricsWidget(QWidget *parent) : QWidget(parent)
@@ -78,6 +79,51 @@ void LyricsWidget::reset()
     update();
 }
 
+// One cursor (tick) per character plus one per line end, in file order. A replaced line gets as
+// many cursors as its new text, spread evenly from its old first to its old last one, so the
+// sweep takes the same time and every later line keeps its own cursors.
+void LyricsWidget::applyBrand(QStringList &lyrs, QVector<long> &curs)
+{
+    const QString brand = brandText().trimmed();
+    if (brand.isEmpty() || curs.isEmpty())
+        return;
+    static const QString deco = QString::fromUtf8(" .><-_=*~:|·•…\t");
+    int offset = 0;
+    const int lookLines = qMin(lyrs.size(), 8);     // the maker's name is in the song's first lines
+    for (int li = 0; li < lookLines; ++li) {
+        QString &l = lyrs[li];
+        const int n = l.length();
+        const bool maker = (l.contains("karaoke", Qt::CaseInsensitive) || l.contains(QString::fromUtf8("คาราโอเก")))
+                           && !l.contains(brand, Qt::CaseInsensitive);
+        // the maker's phone numbers ("..081-7940516..", "Tel.931-2030 , 01-498-1245"): 9+ digits with
+        // a dashed group (an "Intro..15...16..." counter has no dash) - shown as the dots only
+        static const QRegularExpression phoneGroup("\\d{2,3}\\s*-\\s*\\d{3,4}|\\b0\\d{8,9}\\b");
+        int digits = 0;
+        for (const QChar ch : l)
+            if (ch.isDigit()) ++digits;
+        const bool phone = !maker && digits >= 9 && phoneGroup.match(l).hasMatch();
+        if ((maker || phone) && n > 0 && offset + n <= curs.size()) {
+            int a = 0, b = n;
+            while (a < b && deco.contains(l[a])) ++a;           // keep the dots / arrows around it
+            while (b > a && deco.contains(l[b - 1])) --b;
+            QString line = l.left(a) + (maker ? brand : QString()) + l.mid(b);
+            if (line.trimmed().isEmpty())
+                line = QStringLiteral("......");                // never an empty line: it keeps its time
+            const long c0 = curs[offset], c1 = curs[offset + n - 1];
+            QVector<long> spread(line.length());
+            for (int i = 0; i < spread.size(); ++i)
+                spread[i] = spread.size() > 1 ? c0 + long(double(c1 - c0) * i / (spread.size() - 1)) : c0;
+            curs.remove(offset, n);
+            for (int i = 0; i < spread.size(); ++i)
+                curs.insert(offset + i, spread[i]);
+            l = line;
+        }
+        offset += l.length() + 1;
+        if (offset >= curs.size())
+            break;
+    }
+}
+
 void LyricsWidget::setLyrics(const QString &lyr, const QVector<long> &curs)
 {
     animation->stop();
@@ -93,6 +139,7 @@ void LyricsWidget::setLyrics(const QString &lyr, const QVector<long> &curs)
     }
 
     cursors = curs;
+    applyBrand(lyrics, cursors);
 
     // ค้นหา บรรทัดว่าง
     int index = 0;
@@ -127,6 +174,7 @@ void LyricsWidget::setLyricsTemp(const QString &lyr, const QVector<long> &curs)
     }
 
     cursorsTemp = curs;
+    applyBrand(lyricsTemp, cursorsTemp);
 
     // ค้นหา บรรทัดว่าง
     int index = 0;

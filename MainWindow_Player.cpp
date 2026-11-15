@@ -153,6 +153,10 @@ void MainWindow::onSliderPositionReleased()
 
 void MainWindow::on_btnVolumeMute_clicked()
 {
+    if (isShopStrictLocked()) {
+        notifyShopStrictLocked(tr("ปิด/เปิดเสียงหลัก"));
+        return;
+    }
     if (ui->sliderVolume->isEnabled()) {
         ui->sliderVolume->setEnabled(false);
         ui->btnVolumeMute->setIconFiles(":/Icons/volume-mute-white", ":/Icons/volume-mute-blue");
@@ -188,6 +192,12 @@ void MainWindow::on_btnPlay_clicked()
 
 void MainWindow::onSliderVolumeValueChanged(int value)
 {
+    if (isShopStrictLocked() && midiBaseVolume >= 0 && value != midiBaseVolume) {
+        QSignalBlocker b(ui->sliderVolume);
+        ui->sliderVolume->setValue(midiBaseVolume);
+        notifyShopStrictLocked(tr("ปรับระดับเสียงหลัก"));
+        return;
+    }
     Q_UNUSED(value);
     applyVolume();
 
@@ -224,12 +234,15 @@ void MainWindow::onNextMedleyStarted()
     if (index >= 0 && index < playlist.size()) {
         playingSong = *playlist[index];
         if (remove_playlist) {
+            if ((medleyLoader != nullptr) && medleyLoader->isRunning())
+                medleyLoader->wait();   // it may be reading this song
             delete playlist.takeAt(index);
             ui->playlistWidget->removeRow(index);
             playingIndex = -1;
         } else {
             playingIndex = index;
         }
+        startSongLevel();       // medley: the next song took over
     }
 
     // 1. Cancel any active fade-out and stale finish callbacks from previous song
@@ -364,7 +377,7 @@ void MainWindow::addBpmSpeed(int speed)
     // Medley with a locked tempo: the change becomes the new lock, so the following
     // songs keep the tempo the operator just chose (scaled, so a half-time ballad
     // nudged by 1 BPM moves the lock by 2).
-    if (player->isUseMedley() && player->medleyBPM() > 0 && oldBpm > 0) {
+    if (songInMedley() && player->medleyBPM() > 0 && oldBpm > 0) {
         const int newLock = qBound(40, int(player->medleyBPM() * double(bpm) / oldBpm + 0.5), 250);
         if (newLock != player->medleyBPM()) {
             player->setMedleyBPM(newLock);
@@ -389,6 +402,9 @@ void MainWindow::addBpmSpeed(int speed)
 
     if (playingSong.id() != "")
         playingSong.setBpmSpeed(bpmSp);
+    // remembered for the song; not in medley, where the tempo follows the medley lock
+    if (!songInMedley())
+        rememberPlayingSpeed(bpmSp);
     ui->songDetail->setDetail(&playingSong);
     ui->songDetail->adjustSize();
 
@@ -398,7 +414,7 @@ void MainWindow::addBpmSpeed(int speed)
         value += QString::number(bpmSp) + ")";
     }
 
-    if (player->isUseMedley() && player->medleyBPM() > 0)
+    if (songInMedley() && player->medleyBPM() > 0)
         value += tr("  • เมดเลย์ ") + QString::number(player->medleyBPM());
 
     ui->detail->setDetail(tr("ความเร็ว"), value);
@@ -520,6 +536,10 @@ void MainWindow::savePlaylist()
 
 void MainWindow::loadPlaylist()
 {
+    if (isShopStrictLocked()) {
+        notifyShopStrictLocked(tr("เปิดรายการเล่น"));
+        return;
+    }
     QString fileName = QFileDialog::getOpenFileName(this, tr("เปิดรายการเล่น"),
                                                     Utils::LAST_OPEN_DIR,
                                                     APP_PLAYLIST_FILTER_TEXT);
@@ -532,6 +552,8 @@ void MainWindow::loadPlaylist()
     QList<Song*> songs;
     if (Utils::loadPlaylist(fileName, songs))
     {
+        if ((medleyLoader != nullptr) && medleyLoader->isRunning())
+            medleyLoader->wait();   // it may be reading one of the songs deleted here
         for (Song *s : playlist)
             delete s;
         playlist.clear();
@@ -576,7 +598,7 @@ void MainWindow::showDrumHoldBanner(int state)
     }
     QString text;
     if (state == 1)
-        text = tr("ค้างกลอง: ดนตรีจะหยุดที่ต้นห้องถัดไป");
+        text = tr("ค้างกลอง: ดนตรีจะหยุดในจังหวะถัดไป");
     else if (state == 2)
         text = tr("ค้างจังหวะกลองอยู่  |  กดปุ่ม \"ส่งเข้าเพลง\" หรือ Ctrl+D เพื่อลูกส่งเข้าเพลงต่อ");
     else
@@ -634,8 +656,14 @@ void MainWindow::ensureAiStems()
             QMetaObject::invokeMethod(this, [this, f, ok, err]() {
                 const QString name = QFileInfo(f).completeBaseName();
                 uiLog(QString("AI stems %1: %2 %3").arg(ok ? "done" : "failed", name, err));
+                if (!ok && !ytPrepFile.isEmpty() && QFileInfo(ytPrepFile) == QFileInfo(f)) {
+                    ytPrepGiveUp(QString("YouTube %1: the AI failed, plays without waiting").arg(ytPrepId));
+                    return;
+                }
                 if (ok && QFileInfo(videoAudioFile) == QFileInfo(f))
                     return;                     // the playing song: its AI sound is already heard
+                if (!ok && QFileInfo(videoAudioFile) != QFileInfo(f) && !isSongPlaying())
+                    return;                     // a song in the queue: no message on the screen
                 ui->detail->setDetail(ok ? tr("AI แยกเสียงร้องเสร็จ") : tr("AI แยกเสียงร้องไม่สำเร็จ"),
                                       ok ? tr("%1 — ตัดเสียงร้องได้สะอาดทันทีเมื่อเล่นเพลงนี้").arg(name)
                                          : tr("%1 — %2").arg(name, err));
@@ -643,9 +671,16 @@ void MainWindow::ensureAiStems()
                 detailTimer->start(6000);
             }, Qt::QueuedConnection);
         };
+        aiStems->onGpuLost = [this](const QString &) {
+            QMetaObject::invokeMethod(this, [this]() {
+                ui->detail->setDetail(tr("การ์ดจอไม่ตอบสนอง"), tr("AI ตัดเสียงร้องเปลี่ยนไปใช้ CPU แทน (จนกว่าจะเปิดโปรแกรมใหม่)"));
+                ui->detail->show();
+                detailTimer->start(6000);
+            }, Qt::QueuedConnection);
+        };
     }
     aiStems->configure(QFileInfo(YtTools::toolsDir()).absolutePath() + "/models",
-                       settings->value("YtAiModel", "hq").toString(),
+                       settings->value("YtAiModel", "light").toString(),   // same default as the settings page
                        settings->value("YtAiDevice", 0).toInt() == 2);     // CPU unless "GPU" was chosen
     updateAiStemsBackground();
 }
@@ -663,8 +698,14 @@ void MainWindow::enqueueAiStems(const QString &file)
 // the vocal cut on is separated anyway, from its play position on).
 void MainWindow::updateAiStemsBackground()
 {
-    if (aiStems)
-        aiStems->setBackgroundAllowed(!videoActive && !ytActive);
+    // Queued songs are prepared also while a song plays (ytQueueTick); with a picture on the screen
+    // the maker paces itself on the graphics card (AiStemMaker::setPaced)
+    if (aiStems) {
+        // while the song waiting to start is downloading, no other AI work (the CPU / graphics
+        // card for its conversion; then its own AI comes first as the focus)
+        aiStems->setBackgroundAllowed(ytPrepId.isEmpty() || !ytPrepFile.isEmpty());
+        aiStems->setPaced(videoActive || ytActive);
+    }
 }
 
 // At start: downloaded clips whose separation is not finished go on in the background.
@@ -673,15 +714,32 @@ void MainWindow::resumeAiStems()
     if (!db)
         return;
     const QString models = QFileInfo(YtTools::toolsDir()).absolutePath() + "/models";
-    const QString model = settings->value("YtAiModel", "hq").toString();
+    const QString model = settings->value("YtAiModel", "light").toString();
     if (!QFile::exists(models + "/" + AiVocalEngine::model(model)->file))
         return;                                 // the AI was never used: nothing to go on with
     QString dir = QDir::fromNativeSeparators(db->videoPath());
     while (dir.endsWith('/'))
         dir.chop(1);
+    // What a download that was cut short left behind (yt-dlp's parts and single streams, e.g. a
+    // picture-only "name.f136.mp4"): never a song - the AI failed on one (BASS error 17) - and
+    // removed when older than an hour (a download running now is younger).
+    static const QRegularExpression leftover("(\\.part|\\.ytdl|\\.part-Frag\\d+|\\.f\\d+\\.(mp4|webm|m4a|mkv))$");
+    const QDateTime old = QDateTime::currentDateTime().addSecs(-3600);
+    int removed = 0;
+    for (const QFileInfo &fi : QDir(dir + "/YouTube").entryInfoList(QDir::Files)) {
+        if (!leftover.match(fi.fileName()).hasMatch() || fi.lastModified() > old)
+            continue;
+        const QString f = fi.absoluteFilePath();
+        if (QFile::remove(f))
+            ++removed;
+        for (const char *ext : { ".ai.wav", ".ai.part.wav", ".ai.part.map" })
+            QFile::remove(f + ext);
+    }
+    if (removed)
+        uiLog(QString("YouTube folder: %1 leftover file(s) of unfinished downloads removed").arg(removed));
     const QFileInfoList files = QDir(dir + "/YouTube").entryInfoList({ "*.mp4", "*.mkv", "*.webm", "*.mov" }, QDir::Files);
     for (const QFileInfo &fi : files)
-        if (!AiStemMaker::hasStems(fi.absoluteFilePath()))
+        if (!leftover.match(fi.fileName()).hasMatch() && !AiStemMaker::hasStems(fi.absoluteFilePath()))
             enqueueAiStems(fi.absoluteFilePath());
 }
 
@@ -739,6 +797,10 @@ bool MainWindow::startVideoAudioStream(const QString &path)
 
     setVideoAudioVolume();
     applyVideoVocalCut();
+    // the song's key: from the queue, else the one remembered for it
+    videoPitch = rememberedKey();
+    if (videoPitch != 0)
+        BASS_ChannelSetAttribute(videoAudioTempo, BASS_ATTRIB_TEMPO_PITCH, float(videoPitch));
     return true;
 }
 
@@ -782,7 +844,7 @@ void MainWindow::applyVideoVocalCut()
 {
     if (!videoStemMixer)
         return;
-    const bool cut = ui->chMix->isMuteVoice();
+    const bool cut = ui->chMix->isMuteVoice() && !keepIdleVocal();
     const bool aiMode = settings->value("YtCutAi", false).toBool();
     videoStemMixer->setLevels(settings->value("YtVocalLevel", 0).toInt() / 100.0f,
                               settings->value("YtMusicLevel", 100).toInt() / 100.0f);
@@ -805,6 +867,8 @@ void MainWindow::applyVideoVocalCut()
 // start of the song" is set (then the cut is ready by the time it is wanted).
 bool MainWindow::aiPrepareVideo() const
 {
+    if (keepIdleVocal())
+        return false;
     return videoStemMixer && settings->value("YtCutAi", false).toBool()
            && (ui->chMix->isMuteVoice() || settings->value("YtAiPreStart", true).toBool());
 }
@@ -815,12 +879,33 @@ void MainWindow::updateCutButton()
 {
     if (!btnMuteVocal)
         return;
+    ytCopyPendingTick();
+    ytPrepTick();
+    ytQueueTick();
+    if (!btnMuteVocal)
+        return;
     int ring = -1;
     QString tip = tr("ปิด / เปิด เสียงร้องนำ (*)");
-    if (ytActive && ytFetchOnline) {
-        ring = qBound(0, ytFetchPct, 99);
-        tip = tr("กำลังโหลดเพลงลงเครื่องเพื่อตัดเสียงร้องด้วย AI (%1%)\n"
-                 "กดไว้ได้เลย: เมื่อพร้อมจะตัดเสียงร้องให้เอง").arg(ytFetchPct);
+    int aiPct = 0;
+    if (!ytPrepId.isEmpty()) {
+        ring = ytPrepPct;
+        tip = tr("กำลังเตรียมตัดเสียงร้อง (%1%)\nเพลงจะเริ่มเองเมื่อพร้อม").arg(ytPrepPct);
+    } else if (ytActive && !ytCopyPending.isEmpty()) {
+        if (ytCopyAiReadyAt(ui->sliderPosition->value(), &aiPct)) {
+            ring = 100;
+            tip = tr("AI พร้อมตัดเสียงร้องตรงนี้แล้ว (*)");
+        } else {
+            ring = qBound(60, 60 + aiPct * 39 / 100, 99);
+            tip = tr("AI กำลังแยกเสียงร้อง (%1%)\n"
+                     "กดไว้ได้เลย: เมื่อพร้อมตรงที่เล่นอยู่จะตัดเสียงร้องให้เอง").arg(ring);
+        }
+    } else if (ytActive && ytFetchOnline) {
+        ring = qBound(0, ytFetchPct * 60 / 100, 59);
+        tip = ytFetchConverting
+                ? tr("กำลังแปลงเสียงให้ใส ก่อนตัดเสียงร้องด้วย AI (%1%)\n"
+                     "กดไว้ได้เลย: เมื่อพร้อมจะตัดเสียงร้องให้เอง").arg(ytFetchPct)
+                : tr("กำลังโหลดเพลงลงเครื่องเพื่อตัดเสียงร้องด้วย AI (%1%)\n"
+                     "กดไว้ได้เลย: เมื่อพร้อมจะตัดเสียงร้องให้เอง").arg(ytFetchPct);
     } else if (videoStemMixer && settings->value("YtCutAi", false).toBool()) {
         const std::shared_ptr<StemTrack> t = videoStemMixer->stems();
         BASS_CHANNELINFO ci;
@@ -869,11 +954,68 @@ void MainWindow::changeSongKey(int step)
     playingSong.setTranspose(player->transpose() + step);
     player->setTranspose(player->transpose() + step);
     const int trp = player->transpose();
+    rememberPlayingKey(trp);
     ui->songDetail->setDetail(&playingSong);
     ui->songDetail->adjustSize();
     ui->detail->setDetail(tr("คีย์เพลง "), trp > 0 ? "+" + QString::number(trp) : QString::number(trp));
     ui->detail->show();
     detailTimer->start(3000);
+}
+
+// slower / faster from the bar (the same as Page Down / Page Up while playing); MIDI songs only
+void MainWindow::changeSongTempo(int step)
+{
+    if (!songLoaded()) {
+        ui->detail->setDetail(tr("ความเร็ว "), tr("ยังไม่มีเพลงเล่นอยู่  (ตั้งความเร็วเพลงก่อนเล่น: Ctrl + ← → ในช่องค้นหา)"));
+        ui->detail->show();
+        detailTimer->start(3000);
+        return;
+    }
+    if (ytActive || videoActive) {
+        ui->detail->setDetail(tr("ความเร็ว "), tr("ปรับได้เฉพาะเพลง MIDI (NCN / EMK / SIB / KAR)"));
+        ui->detail->show();
+        detailTimer->start(3000);
+        return;
+    }
+    addBpmSpeed(step);
+}
+
+// A song entering the queue gets its remembered key / speed, unless it was given one already
+// (in the search box or the queue).
+void MainWindow::applyRememberedPrefs(Song *s)
+{
+    if (!s || !db)
+        return;
+    measureSongFile(s);         // video / MP3: its loudness, in the background, before it plays
+    int t = 0, sp = 0;
+    if (!db->songPrefs(s->songType(), s->path(), &t, &sp))
+        return;
+    if (s->transpose() == 0)
+        s->setTranspose(t);
+    if (s->bpmSpeed() == 0)
+        s->setBpmSpeed(sp);
+}
+
+// video / MP3 / YouTube start at this key: the queue entry's own, else the remembered one
+int MainWindow::rememberedKey()
+{
+    int t = playingSong.transpose();
+    if (t == 0 && db)
+        db->songPrefs(playingSong.songType(), playingSong.path(), &t, nullptr);
+    return qBound(-12, t, 12);
+}
+
+// the key / speed just changed while the song plays: remembered for the next time it is queued
+void MainWindow::rememberPlayingKey(int transpose)
+{
+    if (db && !playingSong.path().isEmpty())
+        db->rememberSongKey(playingSong.songType(), playingSong.path(), transpose);
+}
+
+void MainWindow::rememberPlayingSpeed(int bpmSpeed)
+{
+    if (db && !playingSong.path().isEmpty())
+        db->rememberSongSpeed(playingSong.songType(), playingSong.path(), bpmSpeed);
 }
 
 // the bar: the song line, play / pause, key, drum hold (MIDI songs only), the AI ring
@@ -895,24 +1037,47 @@ void MainWindow::updateBarStatus()
         key = ytAudio->pitch();
 #endif
     keyControl->setValue(key);
+    if (tempoControl)
+        // the speed just given (the sequencer takes it a moment later, at its next step)
+        tempoControl->setValue((ytActive || videoActive || !songLoaded()) ? 0 : playingSong.bpmSpeed());
 
     // drum hold: any MIDI song while it plays (medley or not); always clickable (it says why not)
 
     QString title, meta;
     if (isSongPlaying() && !playingSong.name().isEmpty()) {
-        title = playingSong.id().isEmpty() || playingSong.id() == "YT" ? playingSong.name()
-                                                                       : playingSong.id() + "  " + playingSong.name();
+        title = playingSong.id().isEmpty() || playingSong.id() == "YT" || playingSong.id() == "IDLE"
+                    ? playingSong.name()
+                    : playingSong.id() + "  " + playingSong.name();
         if (!playingSong.artist().isEmpty())
             title += "  ·  " + playingSong.artist();
+        if (idlePlaying)
+            title = tr("[เพลงคลอ] ") + title;
         const QString type = ytActive ? QString("YouTube") : playingSong.songType();
-        meta = type;
+        meta = idlePlaying ? (tr("เพลงคลออัตโนมัติ · ") + type) : type;
         if (playingIndex + 1 >= 0 && playingIndex + 1 < playlist.size())
             meta += "   " + tr("ถัดไป: %1").arg(playlist[playingIndex + 1]->name());
     } else {
         title = tr("พร้อมเล่น · พิมพ์รหัสหรือชื่อเพลง แล้วกด Enter");
         if (!playlist.isEmpty())
             meta = tr("ในคิว %1 เพลง").arg(playlist.size());
+        else if (settings->value("IdleMusic/On", false).toBool())
+            meta = tr("เพลงคลออัตโนมัติ: เปิด");
     }
+    if (isShopLocked()) {
+        meta = meta.isEmpty() ? tr("🔒 ล็อกหน้าจอร้าน") : (meta + tr("   🔒 ล็อกหน้าจอร้าน"));
+    }
+    // nothing playing: the hint is the thing to read, bright and larger (seen from the singer's seat)
+    const bool hint = !(isSongPlaying() && !playingSong.name().isEmpty());
+    if (barTitle->property("hint").toBool() != hint || !barTitle->property("hint").isValid()) {
+        barTitle->setProperty("hint", hint);
+        barTitle->setStyleSheet(hint ? "color: #ffe46b; background: transparent;" : "color: #f5f6fa; background: transparent;");
+        QFont f = barTitle->font();
+        f.setPointSizeF((hint ? 13.0 : 10.5) * BarButton::scale());
+        barTitle->setFont(f);
+        QTimer::singleShot(0, this, [this]() { fitControlBar(); });    // the bar's height follows
+    }
+    if (hint)
+        title = tr("พิมพ์รหัสหรือชื่อเพลงได้เลย แล้วกด Enter  ·  หรือกดปุ่ม ค้นหา  ·  F1 = คู่มือ");
     const QString shown = barTitle->fontMetrics().elidedText(title, Qt::ElideRight, qMax(80, barTitle->width()));
     if (barTitle->text() != shown)
         barTitle->setText(shown);
@@ -935,6 +1100,8 @@ void MainWindow::changeVideoKey(int step)
     if (videoAudioTempo) {
         videoPitch = qBound(-12, videoPitch + step, 12);
         BASS_ChannelSetAttribute(videoAudioTempo, BASS_ATTRIB_TEMPO_PITCH, float(videoPitch));
+        playingSong.setTranspose(videoPitch);
+        rememberPlayingKey(videoPitch);
         ui->detail->setDetail(tr("คีย์เพลง "), videoPitch > 0 ? "+" + QString::number(videoPitch) : QString::number(videoPitch));
         ui->detail->show();
         detailTimer->start(3000);

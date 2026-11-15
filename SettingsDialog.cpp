@@ -30,6 +30,9 @@
 #include <QVBoxLayout>
 #include <QGridLayout>
 #include <QSignalBlocker>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QLocale>
 #include <QTimer>
 #include <QSlider>
 #include <QScrollArea>
@@ -42,6 +45,7 @@
 #include <QDoubleSpinBox>
 #include <QLineEdit>
 #include "Dialogs/MapSoundfontDialog.h"
+#include "Dialogs/MultiSoundfontDialog.h"
 #include "Dialogs/MapChannelDialog.h"
 #include "Dialogs/Equalizer31BandDialog.h"
 #include "Dialogs/Chorus2Dialog.h"
@@ -291,6 +295,7 @@ SettingsDialog::SettingsDialog(QWidget *parent, MainWindow *m) :
     ui->leHNKPath->setText(db->hnkPath());
     ui->leKARPath->setText(db->karPath());
     ui->lbCountSongsValue->setText(QString::number(db->count()) + " เพลง");
+    addSongFolderRows();
 
     if (db->isRunning())
     {
@@ -1124,6 +1129,136 @@ void SettingsDialog::on_btnKARPath_clicked()
     settings->setValue("KARPath", path);
 }
 
+// ---- "ฐานข้อมูลเพลง": every song folder on one page
+
+void SettingsDialog::addSongFolderRows()
+{
+    ui->label_22->setText(tr("EMK / HNK :"));
+    ui->label_25->setText(tr("KAR / MIDI :"));
+
+    struct Row {
+        QString label, title;
+        QLineEdit **edit;
+        QString path;
+    };
+    const Row rows[] = {
+        { tr("SIB :"), tr("เลือกที่เก็บไฟล์เพลง SIB"), &leSIBPath, db->sibPath() },
+        { tr("วิดีโอ :"), tr("เลือกที่เก็บวิดีโอคาราโอเกะ"), &leVideoPath, db->videoPath() },
+        { tr("เพลงเสียง :"), tr("เลือกที่เก็บเพลงเสียง (MP3 / WAV / FLAC / M4A ...)"), &leAudioPath, db->mp3Path() },
+    };
+    int r = ui->gridLayout->rowCount();
+    for (const Row &row : rows) {
+        QLabel *lb = new QLabel(row.label);
+        QLineEdit *le = new QLineEdit(QDir::fromNativeSeparators(row.path));
+        QPushButton *b = new QPushButton(QStringLiteral("..."));
+        b->setMinimumSize(ui->btnKARPath->minimumSize());
+        b->setMaximumSize(ui->btnKARPath->maximumSize());
+        b->setSizePolicy(ui->btnKARPath->sizePolicy());
+        ui->gridLayout->addWidget(lb, r, 0);
+        ui->gridLayout->addWidget(le, r, 1);
+        ui->gridLayout->addWidget(b, r, 2);
+        ++r;
+        *row.edit = le;
+        folderButtons << b;
+        const QString title = row.title;
+        connect(b, &QPushButton::clicked, this, [this, le, title]() {
+            const QString path = QFileDialog::getExistingDirectory(this, title,
+                    le->text().isEmpty() ? Utils::LAST_OPEN_DIR : le->text(),
+                    QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
+            if (path.isEmpty())
+                return;
+            Utils::LAST_OPEN_DIR = path;
+            le->setText(QDir::fromNativeSeparators(path));
+            saveSongFolders();
+            markMissingFolders();
+        });
+        connect(le, &QLineEdit::editingFinished, this, [this]() {
+            saveSongFolders();
+            markMissingFolders();
+        });
+    }
+    folderButtons << ui->btnNCNPath << ui->btnHNKPath << ui->btnKARPath;
+    for (QLineEdit *le : { ui->leNCNPath, ui->leHNKPath, ui->leKARPath })
+        connect(le, &QLineEdit::textChanged, this, [this]() { markMissingFolders(); });
+
+    lbMissingFolders = new QLabel;
+    lbMissingFolders->setWordWrap(true);
+    lbMissingFolders->setStyleSheet("color: #b91c1c;");
+    ui->verticalLayout_10->addWidget(lbMissingFolders);
+
+    // the songs per type, under "จำนวนเพลงทั้งหมด"
+    lbCountByType = new QLabel;
+    lbCountByType->setWordWrap(true);
+    for (int i = 0; i < ui->verticalLayout_11->count(); ++i)
+        if (ui->verticalLayout_11->itemAt(i)->layout() == ui->horizontalLayout_3) {
+            ui->verticalLayout_11->insertWidget(i + 1, lbCountByType);
+            break;
+        }
+
+    markMissingFolders();
+    showCountByType();
+}
+
+void SettingsDialog::saveSongFolders()
+{
+    if (leSIBPath) {
+        db->setSibPath(leSIBPath->text().trimmed());
+        settings->setValue("SIBPath", leSIBPath->text().trimmed());
+    }
+    if (leVideoPath) {
+        db->setVideoPath(leVideoPath->text().trimmed());
+        settings->setValue("VideoPath", leVideoPath->text().trimmed());
+    }
+    if (leAudioPath) {
+        db->setMp3Path(leAudioPath->text().trimmed());
+        settings->setValue("MP3Path", leAudioPath->text().trimmed());
+    }
+}
+
+// a folder that is set but not on this computer (another PC, an unplugged drive): red, and said in words
+void SettingsDialog::markMissingFolders()
+{
+    struct F { QLineEdit *le; QString name; };
+    const F folders[] = {
+        { ui->leNCNPath, "NCN" }, { ui->leHNKPath, "EMK / HNK" }, { ui->leKARPath, "KAR / MIDI" },
+        { leSIBPath, "SIB" }, { leVideoPath, tr("วิดีโอ") }, { leAudioPath, tr("เพลงเสียง") },
+    };
+    QStringList missing;
+    for (const F &f : folders) {
+        if (!f.le)
+            continue;
+        const QString p = f.le->text().trimmed();
+        const bool bad = !p.isEmpty() && !QDir(p).exists();
+        f.le->setStyleSheet(bad ? "QLineEdit { color: #b91c1c; border: 1px solid #dc2626; }" : QString());
+        f.le->setToolTip(bad ? tr("ไม่พบโฟลเดอร์นี้ในเครื่อง") : QString());
+        if (bad)
+            missing << f.name;
+    }
+    if (!lbMissingFolders)
+        return;
+    lbMissingFolders->setText(missing.isEmpty() ? QString()
+            : tr("ไม่พบโฟลเดอร์ %1 ในเครื่องนี้: กด \"ปรับปรุง\" จะข้ามชนิดนี้ไป และเพลงชนิดนี้ที่มีในคลังยังอยู่ครบ")
+                  .arg(missing.join(", ")));
+    lbMissingFolders->setVisible(!missing.isEmpty());
+}
+
+void SettingsDialog::showCountByType()
+{
+    if (!lbCountByType)
+        return;
+    const QMap<QString, int> n = db->countByType();
+    const QList<QPair<QString, QString>> order = {
+        { "NCN", "NCN" }, { "EMK", "EMK" }, { "HNK", "HNK" }, { "SIB", "SIB" }, { "KAR", "KAR / MIDI" },
+        { "VIDEO", tr("วิดีโอ") }, { "MP3", tr("เพลงเสียง") },
+    };
+    QStringList parts;
+    const QLocale loc(QLocale::English);
+    for (const auto &o : order)
+        if (n.value(o.first) > 0)
+            parts << QString("%1 %2").arg(o.second, loc.toString(n.value(o.first)));
+    lbCountByType->setText(parts.join(QString::fromUtf8("   •   ")));
+}
+
 void SettingsDialog::on_btnUpdateSongs_clicked()
 {
     if (!db->isNCNPath(ui->leNCNPath->text())) {
@@ -1136,6 +1271,9 @@ void SettingsDialog::on_btnUpdateSongs_clicked()
 
     settings->setValue("NCNPath", ui->leNCNPath->text());
     settings->setValue("HNKPath", ui->leHNKPath->text());
+    saveSongFolders();
+    for (QPushButton *b : folderButtons)
+        b->setEnabled(false);
 
     ui->lbUpdateText->show();
     ui->lbUpdateValue->show();
@@ -1161,15 +1299,14 @@ void SettingsDialog::on_upDbUpdateFinished()
     ui->lbUpdateValue->hide();
     ui->btnUpdateSongs->setEnabled(true);
     ui->lbCountSongsValue->setText(QString::number(db->count()) + " เพลง");
+    for (QPushButton *b : folderButtons)
+        b->setEnabled(true);
+    showCountByType();
 }
 
 void SettingsDialog::on_btnMapChannel_clicked()
 {
-    MapChannelDialog d(this, mainWin->midiPlayer());
-    d.setModal(true);
-    d.adjustSize();
-    d.setMinimumSize(d.size());
-    d.exec();
+    mainWin->showMidiMapper();
 }
 
 void SettingsDialog::on_cbMidiOut_activated(int index)
@@ -1180,20 +1317,13 @@ void SettingsDialog::on_cbMidiOut_activated(int index)
         return;     // same output re-selected: don't stop playback / reopen port
 
     mainWin->stop();
-    mainWin->midiPlayer()->setMidiOut(port);
+    // remembered by device name (port numbers shift); MainWindow::applyMidiRouting connects it
+    mainWin->setMidiOutWant(port == -1 ? QString() : ui->cbMidiOut->itemText(port));
+    mainWin->applyMidiRouting();
 
-    // show what is really active (a busy/missing port keeps the previous output)
+    // show what is really active (a busy/missing port plays on the SoundFont until it shows up)
     const int cur = mainWin->midiPlayer()->midiOutPortNumber();
     ui->cbMidiOut->setCurrentIndex(cur == -1 ? synthIndex : cur);
-    settings->setValue("MidiOut", cur);
-    // remembered by device name, because port numbers shift (same as MIDI-in)
-    settings->setValue("MidiOutName", cur == -1 ? QString() : ui->cbMidiOut->itemText(cur));
-
-    QList<int> ports;
-    for (int i=0; i<16; i++) {
-        ports.append(mainWin->midiPlayer()->midiChannel()[i].port());
-    }
-    settings->setValue("MidiChannelMapper", QVariant::fromValue(ports));
 }
 
 void SettingsDialog::on_cbMidiIn_activated(int index)
@@ -1206,11 +1336,9 @@ void SettingsDialog::on_cbMidiIn_activated(int index)
     // Changing the port while notes/program changes are streaming leaves the synth
     // with lost instrument assignments (everything turns to piano), so stop first.
     mainWin->stop();
-    mainWin->midiPlayer()->setMidiIn(index-1);
+    mainWin->setMidiInWant(index > 0 ? ui->cbMidiIn->itemText(index) : QString());
+    mainWin->applyMidiRouting();
     ui->cbMidiIn->setCurrentIndex(mainWin->midiPlayer()->midiInPortNumber() + 1);
-    int cur = ui->cbMidiIn->currentIndex();
-    settings->setValue("MidiIn", cur-1);
-    settings->setValue("MidiInName", cur > 0 ? ui->cbMidiIn->itemText(cur) : QString());
 }
 
 void SettingsDialog::on_cbAudioOut_activated(int index)
@@ -1748,10 +1876,12 @@ void SettingsDialog::onChbSfLoadAllToggled(bool value)
 
 void SettingsDialog::on_btnSfMap_clicked()
 {
-    MapSoundfontDialog msfDlg(this, mainWin->midiPlayer()->midiSynthesizer());
-    msfDlg.setModal(true);
-    msfDlg.setMinimumSize(msfDlg.size());
-    msfDlg.exec();
+    MidiSynthesizer *synth = mainWin->midiPlayer()->midiSynthesizer();
+    MultiSoundfontDialog dlg(this, synth);
+    dlg.exec();
+    // the files may have been added / removed / imported there
+    ui->listsfFiles->clear();
+    ui->listsfFiles->addItems(synth->soundfontFiles());
 }
 
 void SettingsDialog::on_btnEq_clicked()

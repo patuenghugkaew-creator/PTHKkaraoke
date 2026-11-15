@@ -9,7 +9,8 @@
 // any song type is loaded: MIDI (playing or paused), video, MP3 or YouTube
 bool MainWindow::isSongPlaying()
 {
-    return !player->isPlayerStopped() || player->isPlayerPaused() || videoActive || ytActive || mp3Stream != 0;
+    return !player->isPlayerStopped() || player->isPlayerPaused() || videoActive || ytActive || mp3Stream != 0
+           || !ytPrepId.isEmpty();     // a YouTube song getting ready to play (startYtPrep)
 }
 
 void MainWindow::showYouTubeSearch()
@@ -144,8 +145,15 @@ void MainWindow::cancelYtFetch()
         return;
     ytFetch->disconnect(this);
     ytFetch->kill();
+    ytFetch->waitForFinished(2000);
     ytFetch->deleteLater();
     ytFetch = nullptr;
+    if (ytFetchConverting && !ytFetchTemp.isEmpty()) {
+        QFile::remove(YtTools::convertedName(ytFetchTemp));
+        QFile::remove(ytFetchTemp);
+    }
+    ytFetchConverting = false;
+    ytFetchTemp.clear();
 }
 
 // Play a downloaded copy as a video song: the library's entry when it has one, otherwise the YouTube
@@ -159,6 +167,7 @@ void MainWindow::playLocalCopy(const QString &file, qint64 atMs, bool paused)
         base.chop(1);
     if (rel.startsWith(base, Qt::CaseInsensitive))
         rel = rel.mid(base.length());
+    const int keepKey = playingSong.transpose();    // the online song's key goes on with the copy
     Song found;
     if (db->songByPath("VIDEO", rel, &found)) {
         playingSong = found;
@@ -166,6 +175,8 @@ void MainWindow::playLocalCopy(const QString &file, qint64 atMs, bool paused)
         playingSong.setSongType("VIDEO");
         playingSong.setPath(rel);
     }
+    if (keepKey != 0)
+        playingSong.setTranspose(keepKey);
     const QString path = playingSong.path();
     playVideo(file);
     if (atMs <= 1000 && !paused)
@@ -208,7 +219,32 @@ bool MainWindow::playYouTubeDownloaded()
     const QString id = playingSong.path();
     if (id.isEmpty())
         return false;
+    if (idlePlaying) {                          // idle music: a copy if there is one, never a download
+        const QString copy = ytLocalCopy(id);
+        if (copy.isEmpty())
+            return false;
+        playLocalCopy(copy);
+        return true;
+    }
     const QString local = ytLocalCopy(id);
+    // Cut wanted: wait until the AI can cut from the first note (no online start, no switch later)
+    const bool wantCut = ui->chMix->isMuteVoice() && !ytSkipPrepOnce;
+    ytSkipPrepOnce = false;
+    if (wantCut && (!local.isEmpty() || (!YtTools::ytdlpPath().isEmpty() && !YtTools::ffmpegPath().isEmpty()))) {
+        startYtPrep(id, local);
+        if (local.isEmpty() && ytFetch && ytFetchId == id && !ytFetchConverting
+                && ytFetchHeight > ytCopyHeight(true) && ytFetchPct < 40) {
+            // downloading for the queue with a big picture and not half way: the song waits
+            // now, a small picture is there sooner (22:49, 2026-11-14: 36 s of waiting for 720p)
+            uiLog(QString("YouTube %1: the %2p download is far from ready, starts again smaller").arg(id).arg(ytFetchHeight));
+            cancelYtFetch();
+        }
+        if (local.isEmpty() && !(ytFetch && ytFetchId == id)) {
+            cancelYtFetch();                    // (a queued song's download goes on later)
+            startYtFetch(id);
+        }
+        return true;
+    }
     if (!local.isEmpty()) {
         playLocalCopy(local);
         return true;
@@ -219,13 +255,47 @@ bool MainWindow::playYouTubeDownloaded()
         ytFetchOnline = true;
         return false;
     }
+    cancelYtFetch();                            // the previous song's download (if any) is not needed now
+    startYtFetch(id);
+    ytFetchOnline = true;
+    ui->detail->setDetail(tr("เล่นออนไลน์ไปก่อน"), tr("กำลังเตรียมตัดเสียงร้องด้วย AI (ดูที่ปุ่ม \"ตัดเสียงร้อง\")"));
+    ui->detail->show();
+    detailTimer->start(4000);
+    return false;                               // plays online now
+}
+
+// 720p needs ~30 MB for a 4 min song, 480p ~17 MB, 360p ~11 MB. A song that waits: the biggest
+// picture that downloads in ~15 s (then ~10 s more for the sound conversion and the AI). A queued
+// song with time to spare: the biggest in ~40 s.
+int MainWindow::ytCopyHeight(bool waiting)
+{
+    const double kb = settings->value("YtNetSpeedKB", 0.0).toDouble();
+    if (kb <= 0)
+        return waiting ? 360 : 480;             // not measured yet
+    if (waiting)
+        return kb >= 2000 ? 720 : kb >= 1100 ? 480 : 360;
+    return kb >= 800 ? 720 : kb >= 350 ? 480 : 360;
+}
+
+void MainWindow::ytRememberSpeed(double kbps)
+{
+    if (kbps <= 0)
+        return;
+    const double old = settings->value("YtNetSpeedKB", 0.0).toDouble();
+    const double now = old > 0 ? 0.5 * old + 0.5 * kbps : kbps;
+    settings->setValue("YtNetSpeedKB", int(now));
+    uiLog(QString("YouTube copy: downloaded at %1 KB/s, remembered %2 KB/s -> next copy %3p")
+          .arg(int(kbps)).arg(int(now)).arg(ytCopyHeight(true)));
+}
+
+void MainWindow::startYtFetch(const QString &id, bool waiting)
+{
     QString dir = QDir::fromNativeSeparators(db->videoPath());
     while (dir.endsWith('/'))
         dir.chop(1);
     dir += "/YouTube";
     QDir().mkpath(dir);
 
-    cancelYtFetch();                            // the previous song's download (if any) is not needed now
     QString printFile;
     {
         QTemporaryFile tf(QDir::tempPath() + "/pthk-ytplay-XXXXXX.txt");
@@ -233,7 +303,6 @@ bool MainWindow::playYouTubeDownloaded()
         tf.open();
         printFile = tf.fileName();
     }
-    ytFetchOnline = true;
     ytFetchId = id;
 
     QProcess *p = new QProcess(this);
@@ -244,30 +313,46 @@ bool MainWindow::playYouTubeDownloaded()
     p->setProcessEnvironment(env);
     p->setProcessChannelMode(QProcess::MergedChannels);
     ytFetchPct = 0;
+    ytFetchConverting = false;
+    ytFetchError.clear();
+    ytFetchSpeedSum = 0;
+    ytFetchSpeedN = 0;
+    auto fetchClock = std::make_shared<QElapsedTimer>();
+    fetchClock->start();
     connect(p, &QProcess::readyRead, this, [this, p]() {
         // progress for the cut button: the picture is fetched first (~90 %), then the sound
         static const QRegularExpression pct("\\[PCT\\]\\s*(\\d+(?:\\.\\d+)?)%");
+        static const QRegularExpression spd("\\[SPD\\]\\s*(\\d+(?:\\.\\d+)?)");
         static int part = 0, last = 0;
         if (ytFetchPct == 0)
             part = last = 0;
         while (p->canReadLine()) {
-            const QRegularExpressionMatch m = pct.match(QString::fromUtf8(p->readLine()));
+            const QString line = QString::fromUtf8(p->readLine()).trimmed();
+            if (line.startsWith("ERROR"))
+                ytFetchError = line.left(300);
+            const QRegularExpressionMatch m = pct.match(line);
             if (!m.hasMatch())
                 continue;
+            const QRegularExpressionMatch sm = spd.match(line);
+            if (sm.hasMatch() && sm.captured(1).toDouble() > 0) {
+                ytFetchSpeedSum += sm.captured(1).toDouble();
+                ++ytFetchSpeedN;
+            }
             const int v = int(m.captured(1).toDouble());
             if (v + 50 < last)
                 ++part;
             last = v;
-            ytFetchPct = qBound(1, part == 0 ? v * 9 / 10 : 90 + v / 10, 99);
+            ytFetchPct = qBound(1, part == 0 ? v * 75 / 100 : 75 + v * 5 / 100, 80);
         }
     });
     connect(p, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
-            [this, p, id, printFile](int code, QProcess::ExitStatus st) {
+            [this, p, id, printFile, fetchClock](int code, QProcess::ExitStatus st) {
         if (ytFetch == p) {
             ytFetch = nullptr;
             ytFetchId.clear();
         }
         p->deleteLater();
+        const double sampled = ytFetchSpeedN >= 3 ? ytFetchSpeedSum / ytFetchSpeedN / 1024.0 : 0.0;
         QString file;
         QFile pf(printFile);
         if (pf.open(QIODevice::ReadOnly)) {
@@ -278,41 +363,149 @@ bool MainWindow::playYouTubeDownloaded()
         }
         QFile::remove(printFile);
         if (!(st == QProcess::NormalExit && code == 0 && !file.isEmpty() && QFile::exists(file))) {
-            uiLog(QString("YouTube download for the AI cut failed (exit %1)").arg(code));
-            return;                             // it goes on online with the fast cut
+            if (ytFetchSpeedN >= 10)
+                ytRememberSpeed(sampled);       // a slow line is learnt from a failed download too
+            ytPrefetchFailed.insert(id);        // not tried again for the queue
+            ytFetchGaveUp(QString("YouTube download for the AI cut failed (exit %1) %2").arg(code).arg(ytFetchError));
+            return;                             // it goes on online with the cut of the online sound
         }
-        ytRememberCopy(id, file);
-        // still the song playing online: go on from the copy, at the same place, with the AI
-#ifdef PTHK_WEBENGINE
-        if (ytActive && playingSong.path() == id) {
-            const qint64 at = ui->sliderPosition->value();
-            const bool paused = ytPlayer && ytPlayer->isPaused();
-            stop();
-            playLocalCopy(file, at, paused);
-            ui->detail->setDetail(tr("ตัดเสียงร้องด้วย AI พร้อมแล้ว"), tr("เล่นต่อจากไฟล์ในเครื่อง"));
-            ui->detail->show();
-            detailTimer->start(4000);
-            return;
+        // the speed of the line: the samples, or at least the whole file over the whole time (a
+        // small copy on a fast line is there before a few samples are)
+        ytRememberSpeed((std::max)(sampled, QFileInfo(file).size() / 1024.0
+                                            / (std::max)(1.0, fetchClock->elapsed() / 1000.0)));
+        // the sound into AAC 256k (Windows plays it), its progress on the cut button (80..99 %)
+        ytFetchPct = 80;
+        ytFetchConverting = true;
+        ytFetchTemp = file;
+        QElapsedTimer *convClock = new QElapsedTimer;
+        convClock->start();
+        QProcess *cv = YtTools::convertForWindows(this, file, [this](int pct) {
+            ytFetchPct = qBound(80, 80 + pct * 19 / 100, 99);
+        }, [this, id, convClock](const QString &mp4) {
+            const qint64 convMs = convClock->elapsed();
+            delete convClock;
+            ytFetch = nullptr;
+            ytFetchId.clear();
+            ytFetchConverting = false;
+            ytFetchTemp.clear();
+            if (mp4.isEmpty()) {
+                ytFetchGaveUp("YouTube copy for the AI cut: the sound could not be converted");
+                return;                         // it goes on online with the cut of the online sound
+            }
+            uiLog(QString("YouTube copy for the AI cut ready: sound converted in %1 ms").arg(convMs));
+            ytCopyReady(id, mp4);
+        });
+        if (cv) {
+            ytFetch = cv;                       // cancelYtFetch stops the conversion too
+            ytFetchId = id;
         }
-#endif
-        enqueueAiStems(file);                   // another song plays: separated later, in the background
     });
     const QString ffmpegDir = QDir::toNativeSeparators(QFileInfo(YtTools::ffmpegPath()).absolutePath());
-    p->start(YtTools::ytdlpPath(), {
+    // H.264 + AAC (Windows plays it) with YouTube's best sound; 720p is enough and quick to fetch
+    const int height = ytCopyHeight(waiting);
+    ytFetchHeight = height;
+    uiLog(QString("YouTube copy %1: internet %2 KB/s, %3 -> %4p").arg(id)
+          .arg(settings->value("YtNetSpeedKB", 0).toInt())
+          .arg(waiting ? "the song waits" : "queued, time to spare").arg(height));
+    p->start(YtTools::ytdlpPath(), YtTools::formatArgs(height) + QStringList{
         "--no-playlist", "--windows-filenames", "--no-mtime", "--newline",
-        // H.264 + AAC (Windows Media Foundation plays it); 720p is enough and quick to fetch
-        "-f", "bv*[vcodec^=avc1][height<=720]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b",
-        "--merge-output-format", "mp4",
         "--ffmpeg-location", ffmpegDir,
-        "--progress-template", "download:[PCT]%(progress._percent_str)s",
+        "--progress-template", "download:[PCT]%(progress._percent_str)s [SPD]%(progress.speed)s",
         "--print-to-file", "after_move:filepath", QDir::toNativeSeparators(printFile),
         "-o", QDir::toNativeSeparators(dir) + "\\%(title).120s.%(ext)s",
         "https://www.youtube.com/watch?v=" + id
     });
-    ui->detail->setDetail(tr("เล่นออนไลน์ไปก่อน"), tr("กำลังเตรียมตัดเสียงร้องด้วย AI (ดูที่ปุ่ม \"ตัดเสียงร้อง\")"));
+}
+
+// The copy of the YouTube song is on disk (converted): remembered, and when that song still plays
+// online, playing goes on from the copy at the same place, with the AI.
+void MainWindow::ytCopyReady(const QString &id, const QString &file)
+{
+    ytRememberCopy(id, file);
+    if (!ytPrepId.isEmpty() && ytPrepId == id) {        // the song waiting to play: now its AI
+        ytPrepFile = file;
+        ensureAiStems();
+        aiStems->setFocus(file, 0.0);
+        updateAiStemsBackground();
+        ytPrepTick();
+        return;
+    }
+#ifdef PTHK_WEBENGINE
+    if (ytActive && playingSong.path() == id) {
+        // The song goes on online without a break (switching at once was a jerk, also with the cut
+        // off). The AI separates the copy from where the song is; ytCopyPendingTick moves playing to
+        // the copy once the cut is on and the AI is ready there.
+        ytCopyPending = file;
+        ensureAiStems();
+        aiStems->setFocus(file, ui->sliderPosition->value() / 1000.0);
+        ytCopyPendingTick();
+        return;
+    }
+#endif
+    enqueueAiStems(file);                       // another song plays: separated later, in the background
+}
+
+// The copy could not be made: the song goes on online, and its own (online) vocal cut works again.
+// Before, the "waiting for the copy" state stayed: no cut at all for the rest of the song, ring stuck.
+void MainWindow::ytFetchGaveUp(const QString &why)
+{
+    if (!ytPrepId.isEmpty() && ytPrepFile.isEmpty()) {  // it was the waiting song's download
+        ytPrepGiveUp(why);
+        return;
+    }
+    uiLog(why);
+    if (!ytActive)
+        return;
+    ytFetchOnline = false;
+    ytFetchConverting = false;
+#ifdef KM_HAVE_PROCLOOP
+    applyYtVocalCut();
+#endif
+    updateCutButton();
+}
+
+// percent: how much of the copy the AI has made (0..100)
+bool MainWindow::ytCopyAiReadyAt(qint64 ms, int *percent)
+{
+    if (ytCopyPending.isEmpty() || !aiStems)
+        return false;
+    const std::shared_ptr<StemTrack> t = aiStems->track(ytCopyPending);
+    if (!t)
+        return false;
+    if (percent)
+        *percent = t->complete.load() ? 100
+                 : (t->ready.load() && t->nWin > 0) ? qBound(0, t->doneCount.load() * 100 / t->nWin, 99) : 0;
+    const long long f = (long long)(qMax<qint64>(0, ms) / 1000.0 * AiVocalEngine::SR);
+    // a little more than the switch takes (~1 s) and a few seconds after it
+    return t->complete.load() || (t->frameReady(f) && t->frameReady(f + 5LL * AiVocalEngine::SR));
+}
+
+// called with the cut button (status timer): keep the AI on the play position; switch when wanted
+void MainWindow::ytCopyPendingTick()
+{
+#ifdef PTHK_WEBENGINE
+    if (ytCopyPending.isEmpty())
+        return;
+    if (!ytActive || !QFile::exists(ytCopyPending)) {
+        ytCopyPending.clear();
+        return;
+    }
+    const qint64 at = ui->sliderPosition->value();
+    if (aiStems)
+        aiStems->setFocus(ytCopyPending, at / 1000.0);
+    if (!ui->chMix->isMuteVoice() || keepIdleVocal() || !ytCopyAiReadyAt(at, nullptr))
+        return;
+    // the cut is wanted and the AI is ready here: on from the copy, cut from the first moment
+    const QString file = ytCopyPending;
+    ytCopyPending.clear();
+    const bool paused = ytPlayer && ytPlayer->isPaused();
+    uiLog(QString("YouTube: on from the copy at %1 ms with the AI cut").arg(at));
+    stop();
+    playLocalCopy(file, at, paused);
+    ui->detail->setDetail(tr("ตัดเสียงร้องด้วย AI แล้ว"), tr("เล่นต่อจากไฟล์ในเครื่อง"));
     ui->detail->show();
     detailTimer->start(4000);
-    return false;                               // plays online now
+#endif
 }
 
 // YouTube songs play online with YouTube's own embedded player, in place of the video
@@ -337,6 +530,12 @@ void MainWindow::playYouTube()
                 // The new clip is really playing now: start taking its sound and its picture at
                 // the same moment, so neither carries anything of the previous song.
                 ytInputGateOpen = true;
+                if (timingLogsOn()) {
+                    QFile f(QCoreApplication::applicationDirPath() + "/yt-video.log");
+                    if (f.open(QIODevice::Append | QIODevice::Text))
+                        f.write(QString("%1 sound gate open: the new clip %2 really plays\n")
+                                    .arg(QTime::currentTime().toString("hh:mm:ss.zzz"), playingSong.path()).toUtf8());
+                }
                 if (ytAudio) {
                     if (ytAudio->aiMode() && aiEngine)
                         aiEngine->reset();
@@ -523,7 +722,7 @@ void MainWindow::playYouTube()
             updateYtAudio();
 
             // Medley Auto-Cut Outro for YouTube:
-            if (player->isUseMedley() && player->medleyAudioAutoCue() && !endingSong) {
+            if (songInMedley() && player->medleyAudioAutoCue() && !endingSong) {
                 const qint64 totalD = ytPlayer->durationMs();
                 const qint64 remainingMs = (totalD > 0) ? (totalD - p) : 999999;
                 if (remainingMs <= 30000 && remainingMs > 1500) {
@@ -571,7 +770,23 @@ void MainWindow::playYouTube()
             if (!ytActive)
                 return;
             const QString url = "https://www.youtube.com/watch?v=" + playingSong.path();
+            const QString vid = playingSong.path();
+            const bool wasIdle = idlePlaying;
             stop();
+            if (wasIdle) {
+                // idle music: no question on the screen of an unattended shop; the next song instead.
+                // A clip that can never play here (not allowed outside YouTube / removed) is not picked again.
+                if (idleSmart && (canDownload || msg.startsWith(tr("ไม่พบคลิป"))))
+                    idleSmart->markBad(vid);
+                if (msg.contains(tr("อินเทอร์เน็ต"))) {     // the clip never loaded: no internet now
+                    ytOnline = false;
+                    ytOnlineClock.restart();                // checked again in 20 s
+                    uiLog("YouTube clip did not load: idle music plays library songs");
+                }
+                idlePlaying = true;
+                songUnplayable(msg);
+                return;
+            }
             if (canDownload) {
                 if (QMessageBox::question(dialogParent(), tr("เล่นจาก YouTube ไม่ได้"),
                         msg + tr("\n\nดาวน์โหลดเก็บไว้แล้วเล่นแทนไหม?")) == QMessageBox::Yes)
@@ -624,7 +839,7 @@ void MainWindow::playYouTube()
     if (secondLyr != nullptr)
         secondMonitor->setVideoVisible(true);
     ytMirrorTimer->start();
-    {   // remembered for the "sung lately / most" lists of the YouTube search
+    if (!idlePlaying) {     // remembered for the "sung lately / most" lists of the YouTube search
         YtItem it;
         it.id = playingSong.path();
         it.title = playingSong.name();
@@ -633,7 +848,7 @@ void MainWindow::playYouTube()
     }
 #ifdef KM_HAVE_PROCLOOP
     if (ytAudio) {
-        ytAudio->setPitch(0);
+        ytAudio->setPitch(rememberedKey());     // the song's key (queue or remembered)
         ytAudio->setInputOpen(false);   // reopened when the new clip really plays (mirror timer)
         if (ytAudio->aiMode())
             aiEngine->reset();
@@ -647,4 +862,144 @@ void MainWindow::playYouTube()
 #else
     QMessageBox::warning(dialogParent(), tr("YouTube"), tr("เวอร์ชันนี้เล่น YouTube ออนไลน์ไม่ได้"));
 #endif
+}
+
+// ---- "wait until ready" (startYtPrep) and the queue (ytQueueTick) ---------------------------------
+
+// the AI sound of a file is there for its first 10 s (or all of it)
+bool MainWindow::aiReadyAtStart(const QString &file)
+{
+    if (file.isEmpty())
+        return false;
+    if (AiStemMaker::hasStems(file))
+        return true;
+    ensureAiStems();
+    const std::shared_ptr<StemTrack> t = aiStems->track(file);
+    return t && (t->complete.load() || (t->frameReady(0) && t->frameReady(10LL * AiVocalEngine::SR)));
+}
+
+void MainWindow::startYtPrep(const QString &id, const QString &file)
+{
+    ytPrepId = id;
+    ytPrepFile = file;
+    ytPrepPct = 0;
+    ytPrepClock.restart();
+    ensureAiStems();
+    if (!file.isEmpty())
+        aiStems->setFocus(file, 0.0);
+    else
+        aiStems->clearFocus();      // the song before is not worked on while this one downloads
+    updateAiStemsBackground();      // nor anything in the background (see there)
+    uiLog(QString("YouTube %1: waits until the AI can cut from the start (%2)")
+          .arg(id, file.isEmpty() ? QString("downloading") : QString("copy here")));
+    ytPrepTick();
+}
+
+// with the status timer (twice a second): progress, and the start when ready
+void MainWindow::ytPrepTick()
+{
+    if (ytPrepId.isEmpty())
+        return;
+    if (playingSong.path() != ytPrepId) {               // another song was chosen meanwhile
+        ytPrepId.clear();
+        ytPrepFile.clear();
+        updateAiStemsBackground();
+        return;
+    }
+    int pct = 0;
+    if (ytPrepFile.isEmpty()) {
+        pct = (ytFetchId == ytPrepId) ? ytFetchPct * 70 / 100 : 0;      // download + sound: 0..70
+    } else {
+        if (aiReadyAtStart(ytPrepFile)) {
+            const QString f = ytPrepFile;
+            uiLog(QString("YouTube %1: ready after %2 ms, plays from the copy with the AI cut")
+                  .arg(ytPrepId).arg(ytPrepClock.elapsed()));
+            ytPrepId.clear();
+            ytPrepFile.clear();
+            updateAiStemsBackground();
+            playLocalCopy(f);
+            return;
+        }
+        ensureAiStems();
+        aiStems->setFocus(ytPrepFile, 0.0);
+        const std::shared_ptr<StemTrack> t = aiStems->track(ytPrepFile);
+        const int need = int(10LL * AiVocalEngine::SR / AiWindowSeparator::STEP) + 1;   // windows of the first 10 s
+        int done = 0;
+        for (int k = 0; t && k < need; ++k)
+            if (t->frameReady((long long)k * AiWindowSeparator::STEP))
+                ++done;
+        pct = 70 + 29 * done / qMax(1, need);                               // the AI: 70..99
+    }
+    ytPrepPct = qBound(0, pct, 99);
+    if (ytPrepClock.elapsed() > 120000) {
+        ytPrepGiveUp(QString("YouTube %1: not ready after 2 min, plays online").arg(ytPrepId));
+        return;
+    }
+    ui->detail->setDetail(tr("กำลังเตรียมตัดเสียงร้อง %1%").arg(ytPrepPct),
+                          tr("เพลงจะเริ่มเองเมื่อพร้อม ตัดเสียงร้องได้ตั้งแต่ต้นเพลง"));
+    ui->detail->show();
+    detailTimer->start(1500);
+}
+
+void MainWindow::ytPrepGiveUp(const QString &why)
+{
+    uiLog(why);
+    const QString id = ytPrepId;
+    ytPrepId.clear();
+    ytPrepFile.clear();
+    updateAiStemsBackground();
+    if (id.isEmpty() || playingSong.path() != id)
+        return;
+    ytSkipPrepOnce = true;                              // this time: online as before
+    playYouTube();
+}
+
+// every few seconds: the next songs in the queue are made ready (their copy, then their AI), one
+// download at a time and never in the way of the song that plays
+void MainWindow::ytQueueTick()
+{
+    static QElapsedTimer clock;
+    if (clock.isValid() && clock.elapsed() < 3000)
+        return;
+    clock.restart();
+    if (!settings->value("YtCutAi", false).toBool() || idlePlaying)
+        return;
+    const bool download = settings->value("YtDownloadFirst", true).toBool()
+                          && !YtTools::ytdlpPath().isEmpty() && !YtTools::ffmpegPath().isEmpty();
+    const int from = remove_playlist ? 0 : playingIndex + 1;
+    QStringList files;
+    int taken = 0;
+    for (int i = qMax(0, from); i < playlist.size() && taken < 3; ++i) {
+        Song *s = playlist[i];
+        if (!s || (s->songType() == playingSong.songType() && s->path() == playingSong.path()))
+            continue;
+        ++taken;
+        if (s->songType() == "YOUTUBE") {
+            const QString id = s->path();
+            const QString local = ytLocalCopy(id);
+            if (!local.isEmpty()) {
+                files << local;
+            } else if (download && !ytFetch && ytPrepId.isEmpty() && !ytFetchOnline
+                       && !ytPrefetchFailed.contains(id)) {
+                uiLog(QString("queue: downloads YouTube %1 ahead (%2)").arg(id, s->name()));
+                // the next song with the playing one near its end is needed soon: a small picture
+                const int left = ui->sliderPosition->maximum() - ui->sliderPosition->value();
+                startYtFetch(id, !(taken > 1 || left >= 90000));
+            }
+        } else if (s->songType() == "VIDEO" || s->songType() == "MP3") {
+            const QString f = songFilePath(*s);
+            if (!f.isEmpty())
+                files << f;
+        }
+    }
+    QStringList todo;
+    for (const QString &f : files)
+        if (!AiStemMaker::hasStems(f))
+            todo << f;
+    if (todo.isEmpty())
+        return;
+    ensureAiStems();
+    for (const QString &f : todo)
+        aiStems->enqueue(f);
+    aiStems->prioritize(todo);
 }

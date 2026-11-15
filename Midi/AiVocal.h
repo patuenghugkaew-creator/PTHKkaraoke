@@ -41,6 +41,10 @@ public:
     // the next model load.
     static void setDevicePreference(int pref);
     static int devicePreference();
+    // The graphics card stopped answering (DirectML "device hung"): for the rest of this run the
+    // AI works on the CPU - the live cut here and the stems maker (AiStems.h) both ask this.
+    static bool gpuBroken();
+    static void setGpuBroken();
 
     // one window (planar 2 x 261120 samples) through a model file, for testing; false on error
     static bool separateOnce(const QString &modelFile, const QString &key, bool gpu, const float *mix, float *inst);

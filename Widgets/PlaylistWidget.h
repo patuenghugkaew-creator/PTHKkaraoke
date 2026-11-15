@@ -42,6 +42,8 @@ signals:
 
 private:
     Ui::PlaylistWidget *ui;
+    class QLabel *emptyNote = nullptr;          // "ยังไม่มีเพลงในคิว ..." over the empty table
+    void updateTitle();                         // "คิวเพลง (N เพลง)" and the empty note
 };
 
 #endif // PLAYLISTWIDGET_H

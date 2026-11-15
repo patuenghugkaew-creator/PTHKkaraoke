@@ -111,6 +111,16 @@ private:
     SongDatabase *db;
 
     QList<int> instMap, drumMap;
+
+    // "ฐานข้อมูลเพลง": the song folders the .ui does not have (SIB, video, sound files), a warning
+    // for folders missing on this computer, and the songs per type
+    class QLineEdit *leSIBPath = nullptr, *leVideoPath = nullptr, *leAudioPath = nullptr;
+    QList<class QPushButton *> folderButtons;
+    class QLabel *lbMissingFolders = nullptr, *lbCountByType = nullptr;
+    void addSongFolderRows();
+    void markMissingFolders();
+    void showCountByType();
+    void saveSongFolders();
 };
 
 #endif // SETTINGSDIALOG_H

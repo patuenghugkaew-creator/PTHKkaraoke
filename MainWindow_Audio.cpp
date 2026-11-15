@@ -5,13 +5,19 @@ int MainWindow::effectiveVolume() const
 {
     if (!ui->sliderVolume->isEnabled())
         return 0;
-    return qRound(ui->sliderVolume->value() * fadeGain);
+    const double idleScale = idlePlaying
+        ? qBound(0.10, settings->value("IdleMusic/VolumePct", 45).toInt() / 100.0, 1.0)
+        : 1.0;
+    return qRound(ui->sliderVolume->value() * fadeGain * idleScale);
 }
 
 // every player at once: whichever is playing follows the volume slider and the fade
 void MainWindow::applyVolume()
 {
     const int v = effectiveVolume();
+    const double idleScale = idlePlaying
+        ? qBound(0.10, settings->value("IdleMusic/VolumePct", 45).toInt() / 100.0, 1.0)
+        : 1.0;
     // MIDI: the slider volume only when it changes (it also goes to the MIDI out ports);
     // the fade itself only to the built-in synth, many times a second
     const int base = ui->sliderVolume->isEnabled() ? ui->sliderVolume->value() : 0;
@@ -19,7 +25,7 @@ void MainWindow::applyVolume()
         midiBaseVolume = base;
         player->setVolume(base);
     }
-    player->setFadeGain(float(fadeGain));
+    player->setFadeGain(float(fadeGain * idleScale));
     videoPlayer->setVolume(videoAudioTempo ? 0 : v);
     setVideoAudioVolume();
 #ifdef PTHK_WEBENGINE
@@ -33,6 +39,15 @@ void MainWindow::applyVolume()
     }
 #endif
     setMp3Volume();
+
+    // the song level meter takes back out what the volume did to the song before the mixer
+    // (video / MP3 / YouTube are turned down on their own channel; MIDI after the meter)
+    float src = 1.0f;
+    if (ytAudioLive() || videoAudioTempo)
+        src = float(fadeGain) * (float(v) / 100.0f);
+    else if (mp3Stream)
+        src = float(v) / 100.0f;
+    SongLevel::get().setSourceGain(src);
 }
 
 bool MainWindow::ytAudioLive() const
@@ -63,8 +78,11 @@ void MainWindow::updateYtAudio()
         if (pid && mixer) {
             if (!aiEngine)
                 aiEngine = PTHKCore::createAiVocalEngine(QFileInfo(YtTools::toolsDir()).absolutePath() + "/models");
-            if (!ytAudio)
+            if (!ytAudio) {
                 ytAudio = new YtAudio(aiEngine);
+                if (ytActive)
+                    ytAudio->setPitch(rememberedKey());     // the song's key (queue or remembered)
+            }
             applyYtVocalCut();
             if (!ytAudio->start(mixer, pid)) {
                 ytAudio->stop();
@@ -92,9 +110,11 @@ void MainWindow::applyYtVocalCut()
 #ifdef KM_HAVE_PROCLOOP
     if (!ytAudio)
         return;
-    const bool cut = ui->chMix->isMuteVoice();
+    // idle music keeps its singer (IdleMusic/KeepVocal) unless the operator pressed the cut during it
+    const bool keepVocal = keepIdleVocal();
+    const bool cut = ui->chMix->isMuteVoice() && !keepVocal;
     // while the copy for the AI downloads, the online song is not cut (it is, with the AI, from the copy)
-    const bool ai = settings->value("YtCutAi", false).toBool() && !ytFetchOnline;
+    const bool ai = settings->value("YtCutAi", false).toBool() && !ytFetchOnline && !keepVocal;
     AiVocalEngine::setDevicePreference(settings->value("YtAiDevice", 0).toInt());
     if (ai)
         aiEngine->selectModel(settings->value("YtAiModel", "light").toString());
@@ -294,6 +314,8 @@ void MainWindow::changeYtKey(int step)
     if (ytAudioLive()) {
         ytAudio->setPitch(qBound(-12, ytAudio->pitch() + step, 12));
         const int k = ytAudio->pitch();
+        playingSong.setTranspose(k);
+        rememberPlayingKey(k);
         ui->detail->setDetail(tr("คีย์เพลง "), k > 0 ? "+" + QString::number(k) : QString::number(k));
         ui->detail->show();
         detailTimer->start(3000);
@@ -330,6 +352,347 @@ void MainWindow::loadTransitionSettings()
     fadeOutMs = settings->value("TransitionFadeOutMs", 2000).toInt();
     endAfterLyrics = settings->value("TransitionEndAfterLyrics", true).toBool();
     endAfterLyricsSec = settings->value("TransitionEndAfterLyricsSec", 2).toInt();
+    songLevelOn = settings->value("SongLevelOn", true).toBool();
+    songLevelTarget = qBound(-30.0, settings->value("SongLevelTarget", -16.0).toDouble(), -8.0);
+}
+
+// ---- Same loudness for every song (see Midi/SongLevel.h) ----------------------------------------
+// Each song gets one steady gain: target - its loudness (at most +6 / -12 dB), plus the operator's
+// own dB for it (Alt + Up / Down). The loudness comes from the database (measured before), from its
+// file (video / MP3, measured in the background when queued), or - the first time a MIDI / YouTube
+// song plays - from its first ~10 s of music; the whole song's reading is then remembered.
+
+double MainWindow::autoLevelDbFor(double lufs) const
+{
+    // down to -24 dB: MIDI songs through several loud soundfonts measured up to +7 LUFS (23 dB over
+    // the -16 target); -12 left them so hot that the output clipped
+    return qBound(-24.0, songLevelTarget - lufs, 6.0);
+}
+
+void MainWindow::applySongLevelGain(double glideMs)
+{
+    SongLevel::get().setGainDb((songLevelOn ? levelAutoDb : 0.0) + levelOffsetDb, glideMs);
+}
+
+void MainWindow::startSongLevel()
+{
+    finishSongLevel();
+    levelType = playingSong.songType();
+    levelPath = playingSong.path();
+    levelKnown = false;
+    levelAdjusted = false;
+    levelAutoDb = 0.0;
+    levelOffsetDb = 0.0;
+    double lufs = std::nan(""), own = 0.0;
+    if (db)
+        db->songLevel(levelType, levelPath, &lufs, &own);
+    levelOffsetDb = own;
+    double typical = std::nan("");
+    if (!std::isnan(lufs)) {
+        levelKnown = true;
+        levelAutoDb = autoLevelDbFor(lufs);
+    } else {
+        if (levelType == "VIDEO" || levelType == "MP3")
+            measureSongFile(&playingSong);      // ready in a moment (see onSongFileMeasured)
+        // Not measured yet: start where songs of its kind usually are (MIDI through these soundfonts
+        // ~ 0 LUFS = -16 dB), not at 0 dB - else it played 10 s far too loud, then dropped a lot.
+        static const QStringList midiTypes = { "NCN", "EMK", "SIB", "HNK", "KAR" };
+        if (db)
+            typical = db->typicalLoudness(midiTypes.contains(levelType) ? midiTypes : QStringList{ levelType });
+        if (!std::isnan(typical))
+            levelAutoDb = autoLevelDbFor(typical);
+    }
+    SongLevel::get().restartMeasure();
+    applySongLevelGain(250);
+    uiLog(QString("song level: %1 %2: %3 -> auto %4 dB (own %5 dB)")
+          .arg(levelType, levelPath)
+          .arg(levelKnown ? QString("%1 LUFS").arg(lufs, 0, 'f', 1)
+                          : std::isnan(typical) ? QString("not measured yet")
+                                                : QString("not measured yet, starts as its kind (%1 LUFS)").arg(typical, 0, 'f', 1))
+          .arg(levelAutoDb, 0, 'f', 1).arg(levelOffsetDb, 0, 'f', 1));
+
+    if (!songLevelTimer) {
+        songLevelTimer = new QTimer(this);
+        songLevelTimer->setInterval(1000);
+        connect(songLevelTimer, &QTimer::timeout, this, [this]() {
+            if (levelPath.isEmpty() || levelKnown || levelAdjusted) {
+                songLevelTimer->stop();
+                return;
+            }
+            double l = -100.0, sec = 0.0;
+            SongLevel::get().reading(&l, &sec);
+            if (sec >= 10.0 && l > -70.0) {     // enough music heard: set the gain once, softly
+                levelAutoDb = autoLevelDbFor(l);
+                levelAdjusted = true;
+                // over 8 s: the song started at its kind's usual level, so this is a few dB at most,
+                // too slow to hear as a change (2 s was heard as "loud, then it drops")
+                applySongLevelGain(8000);
+                songLevelTimer->stop();
+                uiLog(QString("song level: first play, %1 LUFS after %2 s -> %3 dB")
+                      .arg(l, 0, 'f', 1).arg(sec, 0, 'f', 0).arg(levelAutoDb, 0, 'f', 1));
+            }
+        });
+    }
+    if (!levelKnown)
+        songLevelTimer->start();
+}
+
+void MainWindow::finishSongLevel()
+{
+    if (levelPath.isEmpty())
+        return;
+    if (!levelKnown && db) {
+        double l = -100.0, sec = 0.0;
+        SongLevel::get().reading(&l, &sec);
+        if (sec >= 30.0 && l > -70.0) {         // most of a song: good enough to remember
+            db->rememberSongLoudness(levelType, levelPath, l);
+            uiLog(QString("song level: remembered %1 LUFS (%2 s) for %3").arg(l, 0, 'f', 1).arg(sec, 0, 'f', 0).arg(levelPath));
+        }
+    }
+    levelPath.clear();
+    levelType.clear();
+    if (songLevelTimer)
+        songLevelTimer->stop();
+}
+
+void MainWindow::changeSongLevel(double stepDb)
+{
+    if (levelPath.isEmpty() || !isSongPlaying())
+        return;
+    levelOffsetDb = qBound(-12.0, levelOffsetDb + stepDb, 12.0);
+    applySongLevelGain(150);
+    if (db)
+        db->rememberSongGain(levelType, levelPath, levelOffsetDb);
+    auto signedDb = [](double d) { return (d > 0 ? "+" : "") + QString::number(d, 'f', 0) + " dB"; };
+    QString value = signedDb(levelOffsetDb);
+    if (songLevelOn && (levelKnown || levelAdjusted))
+        value += tr("  • ปรับอัตโนมัติ %1").arg(signedDb(levelAutoDb));
+    ui->detail->setDetail(tr("ความดังเพลงนี้"), value);
+    ui->detail->show();
+    detailTimer->start(3000);
+}
+
+void MainWindow::measureSongFile(Song *s)
+{
+    if (!s || !db)
+        return;
+    const QString type = s->songType();
+    if (type != "VIDEO" && type != "MP3")
+        return;
+    double lufs = std::nan("");
+    db->songLevel(type, s->path(), &lufs, nullptr);
+    if (!std::isnan(lufs))
+        return;                                 // measured before
+    const QString key = type + '|' + s->path();
+    if (levelMeasuring.contains(key))
+        return;
+    const QString file = isFullPath(s->path())
+        ? s->path()
+        : ((type == "VIDEO" ? db->videoPath() : db->mp3Path()) + s->path());
+    if (!QFile::exists(file))
+        return;
+    levelMeasuring.insert(key);
+    if (!levelPool) {
+        levelPool = new QThreadPool(this);
+        levelPool->setMaxThreadCount(1);        // one file at a time, in the background
+    }
+    QPointer<MainWindow> self(this);
+    const QString path = s->path();
+    levelPool->start([self, type, path, file]() {
+        const double v = SongLevel::measureFile(file);
+        QMetaObject::invokeMethod(qApp, [self, type, path, v]() {
+            if (self)
+                self->onSongFileMeasured(type, path, v);
+        }, Qt::QueuedConnection);
+    });
+}
+
+void MainWindow::onSongFileMeasured(const QString &type, const QString &path, double lufs)
+{
+    levelMeasuring.remove(type + '|' + path);
+    if (lufs <= -70.0)
+        return;                                 // not readable / silent: measured while it plays instead
+    if (db)
+        db->rememberSongLoudness(type, path, lufs);
+    uiLog(QString("song level: file %1 measured %2 LUFS").arg(path).arg(lufs, 0, 'f', 1));
+    if (type == levelType && path == levelPath && !levelKnown) {   // the song playing now
+        levelKnown = true;
+        levelAutoDb = autoLevelDbFor(lufs);
+        applySongLevelGain(levelAdjusted ? 2000 : 1000);
+    }
+}
+
+// ---- Sound pads ("แป้นเสียงเชียร์", see Midi/SoundPads.h) ---------------------------------------------
+void MainWindow::ensureSoundPads()
+{
+    if (!soundPads) {
+        soundPads = new SoundPads(player->midiSynthesizer(), this);
+        // first use: the sound banks of karaoke programs on this computer (only searched once)
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+        soundPads->autoFindRoots();
+        QApplication::restoreOverrideCursor();
+    }
+}
+
+void MainWindow::nextSoundBank()
+{
+    ensureSoundPads();
+    if (soundPads->bankCount() <= 1) {
+        ui->detail->setDetail(tr("ชุดเสียง"), tr("มีชุดเดียว (เพิ่มโฟลเดอร์ชุดเสียงได้ในตั้งค่าแป้นเสียง)"));
+    } else {
+        soundPads->nextBank();
+        ui->detail->setDetail(tr("ชุดเสียง %1/%2").arg(soundPads->currentBank() + 1).arg(soundPads->bankCount()),
+                              soundPads->bankName(soundPads->currentBank()));
+        if (padsPanel)
+            padsPanel->refresh();
+    }
+    ui->detail->show();
+    detailTimer->start(2500);
+}
+
+void MainWindow::triggerSoundPad(int index)
+{
+    ensureSoundPads();
+    QTimer::singleShot(0, this, [this, index]() {   // after trigger(): what was really played
+        uiLog(QString("sound pad %1 [%2] %3: %4").arg(index + 1).arg(soundPads->bankName(soundPads->currentBank()))
+              .arg(soundPads->label(index)).arg(soundPads->lastPlayed()));
+    });
+    if (soundPads->isEmpty(index)) {
+        ui->detail->setDetail(tr("แป้นเสียง %1").arg(index + 1), tr("ยังไม่มีเสียง (คลิกขวา → แป้นเสียงเชียร์ → เพิ่มเสียงเอฟเฟกต์)"));
+    } else if (!soundPads->trigger(index)) {
+        const SoundPads::Pad p = soundPads->pad(index);
+        const bool builtin = soundPads->currentBank() == 0 && p.file.isEmpty();
+        ui->detail->setDetail(tr("แป้นเสียง %1").arg(index + 1),
+                              builtin ? tr("เล่นไม่ได้: ยังไม่มีซาวด์ฟอนต์") : tr("เล่นไฟล์ไม่ได้: %1").arg(soundPads->label(index)));
+    } else if (soundPads->wasStop()) {
+        ui->detail->setDetail(tr("แป้นเสียง %1").arg(index + 1), tr("หยุด: %1").arg(soundPads->label(index)));
+    } else {
+        ui->detail->setDetail(tr("แป้นเสียง %1").arg(index + 1), soundPads->label(index));
+    }
+    ui->detail->show();
+    detailTimer->start(1500);
+}
+
+void MainWindow::stopAllSoundPads()
+{
+    if (!soundPads)
+        return;
+    uiLog("sound pads: stop all");
+    if (soundPads->stopAll()) {
+        ui->detail->setDetail(tr("แป้นเสียง"), tr("หยุดทั้งหมด"));
+        ui->detail->show();
+        detailTimer->start(1500);
+    }
+}
+
+void MainWindow::showSoundPadsPanel(bool show)
+{
+    settings->setValue("SoundPadsPanel", show);
+    if (!show) {
+        if (padsPanel) {
+            settings->setValue("SoundPadsPanelGeometry", padsPanel->saveGeometry());
+            padsPanel->hide();
+        }
+        return;
+    }
+    ensureSoundPads();
+    if (!padsPanel) {
+        padsPanel = new SoundPadsPanel(this, soundPads);
+        padsPanel->onPad = [this](int i) { triggerSoundPad(i); };
+        padsPanel->onSettings = [this]() { openSoundPadsSettings(); };
+        padsPanel->onStopAll = [this]() { stopAllSoundPads(); };
+        padsPanel->onAddSounds = [this]() { openSoundFxManager(); };
+        padsPanel->onClosed = [this]() {
+            settings->setValue("SoundPadsPanel", false);
+            settings->setValue("SoundPadsPanelGeometry", padsPanel->saveGeometry());
+        };
+        if (!padsPanel->restoreGeometry(settings->value("SoundPadsPanelGeometry").toByteArray()))
+            padsPanel->move(mapToGlobal(QPoint(width() - 360, 80)));
+    }
+    padsPanel->refresh();
+    padsPanel->show();
+}
+
+// "เพิ่มเสียงเอฟเฟกต์": the shop's own sounds (Dialogs/SoundFxManager.h). Afterwards the pads play the
+// bank that was being edited.
+// "สร้างไดรฟ์พกพา": the program, its settings and the song libraries onto a USB / external drive
+void MainWindow::openPortableDrive()
+{
+    if (!requireShopUnlock(tr("สร้างไดรฟ์พกพา")))
+        return;
+    if (db && db->isRunning()) {
+        QMessageBox::information(dialogParent(), tr("สร้างไดรฟ์พกพา"), tr("รอให้ปรับปรุงฐานข้อมูลเพลงเสร็จก่อน"));
+        return;
+    }
+    settings->sync();               // the drive gets the settings as they are now
+    PortableDriveDialog dlg(dialogParent());
+    dlg.exec();
+    setFocus();
+}
+
+// "เสียงพิธีการ / เอฟเฟกต์" (Dialogs/EventSoundsDialog.h): the bar's "อื่น ๆ" button
+void MainWindow::openEventSounds()
+{
+    ensureSoundPads();
+    EventSoundsDialog dlg(dialogParent(), soundPads);
+    dlg.selectCategory(settings->value("EventSounds/Last").toString());
+    dlg.exec();
+    settings->setValue("EventSounds/Last", dlg.currentCategoryName());
+    setFocus();
+}
+
+void MainWindow::openSoundFxManager()
+{
+    ensureSoundPads();
+    QString show;
+    const QString cur = soundPads->bankName(soundPads->currentBank());
+    if (cur.startsWith(SoundPads::ownBankName(QString())))
+        show = cur.mid(SoundPads::ownBankName(QString()).length());
+    SoundFxManager dlg(dialogParent(), soundPads, show);
+    dlg.onChanged = [this]() { if (padsPanel) padsPanel->refresh(); };
+    dlg.exec();
+    const int b = dlg.chosenBank().isEmpty() ? -1 : soundPads->findBank(SoundPads::ownBankName(dlg.chosenBank()));
+    if (b > 0)
+        soundPads->setBank(b);
+    if (padsPanel)
+        padsPanel->refresh();
+    setFocus();
+}
+
+void MainWindow::openSoundPadsSettings()
+{
+    ensureSoundPads();
+    SoundPadsDialog dlg(dialogParent(), soundPads);
+    dlg.exec();
+    if (padsPanel)
+        padsPanel->refresh();
+    setFocus();
+}
+
+void MainWindow::setSongLevelOn(bool on)
+{
+    songLevelOn = on;
+    settings->setValue("SongLevelOn", on);
+    applySongLevelGain(500);
+}
+
+void MainWindow::setSongLevelTarget(double lufs)
+{
+    songLevelTarget = lufs;
+    settings->setValue("SongLevelTarget", lufs);
+    if (levelKnown || levelAdjusted) {          // the playing song follows the new target
+        double l = -100.0;
+        if (levelKnown && db) {
+            double stored = std::nan("");
+            db->songLevel(levelType, levelPath, &stored, nullptr);
+            l = stored;
+        } else {
+            SongLevel::get().reading(&l, nullptr);
+        }
+        if (!std::isnan(l) && l > -70.0)
+            levelAutoDb = autoLevelDbFor(l);
+    }
+    applySongLevelGain(500);
 }
 
 // the song came to its end (by itself, or faded out after its last lyric / with End)
@@ -349,7 +712,7 @@ void MainWindow::endSongSmoothly()
             stop();
         return;
     }
-    if (player->isUseMedley() && player->isPlayerPlaying() && (player->midiSequencerTemp() != nullptr || playlist.size() > (playingIndex + 1))) {
+    if (songInMedley() && player->isPlayerPlaying() && (player->midiSequencerTemp() != nullptr || playlist.size() > (playingIndex + 1))) {
         if (player->midiSequencerTemp() == nullptr && playlist.size() > (playingIndex + 1)) {
             loadNextMedley(playlist[playingIndex + 1]);
             if (medleyLoader) medleyLoader->wait();
@@ -366,12 +729,25 @@ void MainWindow::endSongSmoothly()
             return;
         }
     }
-    if (false && !isSongPlaying()) {
-        if (auto_playnext)
-            playNext();
-        else
-            stop();
-        return;
+    // A MIDI song with no medley hand-off (medley off, or no next song in the queue): end like a
+    // band ("ลูกจบ") - at the next bar line the band lands on beat 1, the drums play a fill bar,
+    // then crash + kick. The song then ends as if by itself (next song, or stop when none).
+    if (!endingSong && player->isPlayerPlaying() && player->midiSequencer() != nullptr) {
+        MidiSequencer *seq = player->midiSequencer();
+        if (!seq->isDrumHoldOn() && !seq->midiFile()->events().isEmpty()) {
+            int nextBarTick = seq->midiFile()->tickFromBar(seq->currentBar() + 1);
+            if (nextBarTick <= seq->positionTick() + seq->midiFile()->resorution() / 8)
+                nextBarTick = seq->midiFile()->tickFromBar(seq->currentBar() + 2);
+            if (nextBarTick < int(seq->midiFile()->events().last()->tick())) {
+                seq->setEndingFill(true);
+                seq->setEndTick(nextBarTick);
+                endingSong = true;      // no lyric auto-cut on top; pressed again: ends at once
+                ui->detail->setDetail(tr("จบเพลง"), tr("ส่งกลองจบเพลงท้ายห้องดนตรี"));
+                ui->detail->show();
+                detailTimer->start(3000);
+                return;
+            }
+        }
     }
     auto finish = [this]() {
         endingSong = false;
@@ -393,7 +769,7 @@ void MainWindow::endSongSmoothly()
 // pos: lyric position (MIDI ticks, or ms for MP3 + LRC); remainingMs: time to the end of the song
 void MainWindow::checkEndAfterLyrics(qint64 pos, qint64 remainingMs)
 {
-    const bool medleyAutoCut = player->isUseMedley() && player->medleyAutoCutOutro();
+    const bool medleyAutoCut = songInMedley() && player->medleyAutoCutOutro();
     if ((!endAfterLyrics && !medleyAutoCut) || endingSong)
         return;
     if (lastLyricPos == -2) {
@@ -408,7 +784,7 @@ void MainWindow::checkEndAfterLyrics(qint64 pos, qint64 remainingMs)
         return;
 
     long lyricCutTick = lastLyricPos;
-    if (player->isUseMedley() && player->midiSequencer() != nullptr) {
+    if (songInMedley() && player->midiSequencer() != nullptr) {
         lyricCutTick = player->midiSequencer()->findVocalReleaseTick(lastLyricPos);
     }
 
@@ -418,7 +794,7 @@ void MainWindow::checkEndAfterLyrics(qint64 pos, qint64 remainingMs)
     }
     if (!afterLyrics) {
         afterLyrics = true;
-        if (player->isUseMedley()) {
+        if (songInMedley()) {
             const int nextMedleyIdx = (remove_playlist ? 0 : playingIndex + 1);
             if (player->isPlayerPlaying() && (player->midiSequencerTemp() != nullptr || playlist.size() > nextMedleyIdx)) {
                 if (player->midiSequencerTemp() == nullptr && playlist.size() > nextMedleyIdx) {
@@ -491,7 +867,7 @@ void MainWindow::checkEndAfterLyrics(qint64 pos, qint64 remainingMs)
         afterLyricsClock.start();
         return;
     }
-    if (player->isUseMedley())
+    if (songInMedley())
         return;
     if (afterLyricsClock.elapsed() < qint64(endAfterLyricsSec) * 1000)
         return;
