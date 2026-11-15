@@ -209,9 +209,18 @@ public:
             }
             return false;
         }
+        // other singers than the one the customer just sang and the last idle songs
+        QStringList avoidArtists = recentIdleArtists;
+        if (!currentCtx.lastArtist.trimmed().isEmpty())
+            avoidArtists << norm(currentCtx.lastArtist);
         while (!ready.isEmpty()) {
-            // Pick from the top 2 highest-scoring context matches for natural flow
-            const int i = QRandomGenerator::global()->bounded(qMin(2, ready.size()));
+            // among the best few, the first two by other singers (random of them), else the best
+            QVector<int> fresh;
+            for (int j = 0; j < qMin(8, ready.size()) && fresh.size() < 2; ++j)
+                if (!artistClash(ready.at(j), avoidArtists))
+                    fresh << j;
+            const int i = fresh.isEmpty() ? QRandomGenerator::global()->bounded(qMin(2, ready.size()))
+                                          : fresh.at(QRandomGenerator::global()->bounded(fresh.size()));
             IdlePick p = ready.takeAt(i);
             if (wasPlayed(p) || sameAsSung(p))
                 continue;
@@ -223,8 +232,36 @@ public:
             if (p.contextTag.isEmpty())
                 p.contextTag = formatContextTag(currentCtx);
             markPlayed(p);
+            if (p.local) {
+                Song so = p.song;
+                const QString a = norm(so.artist());
+                if (a.size() >= 3) {
+                    recentIdleArtists.prepend(a);
+                    while (recentIdleArtists.size() > 3)
+                        recentIdleArtists.removeLast();
+                }
+            }
             *out = p;
             return true;
+        }
+        return false;
+    }
+
+    // the song is by one of `avoid` (normalized artist names): a library song by its artist field,
+    // a YouTube clip when its title holds the name
+    static bool artistClash(const IdlePick &p, const QStringList &avoid)
+    {
+        QString a;
+        if (p.local) {
+            Song so = p.song;
+            a = norm(so.artist());
+        }
+        const QString t = p.local ? QString() : norm(p.yt.title);
+        for (const QString &x : avoid) {
+            if (x.size() < 3)
+                continue;
+            if (p.local ? (!a.isEmpty() && (a.contains(x) || x.contains(a))) : t.contains(x))
+                return true;
         }
         return false;
     }
@@ -239,6 +276,7 @@ public:
     }
 
     int readyCount() const { return ready.size(); }
+    QStringList recentIdleArtists;      // normalized singers of the last 3 idle songs
 
     // A song's title without what tells copies apart: "จักรยานสีแดง ( A )", "จักรยานสีแดง (Loso Special)"
     // and "จักรยานสีแดง" are one song. Brackets and their text, "karaoke" words, spaces and punctuation
@@ -761,11 +799,11 @@ private:
             }
         }
 
-        // 4. Same artist bonus
+        // 4. Same artist: the owner wants other singers of the same style, so a small minus
         if (!cp.lastArtist.trimmed().isEmpty() && !artist.trimmed().isEmpty()) {
             const QString na = norm(artist), nl = norm(cp.lastArtist);
             if (!na.isEmpty() && !nl.isEmpty() && (na.contains(nl) || nl.contains(na)))
-                score += 30;
+                score -= 20;
         }
 
         // 5. MediaKind / SongType alignment
@@ -856,7 +894,8 @@ private:
 
         // Query 2: Last artist + tempo/genre feel (or peer artists of the exact same Genre + Era)
         const QString cleanArtist = cp.lastArtist.trimmed();
-        if (!cleanArtist.isEmpty() && cleanArtist != QString::fromUtf8("ไม่ระบุศิลปิน")) {
+        if (peerArtistsFor(cp.genre, cp.era).size() < 2   // only when there are no other singers to ask for
+                && !cleanArtist.isEmpty() && cleanArtist != QString::fromUtf8("ไม่ระบุศิลปิน")) {
             const QString q2 = (cleanArtist + " " + (cp.tempoBand == TempoSlow ? QString::fromUtf8("เพลงช้า")
                                                     : cp.tempoBand == TempoFast ? QString::fromUtf8("เพลงเร็ว")
                                                     : QString::fromUtf8("เพลงฮิต"))).simplified();
@@ -864,10 +903,13 @@ private:
                 queries << q2;
         }
 
-        const QStringList peers = peerArtistsFor(cp.genre, cp.era);
-        if (!peers.isEmpty()) {
-            const int idx = QRandomGenerator::global()->bounded(peers.size());
-            const QString peer = peers.at(idx);
+        QStringList peers = peerArtistsFor(cp.genre, cp.era);
+        const QString lastN = norm(cleanArtist);
+        for (int i = peers.size() - 1; i >= 0; --i)     // not the singer just sung
+            if (!lastN.isEmpty() && (norm(peers.at(i)).contains(lastN) || lastN.contains(norm(peers.at(i)))))
+                peers.removeAt(i);
+        for (int n = 0; n < 2 && !peers.isEmpty(); ++n) {
+            const QString peer = peers.takeAt(QRandomGenerator::global()->bounded(peers.size()));
             const QString q3 = (peer + " " + tempoWord).simplified();
             if (!queries.contains(q3))
                 queries << q3;
@@ -1376,9 +1418,14 @@ private:
         QStringList targetArtists;
         if (!cp.lastArtist.trimmed().isEmpty() && cp.lastArtist != QString::fromUtf8("ไม่ระบุศิลปิน"))
             targetArtists << cp.lastArtist.trimmed();
-        for (const QString &p : peerArtistsFor(cp.genre, cp.era))
+        QStringList peerList = peerArtistsFor(cp.genre, cp.era);
+        for (int i = peerList.size() - 1; i > 0; --i)
+            peerList.swapItemsAt(i, QRandomGenerator::global()->bounded(i + 1));
+        for (const QString &p : peerList)
             if (!targetArtists.contains(p))
                 targetArtists << p;
+        const bool firstIsLast = !targetArtists.isEmpty() && !cp.lastArtist.trimmed().isEmpty()
+                && targetArtists.first() == cp.lastArtist.trimmed();
 
         QSet<QString> seenKeys = sungKeys;
         const QString tag = formatContextTag(cp);
@@ -1436,11 +1483,15 @@ private:
             q.bindValue(1, minBpm);
             q.bindValue(2, maxBpm);
             const int before = candidates.size();
-            collectQuery(q, i == 0 ? 15 : 8);
-            if (i == 0 && candidates.size() - before > 3) {
-                // Keep at most 3 songs by the exact same artist so there is natural variety
-                candidates.resize(before + 3);
-                sameArtistTaken = 3;
+            const bool same = i == 0 && firstIsLast;
+            collectQuery(q, same ? 0 : 8);
+            // variety: one more song of the singer just sung, two of each other singer
+            const int keep = same ? 1 : 2;
+            if (candidates.size() - before > keep) {
+                for (int j = candidates.size() - 1; j > before; --j)
+                    std::swap(candidates[j], candidates[before + QRandomGenerator::global()->bounded(j - before + 1)]);
+                candidates.resize(before + keep);
+                sameArtistTaken += keep;
             }
             Q_UNUSED(sameArtistTaken);
         }
