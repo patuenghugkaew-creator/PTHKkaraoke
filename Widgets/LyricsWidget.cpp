@@ -88,37 +88,56 @@ void LyricsWidget::applyBrand(QStringList &lyrs, QVector<long> &curs)
     if (brand.isEmpty() || curs.isEmpty())
         return;
     static const QString deco = QString::fromUtf8(" .><-_=*~:|·•…\t");
-    // credit lines: "Music By Mr.นิค_คาราโอเกะ", "MIDI by ...", "© GMM GRAMMY" (anywhere in the song)
-    static const QRegularExpression creditWord(QString::fromUtf8(
-        "\\b(music|midi|arrang\\w*|produced|lyrics?)\\s*by\\b|copyright|©|ลิขสิทธิ์|เรียบเรียงโดย|ทำมิดี้|facebook|line\\s*id"),
-        QRegularExpression::CaseInsensitiveOption);
+    // The makers' stamps, from a count over the whole library (164k songs, 2026-11-16): GMM GRAMMY,
+    // Nick KARAOKE PROFESSIONAL / Nick_Original, Mayonnaise Club Team, CyberMusic, tkmusic.com,
+    // ThaiMidiZone, "Midi by ...", "Music By ...", e-mail and web addresses, "... Studio".
+    // Strong words: a credit wherever they are (from line 3 on: lines 1-2 are the title and singer).
+    static const QStringList strong = QString::fromUtf8(
+        "karaoke|karaok|midi|nick_|nickoriginal|nickkaraoke|studio|professional|porfessional|professinal|"
+        "cursorby|lyredit|mayonnaise|cybermusic|thaimidizone|tkmusic|promotion|production|records|"
+        "entertainment|gmmgrammy|grammy|copyright|©|musicby|arrangedby|presentedby|lyricsby|"
+        "ลิขสิทธิ์|เรียบเรียงโดย|ทำมิดี้").split('|');
+    static const QRegularExpression web(
+        "www\\.|https?://|[a-z0-9]\\.(com|net|org|co\\.th)\\b|[a-z0-9._-]+@[a-z0-9-]+\\.[a-z]|facebook\\s*[:./]|line\\s*id");
+    // weak words (whole words): a credit only on a line without Thai wrapped in dots / arrows ("korat Music>>")
+    static const QRegularExpression weak("\\b(music|original|sound|group|team|club|tel|by)\\b");
     // record labels (only on the first / last lines: a lyric may name one in passing)
     static const QStringList labels = QString::fromUtf8(
         "gmm|grammy|แกรมมี่|อาร์สยาม|r-siam|rsiam|r siam|sony music|warner music|topline|ท็อปไลน์|"
         "ชัยพฤกษ์|chaiyaphruek|genie records|spicy disc|smallroom|bakery music|muzik move|kita records|"
         "เพลงนี้จัดทำ|จัดทำโดย").split('|');
     static const QRegularExpression latin("[A-Za-z]");
+    static const QRegularExpression thai(QString::fromUtf8("[\\x{0E00}-\\x{0E7F}]"));
     int offset = 0;
     const int last = lyrs.size();
     for (int li = 0; li < last; ++li) {
         QString &l = lyrs[li];
         const int n = l.length();
         const QString low = l.toLower();
+        QString packed = low;
+        packed.remove(' ');
         const bool edge = li < 8 || li >= last - 3;      // the song's first / last lines
-        bool label = false;
-        if (edge)
-            for (const QString &w : labels)
-                if (low.contains(w)) { label = true; break; }
-        // Thai "คาราโอเกะ" can be in a lyric: away from the start / end only with Latin letters or "_"
-        // beside it ("Nick_Karaoke", "นิค_คาราโอเกะ")
-        // ... or wrapped in dots / arrows like the makers write it ("......เต่า คาราโอเกะ.......")
         const QString trim = l.trimmed();
         const bool wrapped = trim.startsWith(QLatin1String("..")) || trim.endsWith(QLatin1String(".."))
-                || trim.contains(QLatin1String(">>")) || trim.contains(QLatin1String("<<"));
-        const bool thaiKaraoke = low.contains(QString::fromUtf8("คาราโอเก"))
-                && (edge || wrapped || l.contains('_') || latin.match(l).hasMatch());
-        const bool maker = (low.contains("karaoke") || thaiKaraoke || label || creditWord.match(l).hasMatch())
-                           && !l.contains(brand, Qt::CaseInsensitive);
+                || trim.contains(QLatin1String(">>")) || trim.contains(QLatin1String("<<"))
+                || trim.startsWith('*');
+        bool credit = false;
+        if (li >= 2) {
+            for (const QString &w : strong)
+                if (packed.contains(w)) { credit = true; break; }
+            if (!credit)
+                credit = web.match(low).hasMatch()
+                         || (wrapped && !thai.match(l).hasMatch() && weak.match(low).hasMatch());
+        }
+        if (!credit && edge)
+            for (const QString &w : labels)
+                if (low.contains(w)) { credit = true; break; }
+        // Thai "คาราโอเกะ" can be in a lyric: away from the start / end only with Latin letters or "_"
+        // beside it ("นิค_คาราโอเกะ") or wrapped in dots / arrows ("......เต่า คาราโอเกะ.......")
+        if (!credit)
+            credit = low.contains(QString::fromUtf8("คาราโอเก"))
+                     && (edge || wrapped || l.contains('_') || latin.match(l).hasMatch());
+        const bool maker = credit && !l.contains(brand, Qt::CaseInsensitive);
         // the maker's phone numbers ("..081-7940516..", "Tel.931-2030 , 01-498-1245"): 9+ digits with
         // a dashed group (an "Intro..15...16..." counter has no dash) - shown as the dots only
         static const QRegularExpression phoneGroup("\\d{2,3}\\s*-\\s*\\d{3,4}|\\b0\\d{8,9}\\b");
