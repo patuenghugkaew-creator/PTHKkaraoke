@@ -90,7 +90,7 @@ void LyricsWidget::applyBrand(QStringList &lyrs, QVector<long> &curs)
     static const QString deco = QString::fromUtf8(" .><-_=*~:|·•…\t");
     // credit lines: "Music By Mr.นิค_คาราโอเกะ", "MIDI by ...", "© GMM GRAMMY" (anywhere in the song)
     static const QRegularExpression creditWord(QString::fromUtf8(
-        "\\b(music|midi|arrang\\w*|produced|lyrics?)\\s*by\\b|copyright|©|ลิขสิทธิ์|เรียบเรียงโดย|ทำมิดี้"),
+        "\\b(music|midi|arrang\\w*|produced|lyrics?)\\s*by\\b|copyright|©|ลิขสิทธิ์|เรียบเรียงโดย|ทำมิดี้|facebook|line\\s*id"),
         QRegularExpression::CaseInsensitiveOption);
     // record labels (only on the first / last lines: a lyric may name one in passing)
     static const QStringList labels = QString::fromUtf8(
@@ -111,8 +111,12 @@ void LyricsWidget::applyBrand(QStringList &lyrs, QVector<long> &curs)
                 if (low.contains(w)) { label = true; break; }
         // Thai "คาราโอเกะ" can be in a lyric: away from the start / end only with Latin letters or "_"
         // beside it ("Nick_Karaoke", "นิค_คาราโอเกะ")
+        // ... or wrapped in dots / arrows like the makers write it ("......เต่า คาราโอเกะ.......")
+        const QString trim = l.trimmed();
+        const bool wrapped = trim.startsWith(QLatin1String("..")) || trim.endsWith(QLatin1String(".."))
+                || trim.contains(QLatin1String(">>")) || trim.contains(QLatin1String("<<"));
         const bool thaiKaraoke = low.contains(QString::fromUtf8("คาราโอเก"))
-                && (edge || l.contains('_') || latin.match(l).hasMatch());
+                && (edge || wrapped || l.contains('_') || latin.match(l).hasMatch());
         const bool maker = (low.contains("karaoke") || thaiKaraoke || label || creditWord.match(l).hasMatch())
                            && !l.contains(brand, Qt::CaseInsensitive);
         // the maker's phone numbers ("..081-7940516..", "Tel.931-2030 , 01-498-1245"): 9+ digits with
@@ -122,25 +126,29 @@ void LyricsWidget::applyBrand(QStringList &lyrs, QVector<long> &curs)
         for (const QChar ch : l)
             if (ch.isDigit()) ++digits;
         const bool phone = !maker && digits >= 9 && phoneGroup.match(l).hasMatch();
-        if ((maker || phone) && n > 0 && offset + n <= curs.size()) {
+        if ((maker || phone) && n > 0) {
             int a = 0, b = n;
             while (a < b && deco.contains(l[a])) ++a;           // keep the dots / arrows around it
             while (b > a && deco.contains(l[b - 1])) --b;
             QString line = l.left(a) + (maker ? brand : QString()) + l.mid(b);
             if (line.trimmed().isEmpty())
                 line = QStringLiteral("......");                // never an empty line: it keeps its time
-            const long c0 = curs[offset], c1 = curs[offset + n - 1];
-            QVector<long> spread(line.length());
-            for (int i = 0; i < spread.size(); ++i)
-                spread[i] = spread.size() > 1 ? c0 + long(double(c1 - c0) * i / (spread.size() - 1)) : c0;
-            curs.remove(offset, n);
-            for (int i = 0; i < spread.size(); ++i)
-                curs.insert(offset + i, spread[i]);
+            // the credit at the very end of a file often has no cursors (or only some): those it has
+            // are spread over the new text, the text changes in any case
+            const int have = qBound(0, curs.size() - offset, n);
+            if (have > 0) {
+                const long c0 = curs[offset], c1 = curs[offset + have - 1];
+                const int m = have == n ? line.length() : qMin(have, line.length());
+                QVector<long> spread(m);
+                for (int i = 0; i < m; ++i)
+                    spread[i] = m > 1 ? c0 + long(double(c1 - c0) * i / (m - 1)) : c0;
+                curs.remove(offset, have);
+                for (int i = 0; i < m; ++i)
+                    curs.insert(offset + i, spread[i]);
+            }
             l = line;
         }
         offset += l.length() + 1;
-        if (offset >= curs.size())
-            break;
     }
 }
 
