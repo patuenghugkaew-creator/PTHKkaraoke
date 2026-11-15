@@ -85,6 +85,7 @@ public:
     MidiPlayer* midiPlayer() { return player; }
     Background *backgroundWidget() { return bgWidget; }
     void showSlideshowDialog();         // background slideshow settings (MainWindow_Menu.cpp)
+    void rememberAudioDeviceNames();    // output device / ASIO driver by name (another computer numbers them differently)
     // medley sets: named song lists + their medley tempo / bridge (MainWindow_Playlist.cpp)
     QStringList medleySetNames() const;
     void saveMedleySet();

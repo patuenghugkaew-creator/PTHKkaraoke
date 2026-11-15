@@ -1,4 +1,7 @@
 #include "Config.h"
+#include <QVariant>
+#include <QSettings>
+#include <QDirIterator>
 
 #include <QApplication>
 #include <QFile>
@@ -24,10 +27,61 @@ bool Config::isPortableMode()
     return s_portableMode;
 }
 
-// A flash drive / external HD gets another drive letter (or folder) on another computer.
-// The saved settings hold full paths (song folders, SoundFonts, VST...). When the program
-// folder moved since the last start, paths inside the old program folder and on the old
-// drive letter are moved along (C: paths, which belong to the computer, are left alone).
+// A flash drive / external HD gets another drive letter (or folder) on another computer, and a
+// copied "PTHK Karaoke" folder can sit anywhere. Every saved path (song folders, SoundFonts, VST,
+// backgrounds, slideshow, sound pads, medley sets...) that pointed into the old program folder is
+// moved along to the new one, and paths on the old drive letter go to the new letter (C: paths
+// belong to the computer and are left alone).
+// All the settings files of the Config folder are handled: the INI files through QSettings (so
+// Thai folder names, which INI files store escaped, are compared correctly), other text files as
+// UTF-8 text. "portable-location.txt" remembers where the program was last time.
+namespace {
+struct Rebase {
+    QString oldApp, newApp, oldDrive, newDrive;
+    bool driveMoved = false;
+
+    // one stored string: may hold one path or several (";" lists), either slash style
+    QString apply(QString v) const
+    {
+        const QString before = v;
+        auto swap = [&v](const QString &from, const QString &to) {
+            if (from.isEmpty()) return;
+            v.replace(from, to, Qt::CaseInsensitive);
+        };
+        const QString oA = oldApp, nA = newApp;
+        const QString oB = QString(oldApp).replace('/', '\\'), nB = QString(newApp).replace('/', '\\');
+        // "<old>/" and "<old>" at the end of the value (a folder setting)
+        swap(oA + "/", nA + "/");
+        swap(oB + "\\", nB + "\\");
+        if (v.compare(oA, Qt::CaseInsensitive) == 0) v = nA;
+        if (v.compare(oB, Qt::CaseInsensitive) == 0) v = nB;
+        if (driveMoved) {
+            swap(oldDrive + "/", newDrive + "/");
+            swap(oldDrive + "\\", newDrive + "\\");
+        }
+        Q_UNUSED(before)
+        return v;
+    }
+
+    QVariant applyVar(const QVariant &val, bool *changed) const
+    {
+        if (val.type() == QVariant::String) {
+            const QString n = apply(val.toString());
+            if (n != val.toString()) { *changed = true; return n; }
+        } else if (val.type() == QVariant::StringList) {
+            QStringList l = val.toStringList();
+            bool c = false;
+            for (QString &e : l) {
+                const QString n = apply(e);
+                if (n != e) { e = n; c = true; }
+            }
+            if (c) { *changed = true; return l; }
+        }
+        return val;
+    }
+};
+}
+
 static void rebasePortablePaths(const QString &appDir)
 {
     const QString marker = Config::CONFIG_DIR_PATH + "/portable-location.txt";
@@ -35,34 +89,114 @@ static void rebasePortablePaths(const QString &appDir)
     {
         QFile m(marker);
         if (m.open(QIODevice::ReadOnly))
-            oldApp = QString::fromUtf8(m.readAll()).trimmed();
+            oldApp = QDir::fromNativeSeparators(QString::fromUtf8(m.readAll()).trimmed());
     }
     const QString newApp = appDir;
     if (!oldApp.isEmpty() && oldApp.compare(newApp, Qt::CaseInsensitive) != 0) {
-        const QString oldDrive = oldApp.left(2), newDrive = newApp.left(2);    // "E:"
-        const bool driveMoved = oldDrive.compare(newDrive, Qt::CaseInsensitive) != 0
-                                && oldDrive.compare(QStringLiteral("C:"), Qt::CaseInsensitive) != 0;
-        for (const QString &file : { Config::CONFIG_APP_FILE_PATH, Config::CONFIG_SYNTH_FILE_PATH }) {
-            QFile f(file);
-            if (!f.open(QIODevice::ReadOnly))
-                continue;
-            QString text = QString::fromLatin1(f.readAll());   // INI: non-ASCII is \x-escaped
-            f.close();
-            const QString before = text;
-            text.replace(oldApp + "/", newApp + "/", Qt::CaseInsensitive);
-            text.replace(QString(oldApp).replace('/', "\\\\") + "\\\\",
-                         QString(newApp).replace('/', "\\\\") + "\\\\", Qt::CaseInsensitive);
-            if (driveMoved) {
-                text.replace(oldDrive + "/", newDrive + "/", Qt::CaseInsensitive);
-                text.replace(oldDrive + "\\\\", newDrive + "\\\\", Qt::CaseInsensitive);
+        Rebase rb;
+        rb.oldApp = oldApp;
+        rb.newApp = newApp;
+        rb.oldDrive = oldApp.left(2);       // "E:"
+        rb.newDrive = newApp.left(2);
+        rb.driveMoved = rb.oldDrive.compare(rb.newDrive, Qt::CaseInsensitive) != 0
+                        && rb.oldDrive.compare(QStringLiteral("C:"), Qt::CaseInsensitive) != 0
+                        && rb.oldDrive.length() == 2 && rb.oldDrive[1] == ':';
+
+        QDirIterator it(Config::CONFIG_DIR_PATH, QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            const QString file = it.next();
+            const QString ext = QFileInfo(file).suffix().toLower();
+            if (ext == "conf" || ext == "ini") {
+                // medley sets are written as UTF-8 INI, the main settings with escapes
+                const bool utf8 = file.contains("/MedleySets/", Qt::CaseInsensitive);
+                QSettings st(file, QSettings::IniFormat);
+                if (utf8)
+                    st.setIniCodec("UTF-8");
+                for (const QString &k : st.allKeys()) {
+                    bool changed = false;
+                    const QVariant n = rb.applyVar(st.value(k), &changed);
+                    if (changed)
+                        st.setValue(k, n);
+                }
+                st.sync();
+            } else if (ext == "bmpl" || ext == "json" || ext == "txt" || ext == "m3u" || ext == "lst") {
+                if (QFileInfo(file).fileName() == "portable-location.txt")
+                    continue;
+                QFile f(file);
+                if (!f.open(QIODevice::ReadOnly))
+                    continue;
+                const QString text = QString::fromUtf8(f.readAll());
+                f.close();
+                QStringList lines = text.split('\n');
+                bool changed = false;
+                for (QString &l : lines) {
+                    const QString n = rb.apply(l);
+                    if (n != l) { l = n; changed = true; }
+                }
+                if (changed && f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+                    f.write(lines.join('\n').toUtf8());
             }
-            if (text != before && f.open(QIODevice::WriteOnly | QIODevice::Truncate))
-                f.write(text.toLatin1());
         }
     }
     QFile m(marker);
     if (m.open(QIODevice::WriteOnly | QIODevice::Truncate))
         m.write(newApp.toUtf8());
+}
+
+// First start of a copied / installed folder: songs and SoundFonts put next to the program
+// ("Songs\NCN", "Songs\SIB", ... "SoundFonts") are used without any setting. A library setting is
+// taken over only when it is empty or points to a folder this computer does not have; the song
+// database is then filled by the main window ("AutoSetup/ScanSongs").
+static bool hasAnyFile(const QString &dir)
+{
+    QDirIterator it(dir, QDir::Files, QDirIterator::Subdirectories);
+    return it.hasNext();
+}
+
+static void autoBindAppFolders(const QString &appDir)
+{
+    QSettings st(Config::CONFIG_APP_FILE_PATH, QSettings::IniFormat);
+    const struct { const char *key; const char *dirs[3]; } libs[] = {
+        { "NCNPath",   { "/Songs/NCN", nullptr, nullptr } },
+        { "HNKPath",   { "/Songs/HNK", "/Songs/EMK", nullptr } },
+        { "SIBPath",   { "/Songs/SIB", nullptr, nullptr } },
+        { "KARPath",   { "/Songs/KAR", nullptr, nullptr } },
+        { "VideoPath", { "/Songs/VIDEO", "/Songs/Video", nullptr } },
+        { "MP3Path",   { "/Songs/MP3", nullptr, nullptr } },
+    };
+    bool scan = false;
+    for (const auto &l : libs) {
+        const QString cur = Config::relocatePath(st.value(l.key).toString());
+        if (!cur.isEmpty() && QDir(cur).exists() && hasAnyFile(cur))
+            continue;                               // a working library: keep it
+        for (const char *d : l.dirs) {
+            if (!d) break;
+            const QString cand = appDir + QLatin1String(d);
+            if (QDir(cand).exists() && hasAnyFile(cand)) {
+                st.setValue(l.key, cand);
+                scan = true;
+                break;
+            }
+        }
+    }
+    // SoundFonts: when none of the saved ones is on this computer, the ones next to the program
+    QStringList sfs = st.value("SynthSoundfonts").toStringList();
+    bool anySf = false;
+    for (const QString &f : sfs)
+        if (QFileInfo(Config::relocatePath(f)).isFile()) { anySf = true; break; }
+    if (!anySf) {
+        QStringList found;
+        QDirIterator it(appDir + "/SoundFonts", { "*.sf2", "*.sf3", "*.sfz", "*.SF2", "*.SF3", "*.SFZ" },
+                        QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext())
+            found << it.next();
+        found.sort(Qt::CaseInsensitive);
+        if (!found.isEmpty())
+            st.setValue("SynthSoundfonts", found);
+    }
+    if (scan)
+        st.setValue("AutoSetup/ScanSongs", true);
+    st.sync();
 }
 
 void Config::initConfigDataPath()
@@ -87,9 +221,11 @@ void Config::initConfigDataPath()
             "/Songs/NCN/Lyrics",
             "/Songs/NCN/Cursor",
             "/Songs/HNK",
+            "/Songs/SIB",
             "/Songs/KAR",
             "/Songs/VIDEO",
-            "/Songs/MP3"
+            "/Songs/MP3",
+            "/Backgrounds"
         };
         QDir d;
         for (const char *sub : stdDirs)
@@ -113,6 +249,7 @@ void Config::initConfigDataPath()
         CONFIG_APP_FILE_PATH = CONFIG_DIR_PATH + "/PTHKKaraoke.conf";
         CONFIG_SYNTH_FILE_PATH = CONFIG_DIR_PATH + "/SynthMixer.conf";
         rebasePortablePaths(appDir);
+        autoBindAppFolders(appDir);
     }
 
     // settings made before the rename (KaraMixer.conf) carry over once

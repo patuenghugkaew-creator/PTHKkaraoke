@@ -241,6 +241,7 @@ private:
         QStringList srcDirs;            // copied into dstRel (each dir's contents)
         QStringList srcFiles;           // single files: into dstRel, by name
         QString dstRel;                 // inside "<drive>/PTHK Karaoke"
+        QStringList dirDst;             // optional: where each srcDirs entry goes (else dstRel)
         bool on = true, required = false, available = true;
         QVector<Job> jobs;              // filled by the scan
         qint64 bytes = 0;
@@ -311,13 +312,32 @@ private:
             if (QFileInfo(f).isFile())
                 fx.srcFiles << QDir::cleanPath(f);
         }
-        const QString bg = Config::relocatePath(s.value("BackgroundImage").toString());
-        if (!bg.startsWith(':') && QFileInfo(bg).isFile())     // (":/..." = the built-in picture)
-            fx.srcFiles << QDir::cleanPath(bg);
         fx.dstRel = "SoundBanks";
         fx.available = !fx.srcDirs.isEmpty() || !fx.srcFiles.isEmpty();
         fx.on = fx.available;
         parts << fx;
+
+        // backgrounds: the picture, the slideshow pictures, the slideshow / video folders
+        Part bgp;
+        bgp.key = "backgrounds";
+        bgp.title = QString::fromUtf8("พื้นหลัง (รูปภาพ / สไลด์ภาพ / วิดีโอพื้นหลัง)");
+        bgp.dstRel = "Backgrounds";
+        const QString bg = Config::relocatePath(s.value("BackgroundImage").toString());
+        if (!bg.startsWith(':') && QFileInfo(bg).isFile())     // (":/..." = the built-in picture)
+            bgp.srcFiles << QDir::cleanPath(bg);
+        for (const QString &f : s.value("Slideshow/Files").toStringList()) {
+            const QString r = Config::relocatePath(f);
+            if (QFileInfo(r).isFile())
+                bgp.srcFiles << QDir::cleanPath(r);
+        }
+        const QStringList slideDir = dirIf(Config::relocatePath(s.value("Slideshow/Dir").toString()));
+        if (!slideDir.isEmpty()) { bgp.srcDirs << slideDir; bgp.dirDst << "Backgrounds/Slides"; }
+        const QStringList videoDir = dirIf(Config::relocatePath(s.value("BackgroundVideoDir").toString()));
+        if (!videoDir.isEmpty()) { bgp.srcDirs << videoDir; bgp.dirDst << "Backgrounds/Video"; }
+        bgp.srcFiles.removeDuplicates();
+        bgp.available = !bgp.srcDirs.isEmpty() || !bgp.srcFiles.isEmpty();
+        bgp.on = bgp.available;
+        parts << bgp;
     }
 
     // every file of every part (worker thread)
@@ -366,7 +386,8 @@ private:
             } else {
                 for (int d = 0; d < p.srcDirs.size(); ++d) {
                     // banks: one folder each (bankDst); song libraries: straight in
-                    const QString dst = p.key == "banks" ? bankDst(p, d) : p.dstRel;
+                    const QString dst = p.key == "banks" ? bankDst(p, d)
+                                      : (d < p.dirDst.size() ? p.dirDst[d] : p.dstRel);
                     addDir(p.srcDirs[d], dst, nullptr);
                 }
                 QSet<QString> names;
@@ -670,9 +691,25 @@ private:
                         if (!m.isEmpty())
                             s.setValue(k, m);
                     }
+                }
+            for (const Part &p : chosen)
+                if (p.key == "backgrounds") {
                     const QString m = mapped(chosen, root, s.value("BackgroundImage").toString());
                     if (!m.isEmpty())
                         s.setValue("BackgroundImage", m);
+                    QStringList files;
+                    for (const QString &f : s.value("Slideshow/Files").toStringList()) {
+                        const QString mf = mapped(chosen, root, f);
+                        files << (mf.isEmpty() ? f : mf);
+                    }
+                    if (!files.isEmpty())
+                        s.setValue("Slideshow/Files", files);
+                    for (int d = 0; d < p.srcDirs.size() && d < p.dirDst.size(); ++d) {
+                        if (p.dirDst[d].endsWith("/Slides"))
+                            s.setValue("Slideshow/Dir", root + "/" + p.dirDst[d]);
+                        else if (p.dirDst[d].endsWith("/Video"))
+                            s.setValue("BackgroundVideoDir", root + "/" + p.dirDst[d]);
+                    }
                 }
             s.sync();
         }

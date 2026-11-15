@@ -947,8 +947,30 @@ void MainWindow::showContextMenuAt(const QPoint &globalPos)
     QMetaObject::invokeMethod(synthMix, "syncQuickChecks");
 }
 
+void MainWindow::rememberAudioDeviceNames()
+{
+    MidiSynthesizer *synth = player ? player->midiSynthesizer() : nullptr;
+    if (!synth)
+        return;
+    BASS_DEVICEINFO i;
+    if (BASS_GetDeviceInfo(DWORD(synth->defaultDevice()), &i))
+        settings->setValue("SynthDefaultDeviceName", QString(i.name));
+    const QStringList drivers = AsioOutput::devices();
+    const int asio = synth->asioDevice();
+    settings->setValue("AsioDeviceName", (asio >= 0 && asio < drivers.count()) ? drivers[asio] : QString());
+}
+
 void MainWindow::showSettingsDialog()
 {
+    // the device names are written only when the owner picked another device in this window
+    struct After {
+        MainWindow *w; int out, asio;
+        ~After() {
+            MidiSynthesizer *s = w->player ? w->player->midiSynthesizer() : nullptr;
+            if (s && (s->defaultDevice() != out || s->asioDevice() != asio))
+                w->rememberAudioDeviceNames();
+        }
+    } after{ this, player->midiSynthesizer()->defaultDevice(), player->midiSynthesizer()->asioDevice() };
     if (!requireShopUnlock(tr("ตั้งค่าระบบ")))
         return;
     SettingsDialog d(dialogParent(), this);

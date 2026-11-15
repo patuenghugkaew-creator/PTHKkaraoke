@@ -19,7 +19,9 @@ VersionInfoVersion={#AppVersion}
 VersionInfoCompany={#MyAppPublisher}
 AppPublisher={#MyAppPublisher}
 AppCopyright=Copyright (C) 2026 PTHK - based on KaraMixer Edition (Buai Music) and Handy Karaoke (pie62), GPLv3
-DefaultDirName={autopf}\PTHK Karaoke
+; everything in one folder that can be written to (songs, settings, database, SoundFonts, backgrounds):
+; C:\PTHK Karaoke by default, no admin rights needed. Program Files can still be chosen.
+DefaultDirName={sd}\PTHK Karaoke
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 LicenseFile=..\gpl-3.0.rtf
@@ -34,7 +36,8 @@ UsePreviousAppDir=no
 AlwaysShowDirOnReadyPage=yes
 ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
-; all users (Program Files, default) or only me / USB drive (no admin rights needed)
+; only me (default, C:\PTHK Karaoke / USB drive, no admin rights) or all users (Program Files)
+PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog commandline
 
 [Languages]
@@ -42,7 +45,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
-Name: "portable"; Description: "โหมดพกพาสำหรับ Flash Drive / External HD (เก็บตั้งค่าและฐานข้อมูลเพลงไว้ในโฟลเดอร์ที่ติดตั้ง)"; GroupDescription: "โหมดพกพา (Portable Mode):"; Flags: unchecked
+Name: "portable"; Description: "รวมทุกอย่างไว้ในโฟลเดอร์ที่ติดตั้ง: เพลง ค่าตั้ง ฐานข้อมูล ซาวด์ฟอนต์ พื้นหลัง (แนะนำ - ยกทั้งโฟลเดอร์ไปเครื่องอื่น / Flash Drive / External HD ได้)"; GroupDescription: "ที่เก็บข้อมูล:"
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -64,6 +67,8 @@ Name: "{app}\Songs\NCN\Song"; Flags: uninsneveruninstall
 Name: "{app}\Songs\NCN\Lyrics"; Flags: uninsneveruninstall
 Name: "{app}\Songs\NCN\Cursor"; Flags: uninsneveruninstall
 Name: "{app}\Songs\HNK"; Flags: uninsneveruninstall
+Name: "{app}\Songs\SIB"; Flags: uninsneveruninstall
+Name: "{app}\Backgrounds"; Flags: uninsneveruninstall
 Name: "{app}\Songs\KAR"; Flags: uninsneveruninstall
 Name: "{app}\Songs\VIDEO"; Flags: uninsneveruninstall
 Name: "{app}\Songs\MP3"; Flags: uninsneveruninstall
@@ -84,6 +89,11 @@ Source: "{#DeployDir}\Data\Database.db3"; DestDir: "{%USERPROFILE}\.PTHKKaraoke\
 ; portable install: the same, but into the program folder itself (travels with the drive)
 Source: "{#DeployDir}\Config\*.conf"; DestDir: "{app}\Config"; Tasks: portable; Flags: external skipifsourcedoesntexist onlyifdoesntexist uninsneveruninstall
 Source: "{#DeployDir}\Data\Database.db3"; DestDir: "{app}\Data"; Tasks: portable; Flags: external skipifsourcedoesntexist onlyifdoesntexist uninsneveruninstall
+; a first one-folder install on a computer that already used PTHK Karaoke (settings in the user
+; profile): bring those settings, medley sets and the song database into the folder ("external":
+; read on that computer at install time, nothing is packed). Not when the folder already has its own.
+Source: "{%USERPROFILE}\.PTHKKaraoke\Config\*"; DestDir: "{app}\Config"; Tasks: portable; Check: FirstOneFolderInstall; Flags: external skipifsourcedoesntexist onlyifdoesntexist recursesubdirs createallsubdirs uninsneveruninstall
+Source: "{%USERPROFILE}\.PTHKKaraoke\Data\*"; DestDir: "{app}\Data"; Tasks: portable; Check: FirstOneFolderInstall; Flags: external skipifsourcedoesntexist onlyifdoesntexist recursesubdirs createallsubdirs uninsneveruninstall
 ; the default sound for MIDI songs: GeneralUser GS by S. Christian Collins (free to redistribute,
 ; licence shipped next to it). The deploy folder's own SoundFonts / VST are never packed (third-party).
 Source: "D:\REA\downloads\GeneralUser-GS\GeneralUser-GS.sf2"; DestDir: "{app}\SoundFonts"; Flags: ignoreversion
@@ -93,7 +103,51 @@ Source: "..\gpl-3.0.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#DeployDir}\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: ignoreversion deleteafterinstall
 
 [Code]
+var
+  HadAppConfig: Boolean;
+
 function IsAutoUpdate: Boolean;
 begin
   Result := ExpandConstant('{param:update|0}') = '1';
+end;
+
+function FirstOneFolderInstall: Boolean;
+begin
+  Result := not HadAppConfig;
+end;
+
+function InProgramFiles(const Dir: String): Boolean;
+begin
+  Result := (Pos(Uppercase(ExpandConstant('{commonpf64}')), Uppercase(Dir)) = 1)
+         or (Pos(Uppercase(ExpandConstant('{commonpf32}')), Uppercase(Dir)) = 1);
+end;
+
+// Program Files cannot be written to by the program: no songs / settings can be kept there
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if (CurPageID = wpSelectTasks) and WizardIsTaskSelected('portable') and InProgramFiles(WizardDirValue) then
+  begin
+    MsgBox('โฟลเดอร์ Program Files เก็บเพลงและค่าตั้งไม่ได้' + #13#10 +
+           'กด Back แล้วเลือกโฟลเดอร์อื่น เช่น C:\PTHK Karaoke' + #13#10 +
+           'หรือเอาติ๊ก "รวมทุกอย่างไว้ในโฟลเดอร์ที่ติดตั้ง" ออก', mbInformation, MB_OK);
+    Result := False;
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  Lines: TArrayOfString;
+begin
+  if CurStep = ssInstall then
+    HadAppConfig := FileExists(ExpandConstant('{app}\Config\PTHKKaraoke.conf'));
+  if (CurStep = ssPostInstall) and WizardIsTaskSelected('portable') then
+  begin
+    ForceDirectories(ExpandConstant('{app}\Config'));
+    ForceDirectories(ExpandConstant('{app}\Data'));
+    SetArrayLength(Lines, 2);
+    Lines[0] := 'PTHK Karaoke: ทุกอย่างอยู่ในโฟลเดอร์นี้ (Config, Data, Songs, SoundFonts, VST, Backgrounds)';
+    Lines[1] := 'ยกทั้งโฟลเดอร์ไปเครื่องอื่นหรือไดรฟ์พกพาได้ เปิด PTHKKaraoke.exe แล้วใช้ได้เลย';
+    SaveStringsToUTF8File(ExpandConstant('{app}\Portable.txt'), Lines, False);
+  end;
 end;

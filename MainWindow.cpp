@@ -91,6 +91,20 @@ MainWindow::MainWindow(QWidget *parent) :
     db->setHNKPath(hnk);
     db->setKarPath(kar);
     db->setSibPath(sib);
+    // songs found next to the program on the first start (Config::autoBindAppFolders): add them
+    if (settings->value("AutoSetup/ScanSongs", false).toBool()) {
+        settings->remove("AutoSetup/ScanSongs");
+        QTimer::singleShot(4000, this, [this]() {
+            if (db->isRunning())
+                return;
+            uiLog("auto set-up: songs next to the program -> filling the song database");
+            ui->detail->setDetail(tr("พบเพลงในโฟลเดอร์ Songs"), tr("กำลังเพิ่มเพลงเข้าฐานข้อมูล ใช้ได้เลยระหว่างนี้"));
+            ui->detail->show();
+            detailTimer->start(6000);
+            db->setUpdateType(UpdateType::UpdateAll);
+            db->start();
+        });
+    }
     // (the file first: reading every SIB path just to see if there is one took time at each start)
     if (QFile::exists("D:/REA/SIBSIB KARAOKE/DATA/sibsib_songs.dat") && !db->hasSongType("SIB")) {
         db->importSibDatabase("D:/REA/SIBSIB KARAOKE/DATA/sibsib_songs.dat", sib);
@@ -233,12 +247,49 @@ MainWindow::MainWindow(QWidget *parent) :
     { // Synth
         MidiSynthesizer *synth = player->midiSynthesizer();
 
-        // Audio out
+        // Audio out. The device is remembered by number and by name: on another computer (a copied
+        // folder, a portable drive) the numbers differ, so the name decides; a device this computer
+        // does not have = the computer's default output (never silence).
+        auto bassName = [](int dev) {
+            BASS_DEVICEINFO i;
+            return (dev > 0 && BASS_GetDeviceInfo(DWORD(dev), &i) && (i.flags & BASS_DEVICE_ENABLED)) ? QString(i.name) : QString();
+        };
+        auto bassDefault = []() {
+            BASS_DEVICEINFO i;
+            for (DWORD d = 1; BASS_GetDeviceInfo(d, &i); ++d)
+                if ((i.flags & BASS_DEVICE_ENABLED) && (i.flags & BASS_DEVICE_DEFAULT))
+                    return int(d);
+            return 1;
+        };
         int aout = settings->value("SynthDefaultDevice", 1).toInt();
+        {
+            const QString want = settings->value("SynthDefaultDeviceName").toString();
+            if (!want.isEmpty() && bassName(aout) != want) {
+                int found = -1;
+                BASS_DEVICEINFO i;
+                for (DWORD d = 1; BASS_GetDeviceInfo(d, &i); ++d)
+                    if ((i.flags & BASS_DEVICE_ENABLED) && QString(i.name) == want) { found = int(d); break; }
+                aout = found > 0 ? found : bassDefault();
+                uiLog(QString("audio out: \"%1\" %2 -> device %3 (%4)").arg(want)
+                      .arg(found > 0 ? "has another number here" : "not on this computer")
+                      .arg(aout).arg(bassName(aout)));
+            } else if (bassName(aout).isEmpty()) {
+                aout = bassDefault();       // that number is not a device here
+            }
+        }
         synth->setDefaultDevice(aout);
 
-        // ASIO output (optional, -1 = normal Windows device)
+        // ASIO output (optional, -1 = normal Windows device); also found again by its driver name
         int asio = settings->value("AsioDevice", -1).toInt();
+        {
+            const QStringList drivers = AsioOutput::devices();
+            const QString want = settings->value("AsioDeviceName").toString();
+            if (asio >= 0 && !want.isEmpty() && (asio >= drivers.count() || drivers[asio] != want)) {
+                const int found = drivers.indexOf(want);
+                uiLog(QString("ASIO: \"%1\" %2").arg(want).arg(found >= 0 ? "found again" : "not on this computer: normal output"));
+                asio = found;
+            }
+        }
         if (asio >= AsioOutput::devices().count())
             asio = -1;
         if (AsioOutput::crashedLastStart()) {          // the driver hung / crashed the last time: start on the normal device
@@ -249,6 +300,15 @@ MainWindow::MainWindow(QWidget *parent) :
         AsioOutput::setSpeakerSplit(settings->value("AsioSpeakerSplit", false).toBool());
         AsioOutput::setBufferSize(settings->value("AsioBufferSamples", 0).toInt());
         synth->setAsioDevice(asio);
+        // first start with this version: remember the names of what is used now. (Not after a
+        // fall-back on another computer: the owner's own device name must stay for back home.)
+        if (settings->value("SynthDefaultDeviceName").toString().isEmpty()) {
+            BASS_DEVICEINFO i;
+            if (BASS_GetDeviceInfo(DWORD(synth->defaultDevice()), &i))
+                settings->setValue("SynthDefaultDeviceName", QString(i.name));
+        }
+        if (asio >= 0 && settings->value("AsioDeviceName").toString().isEmpty() && asio < AsioOutput::devices().count())
+            settings->setValue("AsioDeviceName", AsioOutput::devices()[asio]);
 
         // audio quality
         {
