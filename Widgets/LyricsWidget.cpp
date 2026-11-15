@@ -88,12 +88,32 @@ void LyricsWidget::applyBrand(QStringList &lyrs, QVector<long> &curs)
     if (brand.isEmpty() || curs.isEmpty())
         return;
     static const QString deco = QString::fromUtf8(" .><-_=*~:|·•…\t");
+    // credit lines: "Music By Mr.นิค_คาราโอเกะ", "MIDI by ...", "© GMM GRAMMY" (anywhere in the song)
+    static const QRegularExpression creditWord(QString::fromUtf8(
+        "\\b(music|midi|arrang\\w*|produced|lyrics?)\\s*by\\b|copyright|©|ลิขสิทธิ์|เรียบเรียงโดย|ทำมิดี้"),
+        QRegularExpression::CaseInsensitiveOption);
+    // record labels (only on the first / last lines: a lyric may name one in passing)
+    static const QStringList labels = QString::fromUtf8(
+        "gmm|grammy|แกรมมี่|อาร์สยาม|r-siam|rsiam|r siam|sony music|warner music|topline|ท็อปไลน์|"
+        "ชัยพฤกษ์|chaiyaphruek|genie records|spicy disc|smallroom|bakery music|muzik move|kita records|"
+        "เพลงนี้จัดทำ|จัดทำโดย").split('|');
+    static const QRegularExpression latin("[A-Za-z]");
     int offset = 0;
-    const int lookLines = qMin(lyrs.size(), 8);     // the maker's name is in the song's first lines
-    for (int li = 0; li < lookLines; ++li) {
+    const int last = lyrs.size();
+    for (int li = 0; li < last; ++li) {
         QString &l = lyrs[li];
         const int n = l.length();
-        const bool maker = (l.contains("karaoke", Qt::CaseInsensitive) || l.contains(QString::fromUtf8("คาราโอเก")))
+        const QString low = l.toLower();
+        const bool edge = li < 8 || li >= last - 3;      // the song's first / last lines
+        bool label = false;
+        if (edge)
+            for (const QString &w : labels)
+                if (low.contains(w)) { label = true; break; }
+        // Thai "คาราโอเกะ" can be in a lyric: away from the start / end only with Latin letters or "_"
+        // beside it ("Nick_Karaoke", "นิค_คาราโอเกะ")
+        const bool thaiKaraoke = low.contains(QString::fromUtf8("คาราโอเก"))
+                && (edge || l.contains('_') || latin.match(l).hasMatch());
+        const bool maker = (low.contains("karaoke") || thaiKaraoke || label || creditWord.match(l).hasMatch())
                            && !l.contains(brand, Qt::CaseInsensitive);
         // the maker's phone numbers ("..081-7940516..", "Tel.931-2030 , 01-498-1245"): 9+ digits with
         // a dashed group (an "Intro..15...16..." counter has no dash) - shown as the dots only
