@@ -179,17 +179,27 @@ public:
     // allowYouTube false (no internet): library songs only; the YouTube ones stay for later.
     bool next(IdlePick *out, const std::function<bool(Song)> &fileOk, bool allowYouTube = true)
     {
+        QSet<QString> sungTitles;       // the customers' songs of tonight (another copy is the same song)
         if (seeds) {
-            currentCtx = buildContext(seeds());
+            const QVector<Seed> sd = seeds();
+            for (const Seed &x : sd) {
+                const QString k = titleKey(x.name);
+                if (!k.isEmpty())
+                    sungTitles.insert(k);
+            }
+            currentCtx = buildContext(sd);
             filterReadyForContext(currentCtx);
         }
+        auto sameAsSung = [&sungTitles](const IdlePick &p) {
+            return titleClash(pickTitle(p), !p.local, sungTitles);
+        };
         if (!allowYouTube) {
             for (int i = 0; i < ready.size(); ++i) {
                 IdlePick p = ready.at(i);
                 if (!p.local)
                     continue;
                 ready.removeAt(i--);
-                if (wasPlayed(p) || !fileOk(p.song))
+                if (wasPlayed(p) || sameAsSung(p) || !fileOk(p.song))
                     continue;
                 if (p.contextTag.isEmpty())
                     p.contextTag = formatContextTag(currentCtx);
@@ -203,7 +213,7 @@ public:
             // Pick from the top 2 highest-scoring context matches for natural flow
             const int i = QRandomGenerator::global()->bounded(qMin(2, ready.size()));
             IdlePick p = ready.takeAt(i);
-            if (wasPlayed(p))
+            if (wasPlayed(p) || sameAsSung(p))
                 continue;
             if (p.local && !fileOk(p.song)) {
                 if (p.yt.id.isEmpty())
@@ -229,6 +239,43 @@ public:
     }
 
     int readyCount() const { return ready.size(); }
+
+    // A song's title without what tells copies apart: "จักรยานสีแดง ( A )", "จักรยานสีแดง (Loso Special)"
+    // and "จักรยานสีแดง" are one song. Brackets and their text, "karaoke" words, spaces and punctuation
+    // go; letters, digits and Thai marks stay. "" when too short to compare.
+    static QString titleKey(const QString &name)
+    {
+        QString t = name.toLower();
+        static const QRegularExpression brackets(QStringLiteral("[\\(\\[\\{][^\\)\\]\\}]*[\\)\\]\\}]"));
+        t.remove(brackets);
+        for (const char *w : { "karaoke", "คาราโอเกะ", "official", "mv", "lyrics", "audio", "cover" })
+            t.remove(QString::fromUtf8(w));
+        QString o;
+        for (const QChar c : t)
+            if (c.isLetterOrNumber() || c.isMark())
+                o += c;
+        return o.size() >= 3 ? o : QString();
+    }
+    static QString pickTitle(const IdlePick &p)
+    {
+        Song s = p.song;          // Song::name() is not const
+        return p.local ? s.name() : p.yt.title;
+    }
+    // the same song as one in `avoid`: the same title key, or (a YouTube clip title, which also holds
+    // the singer and extras) a title that contains one of them
+    static bool titleClash(const QString &name, bool clipTitle, const QSet<QString> &avoid)
+    {
+        const QString k = titleKey(name);
+        if (k.isEmpty())
+            return false;
+        if (avoid.contains(k))
+            return true;
+        if (clipTitle)
+            for (const QString &a : avoid)
+                if (a.size() >= 4 && k.contains(a))
+                    return true;
+        return false;
+    }
 
     // Format a concise Thai summary of the 4D context (genre • era • tempo • type)
     static QString formatContextTag(const ContextProfile &cp)
@@ -745,7 +792,7 @@ private:
                 kept << p;
                 continue;
             }
-            const QString name = p.local ? p.song.name() : p.yt.title;
+            const QString name = pickTitle(p);
             const QString artist = p.local ? p.song.artist() : p.yt.channel;
             const QString lyr = p.local ? p.song.lyrics() : QString();
             const QString sType = p.local ? p.song.songType() : QStringLiteral("YOUTUBE");
@@ -832,8 +879,14 @@ private:
     bool wasPlayed(const IdlePick &p) const
     {
         const qint64 limit = QDateTime::currentMSecsSinceEpoch() - 4LL * 3600 * 1000;   // 4 hours
-        return (!p.libKey.isEmpty() && played.value("lib:" + p.libKey, 0) > limit)
-            || (!p.yt.id.isEmpty() && played.value("yt:" + p.yt.id, 0) > limit);
+        if ((!p.libKey.isEmpty() && played.value("lib:" + p.libKey, 0) > limit)
+                || (!p.yt.id.isEmpty() && played.value("yt:" + p.yt.id, 0) > limit))
+            return true;
+        QSet<QString> titles;
+        for (auto it = played.constBegin(); it != played.constEnd(); ++it)
+            if (it.key().startsWith("title:") && it.value() > limit)
+                titles.insert(it.key().mid(6));
+        return titleClash(pickTitle(p), !p.local, titles);
     }
     void markPlayed(const IdlePick &p)
     {
@@ -842,6 +895,9 @@ private:
             played.insert("lib:" + p.libKey, now);
         if (!p.yt.id.isEmpty())
             played.insert("yt:" + p.yt.id, now);
+        const QString t = titleKey(pickTitle(p));
+        if (!t.isEmpty())
+            played.insert("title:" + t, now);
     }
 
     // ---- cache: the chart and the clips that cannot be played --------------------------------------
@@ -1298,7 +1354,8 @@ private:
     // Directly query the local SQLite database for songs that match the 4D ContextProfile
     // (same artist / peer artists of the same genre & era + matching BPM range + media type)
     static QVector<Found> queryLibraryByContext(QSqlDatabase &db, const ContextProfile &cp,
-                                                const QSet<QString> &sungKeys, const QString &st, int maxTake)
+                                                const QSet<QString> &sungKeys, const QSet<QString> &sungTitles,
+                                                const QString &st, int maxTake)
     {
         QVector<Found> candidates;
         if (!db.isOpen() || !cp.hasSeed)
@@ -1343,9 +1400,10 @@ private:
                 const QString k = f.type + f.path;
                 if (f.type == "YOUTUBE" || seenKeys.contains(k))
                     continue;
-                // Avoid duplicate song titles in the same batch
-                const QString nk = norm(f.name) + "|" + norm(f.artist);
-                if (seenKeys.contains(nk))
+                // one copy per title (the library holds many copies under other artist names)
+                const QString tk = titleKey(f.name);
+                const QString nk = "T:" + (tk.isEmpty() ? norm(f.name) + "|" + norm(f.artist) : tk);
+                if (seenKeys.contains(nk) || (!tk.isEmpty() && sungTitles.contains(tk)))
                     continue;
                 int sc = scoreCandidate(f.name, f.artist, f.lyrics, f.type, f.tempo, true, cp, st);
                 if (sc < 30)
@@ -1429,9 +1487,14 @@ private:
         const int lang = baseCp.lang != 0 ? baseCp.lang
                        : (sd.size() < 3 ? 0 : (thai * 10 >= sd.size() * 8 ? 1 : (thai * 10 <= sd.size() * 2 ? 2 : 0)));
         QSet<QString> sungKeys;     // not the songs the customers sang tonight
-        for (const Seed &s : sd)
+        QSet<QString> sungTitles;   // ... nor another copy of them (same title, other file / artist)
+        for (const Seed &s : sd) {
             if (!s.key.isEmpty())
                 sungKeys.insert(s.key);
+            const QString k = titleKey(s.name);
+            if (!k.isEmpty())
+                sungTitles.insert(k);
+        }
         const bool fastLocalOnly = (modeHint == QLatin1String("local-fast"));
         if (clips.isEmpty() && !fastLocalOnly && !baseCp.hasSeed)
             say("nothing found");
@@ -1439,7 +1502,7 @@ private:
         std::weak_ptr<int> guard = alive;
         QPointer<QObject> owner = ctx;
         IdleSmart *self = this;
-        QThreadPool::globalInstance()->start([clips, sd, baseCp, fastLocalOnly, file, st, lang, sungKeys, guard, owner, self]() {
+        QThreadPool::globalInstance()->start([clips, sd, baseCp, fastLocalOnly, file, st, lang, sungKeys, sungTitles, guard, owner, self]() {
             QVector<Found> found;
             ContextProfile cp = baseCp;
             {
@@ -1473,6 +1536,8 @@ private:
                         }
                         if (f.local && sungKeys.contains(f.type + f.path))
                             continue;
+                        if (titleClash(f.local ? f.name : it.title, !f.local, sungTitles))
+                            continue;
 
                         const QString evalName = f.local ? f.name : it.title;
                         const QString evalArtist = f.local ? f.artist : it.channel;
@@ -1488,7 +1553,7 @@ private:
                     // and exact BPM/Genre/Era matching when customer sang MIDI or local files)
                     if (open && cp.hasSeed && st == "auto") {
                         const int wantLib = fastLocalOnly ? 8 : (cp.mediaKind == MediaMidi ? 6 : 4);
-                        const QVector<Found> libMatches = queryLibraryByContext(db, cp, sungKeys, st, wantLib);
+                        const QVector<Found> libMatches = queryLibraryByContext(db, cp, sungKeys, sungTitles, st, wantLib);
                         found += libMatches;
                     }
                     db.close();
@@ -1514,6 +1579,8 @@ private:
                 for (const IdlePick &r : self->ready) {
                     if (!r.libKey.isEmpty()) existingKeys.insert(r.libKey);
                     if (!r.yt.id.isEmpty())  existingKeys.insert("YT:" + r.yt.id);
+                    const QString t = titleKey(pickTitle(r));
+                    if (!t.isEmpty()) existingKeys.insert("T:" + t);
                 }
                 for (const Found &f : found) {
                     IdlePick p;
@@ -1537,6 +1604,10 @@ private:
                         continue;
                     if (!p.yt.id.isEmpty() && existingKeys.contains("YT:" + p.yt.id))
                         continue;
+                    const QString pt = titleKey(pickTitle(p));
+                    if (!pt.isEmpty() && existingKeys.contains("T:" + pt))
+                        continue;
+                    if (!pt.isEmpty()) existingKeys.insert("T:" + pt);
                     if (!p.libKey.isEmpty()) existingKeys.insert(p.libKey);
                     if (!p.yt.id.isEmpty())  existingKeys.insert("YT:" + p.yt.id);
                     fromLib += p.local ? 1 : 0;
