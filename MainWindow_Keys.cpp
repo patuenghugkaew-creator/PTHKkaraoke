@@ -587,7 +587,13 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
             if (ui->lbId->text().isEmpty())
                 break;                  // a message is shown (nothing found / type something): no song
             Song *s = db->currentSong();
+            const QString queuedName = s->name();
             addToPlaylist(s);
+            if (!idleSwitching) {
+                ui->detail->setDetail(tr("เพิ่มเข้าคิวแล้ว · ลำดับที่ %1").arg(playlist.size()), queuedName);
+                ui->detail->show();
+                detailTimer->start(3000);
+            }
 
             if (auto_playnext && playlist.count() == 1 && !isSongPlaying()) {
                 play(0);

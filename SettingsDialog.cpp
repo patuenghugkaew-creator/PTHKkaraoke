@@ -564,7 +564,7 @@ void SettingsDialog::initDeviceTab()
 
         QComboBox *cbType = new QComboBox(dev);
         QComboBox *cbOut = new QComboBox(dev);
-        QPushButton *btnTest = new QPushButton(QStringLiteral("Test"), dev);
+        QPushButton *btnTest = new QPushButton(tr("ทดสอบเสียง"), dev);
         QFrame *chFrame = new QFrame(dev);
         chFrame->setFrameShape(QFrame::StyledPanel);
         QVBoxLayout *chLay = new QVBoxLayout(chFrame);
@@ -816,11 +816,11 @@ void SettingsDialog::initDeviceTab()
         // -------- test note --------
         connect(btnTest, &QPushButton::clicked, this, [=]() {
             if (!synth->isOpened()) {
-                QMessageBox::information(this, QStringLiteral("Test"), QString::fromUtf8("ยังไม่ได้เปิดอุปกรณ์เสียง"));
+                QMessageBox::information(this, tr("ทดสอบเสียง"), QString::fromUtf8("ยังไม่ได้เปิดอุปกรณ์เสียง"));
                 return;
             }
             if (!mainWin->midiPlayer()->isPlayerStopped()) {
-                QMessageBox::information(this, QStringLiteral("Test"), QString::fromUtf8("เพลงกำลังเล่นอยู่ — ฟังเสียงจากเพลงได้เลย หรือหยุดเพลงก่อนกด Test"));
+                QMessageBox::information(this, tr("ทดสอบเสียง"), QString::fromUtf8("เพลงกำลังเล่นอยู่ — ฟังเสียงจากเพลงได้เลย หรือหยุดเพลงก่อนกดทดสอบเสียง"));
                 return;
             }
             synth->sendNoteOn(0, 72, 100);

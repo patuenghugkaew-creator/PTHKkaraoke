@@ -528,7 +528,7 @@ protected:
         copyIn(files);
     }
 
-private:
+public:
     struct Cat {
         QString name;           // shown ("" = a section title)
         QString folder;         // on disk
@@ -537,6 +537,32 @@ private:
         QColor tint;
     };
 
+    static QVector<Cat> allCategories(SoundPads *sp)
+    {
+        ensureFolders();
+        QVector<Cat> out;
+        QFileInfoList dirs = QDir(root()).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
+        QCollator col;
+        col.setNumericMode(true);
+        std::sort(dirs.begin(), dirs.end(), [&col](const QFileInfo &a, const QFileInfo &b) {
+            return col.compare(a.fileName(), b.fileName()) < 0;
+        });
+        int k = 0;
+        for (const QFileInfo &d : dirs) {
+            Cat c;
+            c.name = shown(d.fileName());
+            c.folder = d.absoluteFilePath();
+            c.files = SoundPads::soundFiles(c.folder);
+            c.own = true;
+            c.tint = EventSoundsUi::tint(k++);
+            out.append(c);
+        }
+        for (const Cat &c : foundGroupsOf(sp))
+            out.append(c);
+        return out;
+    }
+
+private:
     Cat current() const
     {
         const int r = list->currentRow();
@@ -569,7 +595,7 @@ private:
         if (has(folder, "ตลก"))                                                           return 1;
         return 6;
     }
-    QVector<Cat> foundGroups() const
+    static QVector<Cat> foundGroupsOf(SoundPads *sp)
     {
         static const char *names[] = { "ปรบมือ เชียร์", "เสียงตลก ฮา", "คำพูดฮิต", "เสียงสัตว์ ธรรมชาติ",
                                        "ดนตรีอีสาน แคน พิณ กลอง", "เสียงประกอบ", "เสียงไม่มีชื่อ" };
@@ -604,6 +630,7 @@ private:
                 out << c;
         return out;
     }
+    QVector<Cat> foundGroups() const { return foundGroupsOf(sp); }
 
     void addSection(const QString &title)
     {

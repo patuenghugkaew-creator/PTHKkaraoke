@@ -882,9 +882,9 @@ void MainWindow::updateSearchResults()
     QString foot = searchFooter;
     if (foot.isEmpty() && rows.size() > 1) {
         if (db->resultCount() > 0)
-            foot = tr("เพลงที่ %1 จาก %2   ↑ ↓ หรือคลิก = เลือก   Enter หรือคลิกซ้ำ = เพิ่มเข้าคิว").arg(cur + 1).arg(db->resultCount());
+            foot = tr("เพลงที่ %1 จาก %2   ↑ ↓ หรือคลิก = เลือก   กด + เพิ่มเข้าคิว หรือ Enter").arg(cur + 1).arg(db->resultCount());
         else
-            foot = tr("↑ ↓ หรือคลิก = เลือกเพลง   Enter หรือคลิกซ้ำ = เพิ่มเข้าคิว");
+            foot = tr("↑ ↓ หรือคลิก = เลือกเพลง   กด + เพิ่มเข้าคิว หรือ Enter");
     }
     if (rows.isEmpty() && foot.isEmpty()) {
         searchResults->hide();

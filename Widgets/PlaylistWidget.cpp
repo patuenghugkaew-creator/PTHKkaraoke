@@ -2,6 +2,8 @@
 #include "ui_PlaylistWidget.h"
 #include <QHeaderView>
 #include <QLabel>
+#include <QPushButton>
+#include <QHBoxLayout>
 
 PlaylistWidget::PlaylistWidget(QWidget *parent) :
     QWidget(parent),
@@ -34,7 +36,27 @@ PlaylistWidget::PlaylistWidget(QWidget *parent) :
     connect(ui->tableWidget, &QTableWidget::cellClicked, this, [this](int row, int) { emit rowClicked(row); });
     connect(ui->tableWidget, &QTableWidget::cellDoubleClicked, this, [this](int row, int) { emit rowDoubleClicked(row); });
 
-    emptyNote = new QLabel(tr("ยังไม่มีเพลงในคิว  ·  พิมพ์รหัสหรือชื่อเพลง แล้วกด Enter เพื่อเพิ่ม"), ui->tableWidget->viewport());
+    queueActions = new QWidget(ui->framePlaylist);
+    auto *actions = new QHBoxLayout(queueActions);
+    actions->setContentsMargins(6, 4, 6, 4);
+    auto button = [this, actions](const QString &text, int key) {
+        auto *b = new QPushButton(text, queueActions);
+        b->setFocusPolicy(Qt::NoFocus);
+        b->setMinimumHeight(34);
+        b->setStyleSheet("QPushButton { color: white; background: #25475f; border: 1px solid #63849b; border-radius: 5px; padding: 3px 10px; font-size: 16px; } QPushButton:hover { background: #326381; } QPushButton:disabled { color: #84919a; background: #29323a; border-color: #48535c; }");
+        actions->addWidget(b);
+        connect(b, &QPushButton::clicked, this, [this, key]() { emit queueKeyRequested(key); });
+        return b;
+    };
+    playButton = button(tr("เล่นตอนนี้"), Qt::Key_Return);
+    upButton = button(tr("เลื่อนขึ้น"), Qt::Key_Plus);
+    downButton = button(tr("เลื่อนลง"), Qt::Key_Minus);
+    removeButton = button(tr("เอาออกจากคิว"), Qt::Key_Delete);
+    actions->addStretch();
+    button(tr("ปิด"), Qt::Key_Escape);
+    ui->verticalLayout->addWidget(queueActions);
+    connect(ui->tableWidget, &QTableWidget::itemSelectionChanged, this, &PlaylistWidget::updateActions);
+    emptyNote = new QLabel(tr("ยังไม่มีเพลงในคิว  ·  กดค้นหาเพลง แล้วเลือก + เพิ่มเข้าคิว"), ui->tableWidget->viewport());
     emptyNote->setStyleSheet("color: rgb(220, 220, 220); background: transparent; padding-left: 10px;");
     emptyNote->setAttribute(Qt::WA_TransparentForMouseEvents);
     updateTitle();
@@ -43,13 +65,24 @@ PlaylistWidget::PlaylistWidget(QWidget *parent) :
 void PlaylistWidget::updateTitle()
 {
     const int n = ui->tableWidget->rowCount();
-    ui->lbPlaylist->setText(n > 0 ? tr("คิวเพลง (%1 เพลง)  ·  Enter เล่น  ·  Delete เอาออก").arg(n)
+    ui->lbPlaylist->setText(n > 0 ? tr("คิวเพลง (%1 เพลง)").arg(n)
                                   : tr("คิวเพลง"));
     if (emptyNote) {
         emptyNote->setFont(ui->tableWidget->font());
         emptyNote->setGeometry(0, 0, 3000, ui->tableWidget->verticalHeader()->defaultSectionSize());
         emptyNote->setVisible(n == 0);
     }
+    updateActions();
+}
+
+void PlaylistWidget::updateActions()
+{
+    const int row = currentRow();
+    const bool selected = row >= 0 && row < rowCount();
+    playButton->setEnabled(selected);
+    removeButton->setEnabled(selected);
+    upButton->setEnabled(selected && row > 0);
+    downButton->setEnabled(selected && row + 1 < rowCount());
 }
 
 void PlaylistWidget::applyOverlayStyle()
@@ -78,7 +111,7 @@ int PlaylistWidget::fittingHeight(int maxHeight) const
         rows = t->verticalHeader()->defaultSectionSize();
     const QMargins m = ui->framePlaylist->layout() ? ui->framePlaylist->layout()->contentsMargins() : QMargins();
     const int spacing = ui->framePlaylist->layout() ? ui->framePlaylist->layout()->spacing() : 0;
-    const int h = ui->frame->sizeHint().height() + spacing + rows + t->frameWidth() * 2 + m.top() + m.bottom() + 6;
+    const int h = ui->frame->sizeHint().height() + queueActions->sizeHint().height() + spacing * 2 + rows + t->frameWidth() * 2 + m.top() + m.bottom() + 6;
     return qMin(h, maxHeight);
 }
 

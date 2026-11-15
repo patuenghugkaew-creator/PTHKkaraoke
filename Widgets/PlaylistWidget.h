@@ -39,10 +39,17 @@ public:
 signals:
     void rowClicked(int row);
     void rowDoubleClicked(int row);             // play this song
+    void queueKeyRequested(int key);
 
 private:
     Ui::PlaylistWidget *ui;
     class QLabel *emptyNote = nullptr;          // "ยังไม่มีเพลงในคิว ..." over the empty table
+    QWidget *queueActions = nullptr;
+    class QPushButton *playButton = nullptr;
+    class QPushButton *upButton = nullptr;
+    class QPushButton *downButton = nullptr;
+    class QPushButton *removeButton = nullptr;
+    void updateActions();
     void updateTitle();                         // "คิวเพลง (N เพลง)" and the empty note
 };
 

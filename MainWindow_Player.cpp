@@ -922,7 +922,8 @@ void MainWindow::updateCutButton()
     }
     cutWaiting = ring >= 0 && ring < 100;
     btnMuteVocal->setRing(ring);
-    btnMuteVocal->setIconFn(BarIcons::byName(btnMuteVocal->isChecked() ? "micOff" : "mic"));
+    const char *micIcon = btnMuteVocal->isChecked() ? "micOff" : "mic";
+    btnMuteVocal->setIconFn(BarIcons::byName(micIcon), BarIcons::colorOf(QString::fromLatin1(micIcon)));
     if (btnMuteVocal->toolTip() != tip)
         btnMuteVocal->setToolTip(tip);
 }
@@ -1023,8 +1024,16 @@ void MainWindow::updateBarStatus()
 {
     if (!btnPlayPause)
         return;
+    if (btnQueue) {
+        const QString label = tr("คิวเพลง (%1)").arg(playlist.size());
+        if (btnQueue->text() != label) {
+            btnQueue->setText(label);
+            fitControlBar();
+        }
+    }
     const bool running = songIsRunning();
-    btnPlayPause->setIconFn(BarIcons::byName(running ? "pause" : "play"));
+    const char *playIcon = running ? "pause" : "play";
+    btnPlayPause->setIconFn(BarIcons::byName(playIcon), BarIcons::colorOf(QString::fromLatin1(playIcon)));
     const QString pl = running ? tr("พัก") : tr("เล่น");
     if (btnPlayPause->text() != pl)
         btnPlayPause->setText(pl);
@@ -1077,7 +1086,7 @@ void MainWindow::updateBarStatus()
         QTimer::singleShot(0, this, [this]() { fitControlBar(); });    // the bar's height follows
     }
     if (hint)
-        title = tr("พิมพ์รหัสหรือชื่อเพลงได้เลย แล้วกด Enter  ·  หรือกดปุ่ม ค้นหา  ·  F1 = คู่มือ");
+        title = tr("กดค้นหาเพลง หรือ YouTube แล้วเลือกเพิ่มเข้าคิว  ·  F1 = คู่มือ");
     const QString shown = barTitle->fontMetrics().elidedText(title, Qt::ElideRight, qMax(80, barTitle->width()));
     if (barTitle->text() != shown)
         barTitle->setText(shown);

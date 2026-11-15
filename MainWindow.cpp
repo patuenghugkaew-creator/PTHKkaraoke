@@ -622,6 +622,11 @@ MainWindow::MainWindow(QWidget *parent) :
             play(row);
             setFocus();
         });
+        connect(ui->playlistWidget, &PlaylistWidget::queueKeyRequested, this, [this](int key) {
+            QKeyEvent event(QEvent::KeyPress, key, Qt::NoModifier);
+            keyPressEvent(&event);
+            setFocus();
+        });
         {   // automatic update check (settings: Update/Auto, Update/IntervalHours)
             QTimer *upd = new QTimer(this);
             upd->setInterval(30 * 60 * 1000);
@@ -827,7 +832,7 @@ MainWindow::MainWindow(QWidget *parent) :
             delete bar->layout();               // its nested layouts go too; the widgets stay
 
             auto mk = [this, bar](const QString &label, const char *icon, const QString &tip) {
-                BarButton *b = new BarButton(label, BarIcons::byName(icon), bar);
+                BarButton *b = new BarButton(label, BarIcons::byName(icon), bar, BarIcons::colorOf(QString::fromLatin1(icon)));
                 b->setToolTip(tip);
                 return b;
             };
@@ -957,6 +962,16 @@ MainWindow::MainWindow(QWidget *parent) :
             });
             btnMedley->setArrow([this]() { openMedleySettings(); });
 
+            BarButton *fxBtn = mk(tr("เอฟเฟกต์"), "fx",
+                tr("เสียงพิธีการ / เอฟเฟกต์ (ปรบมือ โห่ ฮา แคน พิณ เพลงชาติ เชิญประธาน ...)\n"
+                   "คลิก = เปิดหน้าต่างเสียงทั้งหมด  ·  ลูกศรขวา = เมนูลัดเลือกกดเล่นเสียงได้ทันที"));
+            connect(fxBtn, &QAbstractButton::clicked, this, [this]() {
+                QTimer::singleShot(0, this, [this]() { openEventSounds(); });
+            });
+            fxBtn->setArrow([this, fxBtn]() {
+                showEventSoundsQuickMenu(fxBtn->mapToGlobal(QPoint(0, 0)));
+            });
+
             // drum hold (MIDI songs): click = the band stops at the next bar, drums keep the beat;
             // click again = drum fill, then the song carries on (same as Ctrl+D / Pause)
             btnDrumHold = mk(tr("ค้างกลอง"), "drum",
@@ -977,11 +992,23 @@ MainWindow::MainWindow(QWidget *parent) :
             });
 
             // songs and the program
-            BarButton *searchBtn = mk(tr("ค้นหา"), "search",
+            BarButton *searchBtn = mk(tr("ค้นหาเพลง"), "search",
                 tr("ค้นหาเพลง: พิมพ์รหัส ชื่อเพลง ศิลปิน หรือท่อนเนื้อร้อง (พิมพ์บนแป้นได้เลยตลอดเวลา)\n"
                    "คลิกเพลงในรายการเพื่อเลือก คลิกซ้ำ = เพิ่มเข้าคิว"));
             connect(searchBtn, &QAbstractButton::clicked, this, [this]() { openSearchBox(); });
-            BarButton *lists =mk(tr("รายการเพลง"), "songs", tr("เพลงโปรด / เล่นล่าสุด / เพลงฮิต (F3)"));
+            btnQueue = mk(tr("คิวเพลง (0)"), "queue", tr("ดูคิวเพลง เล่นตอนนี้ เลื่อนลำดับ หรือเอาออกจากคิว"));
+            connect(btnQueue, &QAbstractButton::clicked, this, [this]() {
+                if (ui->playlistWidget->isVisible()) {
+                    hideUIFrame();
+                } else {
+                    showPlaylist();
+                    if (ui->playlistWidget->currentRow() < 0)
+                        ui->playlistWidget->setCurrentRow(0);
+                    timer2->start(playlist_timeout);
+                }
+                setFocus();
+            });
+            BarButton *lists = mk(tr("เพลงโปรด"), "songs", tr("เพลงโปรด / เล่นล่าสุด / เพลงฮิต (F3)"));
             connect(lists, &QAbstractButton::clicked, this, [this]() {
                 QKeyEvent ev(QEvent::KeyPress, Qt::Key_F3, Qt::NoModifier);
                 keyPressEvent(&ev);
@@ -1029,39 +1056,15 @@ MainWindow::MainWindow(QWidget *parent) :
                 ui->detail->show();
                 detailTimer->start(3000);
             });
-            // shown only when the window is too narrow for every button (see fitControlBar)
-            btnBarMore = mk(tr("อื่น ๆ"), "more", tr("เสียงพิธีการ / เอฟเฟกต์ (เชิญประธาน เพลงชาติ ปรบมือ ...) และปุ่มที่ไม่พอที่บนแถบ"));
+            btnBarMore = mk(tr("เมนู"), "more", tr("เสียงพิธีการ คลังเพลง เสียง จอ โหมดร้าน เครื่องมือและช่วยเหลือ"));
             connect(btnBarMore, &QAbstractButton::clicked, this, [this]() {
-                QMenu m(this);
-                {   // always first: the sounds of an event
-                    QAction *ev = m.addAction(MenuIcons::make(MenuIcons::Drum),
-                        tr("เสียงพิธีการ / เอฟเฟกต์ (เชิญประธาน เพลงชาติ ปรบมือ โห่ แก้วแตก ...)"));
-                    connect(ev, &QAction::triggered, this, [this]() {
-                        QTimer::singleShot(0, this, [this]() { openEventSounds(); });
-                    });
-                    QAction *pd = m.addAction(MenuIcons::make(MenuIcons::Download),
-                        tr("สร้างไดรฟ์พกพา (USB / External HD) พร้อมเพลงและค่าตั้ง..."));
-                    connect(pd, &QAction::triggered, this, [this]() {
-                        QTimer::singleShot(0, this, [this]() { openPortableDrive(); });
-                    });
-                    m.addSeparator();
-                }
-                for (QAbstractButton *b : barButtons) {        // buttons that did not fit on the bar
-                    if (!b->property("barOverflow").toBool())
-                        continue;
-                    QAction *a = m.addAction(b->text());
-                    a->setToolTip(b->toolTip());
-                    if (b->isCheckable()) {
-                        a->setCheckable(true);
-                        a->setChecked(b->isChecked());
-                    }
-                    connect(a, &QAction::triggered, b, [b]() { b->click(); });
-                }
-                m.exec(btnBarMore->mapToGlobal(QPoint(0, 0)) - QPoint(0, m.sizeHint().height()));
+                showContextMenuAt(btnBarMore->mapToGlobal(QPoint(0, 0)));
             });
 
-            // order on the bar narrowing down: these go into "more" first
-            barButtons = { btnSubtitles, btnSecondScreen, addSongBtn, lists, mixerBtn, restartBtn, end, fullBtn, yt, prev };
+            // Order on the bar narrowing down: least-used buttons fold into the menu first when the window is narrow
+            barButtons = { btnSubtitles, addSongBtn, lists, fullBtn, btnSecondScreen, btnShopLock, mixerBtn, prev, restartBtn, end, btnDrumHold, btnMedley, fxBtn, yt };
+            for (QAbstractButton *b : std::initializer_list<QAbstractButton *>{ prev, restartBtn, end, btnDrumHold, btnMedley, btnSubtitles })
+                b->setProperty("songTool", true);
 
             QVBoxLayout *v = new QVBoxLayout(bar);
             v->setContentsMargins(int(12 * s), int(5 * s), int(12 * s), int(5 * s));
@@ -1076,21 +1079,21 @@ MainWindow::MainWindow(QWidget *parent) :
             seek->addWidget(ui->sliderPosition, 1);
             seek->addWidget(ui->lbDuration);
             QHBoxLayout *row = new QHBoxLayout();
-            row->setSpacing(int(2 * s));
+            row->setSpacing(int(3 * s));
             for (QWidget *w : std::initializer_list<QWidget *>{ prev, btnPlayPause, stopBtn, nextBtn, restartBtn, end })
                 row->addWidget(w);
-            row->addSpacing(int(6 * s));
+            row->addSpacing(int(5 * s));
             row->addWidget(sep());
-            row->addSpacing(int(6 * s));
-            for (QWidget *w : std::initializer_list<QWidget *>{ btnMuteVocal, btnDrumHold, keyControl, tempoControl, btnMedley })
+            row->addSpacing(int(5 * s));
+            for (QWidget *w : std::initializer_list<QWidget *>{ btnMuteVocal, btnDrumHold, keyControl, tempoControl, btnMedley, fxBtn })
                 row->addWidget(w);
             row->addStretch(1);
-            for (QWidget *w : std::initializer_list<QWidget *>{ searchBtn, addSongBtn, lists, yt, btnSubtitles, mixerBtn,
-                                                                 btnSecondScreen, fullBtn, btnShopLock, btnBarMore })
+            for (QWidget *w : std::initializer_list<QWidget *>{ searchBtn, btnQueue, lists, yt, addSongBtn, btnSubtitles,
+                                                                 mixerBtn, btnSecondScreen, fullBtn, btnShopLock, btnBarMore })
                 row->addWidget(w);
-            row->addSpacing(int(6 * s));
+            row->addSpacing(int(5 * s));
             row->addWidget(sep());
-            row->addSpacing(int(6 * s));
+            row->addSpacing(int(5 * s));
             row->addWidget(ui->btnVolumeMute);
             row->addWidget(ui->sliderVolume);
             v->addLayout(info);
@@ -1911,26 +1914,26 @@ void MainWindow::showHelpDialog()
         "<h3>ฟีเจอร์อื่น</h3>"
         "<table>"
         "<tr><td class=k>F2</td><td>เพิ่ม / เอาออก จากเพลงโปรด</td></tr>"
-        "<tr><td class=k>F3</td><td>เพลงโปรด / เล่นล่าสุด / เพลงฮิต (ปุ่ม <i>รายการเพลง</i>)</td></tr>"
+        "<tr><td class=k>F3</td><td>เพลงโปรด / เล่นล่าสุด / เพลงฮิต (เมนู <i>คลังเพลง › เพลงโปรดและประวัติ</i>)</td></tr>"
         "<tr><td class=k>F10</td><td>ค้นหาเพลงจาก YouTube แล้วเล่นสด หรือเพิ่มเข้าคิว (ต้องต่ออินเทอร์เน็ต)</td></tr>"
-        "<tr><td class=k>ปุ่ม อื่น ๆ</td><td>เสียงพิธีการ / เอฟเฟกต์: เชิญประธาน เพลงชาติ เพลงสรรเสริญ ปรบมือ โห่ แก้วแตก ... "
+        "<tr><td class=k>เมนู › เสียงพิธีการและเสียงเชียร์</td><td>เสียงพิธีการ / เอฟเฟกต์: เชิญประธาน เพลงชาติ เพลงสรรเสริญ ปรบมือ โห่ แก้วแตก ... "
         "แต่ละหมวดคือโฟลเดอร์ใน <i>.PTHKKaraoke\\เสียงพิธีการ</i> ใส่ไฟล์เสียงลงไปแล้วปุ่มจะขึ้นเอง</td></tr>"
         "<tr><td class=k>Ctrl + L</td><td>ล็อก / ปลดล็อกหน้าจอสำหรับร้าน (กั้นตั้งค่า มิกเซอร์ ลบเพลง ปิดโปรแกรม และเปิดเพลงคลอเมื่อคิวว่าง)</td></tr>"
         "<tr><td class=k>ดับเบิลคลิกบนจอ</td><td>เต็มจอ / หน้าต่างปกติ</td></tr>"
-        "<tr><td class=k>คลิกขวา</td><td>เมนูทั้งหมด  เครื่องมือช่างเสียง (VST, บัส, LED, แยกเสียงมิดี้) อยู่ใน <i>เสียงและมิกเซอร์ › ขั้นสูง</i> "
-        "และซ่อนไว้เมื่อเลือก <i>เมนูแบบง่าย</i> ในเมนูคลิกขวา</td></tr>"
+        "<tr><td class=k>เมนู / คลิกขวา</td><td>เมนูทั้งหมด  เครื่องมือช่างเสียง (VST, บัส, LED, แยกเสียงมิดี้) อยู่ใน <i>เสียง › ตั้งค่าเสียงขั้นสูง</i> "
+        "ตั้งค่ารายการเมนูเพิ่มเติมได้ที่ <i>เครื่องมือและช่วยเหลือ</i></td></tr>"
         "<tr><td class=k>F1</td><td>คู่มือนี้</td></tr>"
         "</table>"
 
         "<h3>เพิ่มเพลง</h3>"
-        "<p>กดปุ่ม <b>เพิ่มเพลง</b> หรือลากไฟล์ / โฟลเดอร์มาวางบนจอ เพลงเข้าคลังทันที:<br>"
+        "<p>กดปุ่ม <b>เมนู › คลังเพลง › นำเพลงเข้าคลัง</b> หรือลากไฟล์ / โฟลเดอร์มาวางบนจอ เพลงเข้าคลังทันที:<br>"
         "• คาราโอเกะ: NCN (.mid + .lyr + .cur), EMK, SIB, HNK, KAR / MIDI<br>"
         "• วิดีโอ: mp4 mkv avi mpg mpeg wmv vob dat mov m4v ts<br>"
         "• เพลงเสียง: mp3 wav flac m4a aac ogg wma (+ ไฟล์เนื้อร้อง .lrc ชื่อเดียวกัน)<br>"
         "• ไฟล์บีบอัดที่มีเพลง: zip rar 7z<br>"
         "ตั้งชื่อไฟล์แบบ <b>รหัส ชื่อเพลง - ศิลปิน</b> เช่น <i>1001 ใจบางบาง - ศิลปิน.mp4</i> "
         "แล้วค้นด้วยรหัส <b>V1001</b> (วิดีโอ) หรือ <b>M1001</b> (เพลงเสียง)<br>"
-        "คลังเพลงทั้งโฟลเดอร์ (NCN / EMK / SIB ...) ตั้งได้ที่ <b>คลิกขวา › ตั้งค่า › ฐานข้อมูลเพลง</b></p>"
+        "คลังเพลงทั้งโฟลเดอร์ (NCN / EMK / SIB ...) ตั้งได้ที่ <b>เมนู › คลังเพลง › เลือกโฟลเดอร์คลังเพลงและสแกน</b></p>"
 
         "<h3>จอที่ 2 (ทีวี / โปรเจกเตอร์)</h3>"
         "<p>กดปุ่ม <b>จอที่ 2</b> เพื่อแสดงเนื้อร้องเต็มจอบนอีกจอ "

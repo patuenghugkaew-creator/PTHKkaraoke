@@ -229,6 +229,7 @@ public:
     // control bar: buttons that do not fit go into the "more" button's menu
     QList<QAbstractButton *> barButtons;       // bar buttons that go into "more" when the window is narrow
     class BarButton *btnBarMore = nullptr;
+    class BarButton *btnQueue = nullptr;
     bool fitBarQueued = false;
     void fitControlBar();
     void toggleDrumHold();
@@ -497,7 +498,8 @@ private:
     void pickSearchRow(int row, bool add);       // a click on the search results list
     int searchListFrom = 0;                      // result index of the list's first row
     void openPortableDrive();                    // "สร้างไดรฟ์พกพา" (Dialogs/PortableDriveDialog.h)
-    void openEventSounds();                      // "เสียงพิธีการ / เอฟเฟกต์" (the bar's "อื่น ๆ")
+    void openEventSounds();                      // "เสียงพิธีการ / เอฟเฟกต์"
+    void showEventSoundsQuickMenu(const QPoint &globalPos); // quick popup menu on the bar's "เอฟเฟกต์" button
     void showFirstRunGuide();                    // no songs yet: where to start
     int settingsStartTab = -1;                   // the next settings dialog opens on this tab
     bool simpleMenu() const;                     // right-click menu without the sound engineer's tools

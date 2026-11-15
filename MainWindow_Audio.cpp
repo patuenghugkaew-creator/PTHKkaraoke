@@ -630,7 +630,7 @@ void MainWindow::openPortableDrive()
     setFocus();
 }
 
-// "เสียงพิธีการ / เอฟเฟกต์" (Dialogs/EventSoundsDialog.h): the bar's "อื่น ๆ" button
+// "เสียงพิธีการ / เอฟเฟกต์" (Dialogs/EventSoundsDialog.h)
 void MainWindow::openEventSounds()
 {
     ensureSoundPads();
@@ -638,6 +638,77 @@ void MainWindow::openEventSounds()
     dlg.selectCategory(settings->value("EventSounds/Last").toString());
     dlg.exec();
     settings->setValue("EventSounds/Last", dlg.currentCategoryName());
+    setFocus();
+}
+
+void MainWindow::showEventSoundsQuickMenu(const QPoint &globalPos)
+{
+    ensureSoundPads();
+    QMenu m(this);
+    QAction *openWin = m.addAction(MenuIcons::make(MenuIcons::Drum),
+                                   tr("เปิดหน้าต่าง เสียงพิธีการ / เอฟเฟกต์..."));
+    connect(openWin, &QAction::triggered, this, [this]() {
+        QTimer::singleShot(0, this, [this]() { openEventSounds(); });
+    });
+    if (soundPads && !soundPads->previewPlaying().isEmpty()) {
+        QAction *st = m.addAction(tr("■  หยุดเสียงที่กำลังเล่น (%1)\tAlt+Backspace")
+                                      .arg(SoundPads::fileLabel(soundPads->previewPlaying())));
+        connect(st, &QAction::triggered, this, [this]() { stopAllSoundPads(); });
+    }
+    m.addSeparator();
+
+    // Categories with sounds ready to play in 1 click directly from the popup menu
+    const QVector<EventSoundsDialog::Cat> cats = EventSoundsDialog::allCategories(soundPads);
+    for (const EventSoundsDialog::Cat &c : cats) {
+        if (c.name.isEmpty() || c.files.isEmpty())
+            continue;
+        QMenu *sub = m.addMenu(QString("%1 (%2)").arg(c.name).arg(c.files.size()));
+        QAction *openCat = sub->addAction(tr("เปิดหมวด \"%1\" ในหน้าต่างใหญ่...").arg(c.name));
+        const QString catName = c.name;
+        connect(openCat, &QAction::triggered, this, [this, catName]() {
+            settings->setValue("EventSounds/Last", catName);
+            QTimer::singleShot(0, this, [this]() { openEventSounds(); });
+        });
+        sub->addSeparator();
+        for (const QString &file : c.files) {
+            const QString label = SoundPads::fileLabel(file);
+            QAction *a = sub->addAction(QString::fromUtf8("▶  ") + label);
+            if (soundPads && soundPads->previewPlaying() == file)
+                a->setText(QString::fromUtf8("■  ") + label + tr(" (กำลังเล่น - คลิกเพื่อหยุด)"));
+            connect(a, &QAction::triggered, this, [this, file, label]() {
+                if (!soundPads)
+                    return;
+                soundPads->preview(file);
+                if (!soundPads->previewPlaying().isEmpty()) {
+                    ui->detail->setDetail(tr("เอฟเฟกต์"), label);
+                    ui->detail->show();
+                    detailTimer->start(2500);
+                }
+                setFocus();
+            });
+        }
+    }
+
+    // Quick pads (Alt+1..9)
+    if (soundPads) {
+        m.addSeparator();
+        QMenu *padsSub = m.addMenu(tr("แป้นเสียงเชียร์ด่วน (Alt+1..9): %1").arg(soundPads->bankName(soundPads->currentBank())));
+        for (int i = 0; i < SoundPads::Count; ++i) {
+            QAction *pa = padsSub->addAction(QString("Alt+%1  %2").arg(i + 1).arg(soundPads->label(i)));
+            connect(pa, &QAction::triggered, this, [this, i]() { triggerSoundPad(i); setFocus(); });
+        }
+    }
+
+    m.addSeparator();
+    QAction *panelAct = m.addAction(tr("แสดงแป้นเสียงลอยบนจอ (กดได้ตลอดเวลา)"));
+    panelAct->setCheckable(true);
+    panelAct->setChecked(padsPanel && padsPanel->isVisible());
+    connect(panelAct, &QAction::triggered, this, [this](bool on) { showSoundPadsPanel(on); setFocus(); });
+
+    QAction *stopAllAct = m.addAction(tr("หยุดเสียงเอฟเฟกต์ทั้งหมด\tAlt+Backspace"));
+    connect(stopAllAct, &QAction::triggered, this, [this]() { stopAllSoundPads(); setFocus(); });
+
+    m.exec(globalPos - QPoint(0, m.sizeHint().height()));
     setFocus();
 }
 

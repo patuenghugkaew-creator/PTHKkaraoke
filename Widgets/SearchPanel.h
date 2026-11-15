@@ -13,6 +13,8 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPushButton>
+#include <QResizeEvent>
 #include <QStringList>
 #include <QVector>
 #include <QWidget>
@@ -108,6 +110,14 @@ public:
     {
         setCursor(Qt::PointingHandCursor);
         setFocusPolicy(Qt::NoFocus);
+        queueButton = new QPushButton(tr("+ เพิ่มเข้าคิว"), this);
+        queueButton->setFocusPolicy(Qt::NoFocus);
+        queueButton->setCursor(Qt::PointingHandCursor);
+        queueButton->setStyleSheet("QPushButton { color: white; background: #176a48; border: 1px solid #6bd5a6; border-radius: 6px; padding: 0 10px; font-size: 16px; } QPushButton:hover { background: #208557; }");
+        connect(queueButton, &QPushButton::clicked, this, [this]() {
+            if (mark >= 0 && mark < rows.size() && onPick)
+                onPick(mark, true);
+        });
         hide();
     }
 
@@ -117,6 +127,7 @@ public:
         rows = r;
         mark = marked;
         footer = footerText;
+        positionQueueButton();
         update();
     }
     int rowHeight() const { return rowH; }
@@ -124,6 +135,11 @@ public:
     int wantedHeight() const { return (rows.size() + (footer.isEmpty() ? 0 : 1)) * rowH + 10; }
 
 protected:
+    void resizeEvent(QResizeEvent *e) override
+    {
+        QWidget::resizeEvent(e);
+        positionQueueButton();
+    }
     void paintEvent(QPaintEvent *) override
     {
         if (rows.isEmpty() && footer.isEmpty())
@@ -139,7 +155,7 @@ protected:
         const QFontMetrics fm(f);
         int y = 5;
         for (int i = 0; i < rows.size(); ++i) {
-            const QRect r(6, y, width() - 12, rowH);
+            const QRect r(6, y, width() - 12 - queueButton->sizeHint().width() - 12, rowH);
             if (i == mark) {
                 QPainterPath hl;
                 hl.addRoundedRect(QRectF(r), 8, 8);
@@ -195,6 +211,13 @@ protected:
     }
 
 private:
+    QPushButton *queueButton = nullptr;
+    void positionQueueButton()
+    {
+        queueButton->setVisible(mark >= 0 && mark < rows.size());
+        const int w = queueButton->sizeHint().width();
+        queueButton->setGeometry(width() - w - 12, 5 + mark * rowH + 2, w, rowH - 4);
+    }
     QVector<Row> rows;
     int mark = -1;
     QString footer;
