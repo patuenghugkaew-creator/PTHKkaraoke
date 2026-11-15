@@ -1062,7 +1062,7 @@ MainWindow::MainWindow(QWidget *parent) :
             });
 
             // Order on the bar narrowing down: least-used buttons fold into the menu first when the window is narrow
-            barButtons = { btnSubtitles, addSongBtn, lists, fullBtn, btnSecondScreen, btnShopLock, mixerBtn, prev, restartBtn, end, btnDrumHold, btnMedley, fxBtn, yt };
+            barButtons = { btnSubtitles, addSongBtn, lists, fullBtn, btnSecondScreen, btnShopLock, mixerBtn, prev, restartBtn, end, btnDrumHold, btnMedley, yt };
             for (QAbstractButton *b : std::initializer_list<QAbstractButton *>{ prev, restartBtn, end, btnDrumHold, btnMedley, btnSubtitles })
                 b->setProperty("songTool", true);
 
