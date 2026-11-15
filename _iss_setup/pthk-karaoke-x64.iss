@@ -3,7 +3,7 @@
 ; Expects the deployed program in D:\REA\PTHK-Build\deploy (see D:\REA\build-pthk.ps1).
 
 #ifndef AppVersion
-  #define AppVersion "1.1.2"
+  #define AppVersion "1.2.0"
 #endif
 #define MyAppName "PTHK Karaoke"
 #define MyAppPublisher "PTHK"
@@ -75,7 +75,7 @@ Name: "{app}\Tools"; Tasks: portable; Flags: uninsneveruninstall
 ; the portable Config / Data folders of the build are not packed: the installed program keeps
 ; its settings and song database in %USERPROFILE%\.PTHKKaraoke (or {app}\Config and {app}\Data in portable mode)
 ; (developer logs / leftovers are never packed; Tools and models are downloaded on first use)
-Source: "{#DeployDir}\*"; DestDir: "{app}"; Excludes: "Config,Data,Tools,models,vc_redist.x64.exe,KaraMixer.exe,*.pdb,*.log,*.old,*.bak,debug-logs.txt"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#DeployDir}\*"; DestDir: "{app}"; Excludes: "Config,Data,Tools,models,vc_redist.x64.exe,KaraMixer.exe,*.pdb,*.lib,*.log,*.old,*.bak,debug-logs.txt,debug-offline.txt,\VST\*,\SoundFonts\*"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; On the development PC only ("external": read at install time, not packed into Setup.exe; skipped
 ; where the build folder does not exist): start with the settings and the song database already
 ; made there, instead of choosing the folders and building the database again. Never overwritten.
@@ -84,6 +84,10 @@ Source: "{#DeployDir}\Data\Database.db3"; DestDir: "{%USERPROFILE}\.PTHKKaraoke\
 ; portable install: the same, but into the program folder itself (travels with the drive)
 Source: "{#DeployDir}\Config\*.conf"; DestDir: "{app}\Config"; Tasks: portable; Flags: external skipifsourcedoesntexist onlyifdoesntexist uninsneveruninstall
 Source: "{#DeployDir}\Data\Database.db3"; DestDir: "{app}\Data"; Tasks: portable; Flags: external skipifsourcedoesntexist onlyifdoesntexist uninsneveruninstall
+; the default sound for MIDI songs: GeneralUser GS by S. Christian Collins (free to redistribute,
+; licence shipped next to it). The deploy folder's own SoundFonts / VST are never packed (third-party).
+Source: "D:\REA\downloads\GeneralUser-GS\GeneralUser-GS.sf2"; DestDir: "{app}\SoundFonts"; Flags: ignoreversion
+Source: "D:\REA\downloads\GeneralUser-GS\LICENSE.txt"; DestDir: "{app}\SoundFonts"; DestName: "GeneralUser-GS-LICENSE.txt"; Flags: ignoreversion
 Source: "..\NOTICE.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\gpl-3.0.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#DeployDir}\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: ignoreversion deleteafterinstall

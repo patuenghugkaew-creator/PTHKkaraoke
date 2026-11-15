@@ -589,11 +589,19 @@ void MainWindow::showSavedWindowState()
             const qint64 now = QDateTime::currentSecsSinceEpoch();
             struct T { qint64 when; IdleSmart::Seed s; };
             QVector<T> tonight;
-            for (const SongDatabase::SungSong &s : db->sungSince(now - 3 * 3600, 10))
-                tonight << T{ s.n, { s.name, s.artist, QString(), s.type + s.path } };
+            for (const SongDatabase::SungSong &s : db->sungSince(now - 3 * 3600, 10)) {
+                IdleSmart::Seed sd;
+                sd.name = s.name; sd.artist = s.artist; sd.key = s.type + s.path;
+                sd.songType = s.type; sd.tempo = s.tempo;
+                tonight << T{ s.n, sd };
+            }
             for (const YtHistory::Entry &e : YtHistory::all())      // YouTube songs are not in that history
-                if (e.last / 1000 >= now - 3 * 3600)
-                    tonight << T{ e.last / 1000, { e.item.title, e.item.channel, e.item.id, "YOUTUBE" + e.item.id } };
+                if (e.last / 1000 >= now - 3 * 3600) {
+                    IdleSmart::Seed sd;
+                    sd.name = e.item.title; sd.artist = e.item.channel; sd.ytId = e.item.id;
+                    sd.key = "YOUTUBE" + e.item.id; sd.songType = "YOUTUBE";
+                    tonight << T{ e.last / 1000, sd };
+                }
             std::sort(tonight.begin(), tonight.end(), [](const T &a, const T &b) { return a.when > b.when; });
             for (const T &t : tonight)
                 out << t.s;
@@ -613,8 +621,12 @@ void MainWindow::showSavedWindowState()
                 const QDateTime dt = QDateTime::currentDateTime();
                 QVector<IdleSmart::Seed> hour;
                 for (const SongDatabase::SungSong &s : db->sungAtHour(dt.time().hour(), dt.date().dayOfWeek() >= 6))
-                    if (!have.contains(s.type + s.path))
-                        hour << IdleSmart::Seed{ s.name, s.artist, QString(), s.type + s.path };
+                    if (!have.contains(s.type + s.path)) {
+                        IdleSmart::Seed sd;
+                        sd.name = s.name; sd.artist = s.artist; sd.key = s.type + s.path;
+                        sd.songType = s.type; sd.tempo = s.tempo;
+                        hour << sd;
+                    }
                 // most sung first; let them take turns
                 for (int i = hour.size() - 1; i > 0; --i)
                     std::swap(hour[i], hour[QRandomGenerator::global()->bounded(qMin(i + 1, 5))]);
@@ -625,8 +637,12 @@ void MainWindow::showSavedWindowState()
             if (withSinger() < 3) {
                 QVector<IdleSmart::Seed> top;
                 for (Song s : db->songList(SongDatabase::ListKind::Top, 20))
-                    if (!have.contains(s.songType() + s.path()))
-                        top << IdleSmart::Seed{ s.name(), s.artist(), QString(), s.songType() + s.path() };
+                    if (!have.contains(s.songType() + s.path())) {
+                        IdleSmart::Seed sd;
+                        sd.name = s.name(); sd.artist = s.artist(); sd.key = s.songType() + s.path();
+                        sd.songType = s.songType(); sd.tempo = s.tempo();
+                        top << sd;
+                    }
                 for (int i = top.size() - 1; i > 0; --i)
                     std::swap(top[i], top[QRandomGenerator::global()->bounded(i + 1)]);
                 out += top;
@@ -884,7 +900,8 @@ bool MainWindow::pickIdleSong(Song *out)
                 out->setSongType("YOUTUBE");
                 out->setPath(p.yt.id);
             }
-            uiLog(QString("idle smart pick: %1 %2 | %3").arg(p.local ? "library" : "YouTube", out->name(), out->artist()));
+            idleContextTag = p.contextTag;
+            uiLog(QString("idle smart pick: %1 %2 | %3 [%4]").arg(p.local ? "library" : "YouTube", out->name(), out->artist(), p.contextTag));
             return true;
         }
         idleSmart->refill();
@@ -959,6 +976,7 @@ bool MainWindow::pickIdleSong(Song *out)
 void MainWindow::startNextIdleSong()
 {
     Song next;
+    idleContextTag.clear();
     if (!pickIdleSong(&next))
         return;
     lastIdlePath = next.path();
@@ -966,7 +984,9 @@ void MainWindow::startNextIdleSong()
     idlePlaying = true;
     idleSwitching = false;
     play(-2);
-    ui->detail->setDetail(tr("♪ เพลงคลออัตโนมัติ"),
+    const QString head = idleContextTag.isEmpty() ? tr("♪ เพลงคลออัตโนมัติ")
+                                                  : tr("♪ เพลงคลอ (%1)").arg(idleContextTag);
+    ui->detail->setDetail(head,
                           next.artist().isEmpty() ? next.name() : (next.name() + " - " + next.artist()));
     ui->detail->show();
     detailTimer->start(3500);

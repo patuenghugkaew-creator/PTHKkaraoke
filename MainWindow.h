@@ -519,6 +519,7 @@ private:
     QString lastIdlePath;
     class IdleSmart *idleSmart = nullptr;       // smart idle music (IdleSmart.h, IdleMusic/Source 4)
     QString idleSeedKey;                        // the customer song the smart idle music follows now
+    QString idleContextTag;                     // the context the idle song was picked for (shown on screen)
     // idle music keeps its singer (IdleMusic/KeepVocal) until the operator presses the vocal cut
     // during it: then the cut button rules again (until the next song)
     bool idleVocalByUser = false;
