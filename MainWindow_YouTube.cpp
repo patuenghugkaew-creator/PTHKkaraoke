@@ -954,22 +954,23 @@ void MainWindow::ytPrepGiveUp(const QString &why)
     playYouTube();
 }
 
-// every few seconds: the next songs in the queue are made ready (their copy, then their AI), one
-// download at a time and never in the way of the song that plays
+// every few seconds: the next 5 songs in the queue are made ready (their copy, then their AI), one
+// download at a time and never in the way of the song that plays (idle music included)
 void MainWindow::ytQueueTick()
 {
     static QElapsedTimer clock;
     if (clock.isValid() && clock.elapsed() < 3000)
         return;
     clock.restart();
-    if (!settings->value("YtCutAi", false).toBool() || idlePlaying)
+    // also while idle music plays: the songs customers queue meanwhile are cut before they start
+    if (!settings->value("YtCutAi", false).toBool())
         return;
     const bool download = settings->value("YtDownloadFirst", true).toBool()
                           && !YtTools::ytdlpPath().isEmpty() && !YtTools::ffmpegPath().isEmpty();
     const int from = remove_playlist ? 0 : playingIndex + 1;
     QStringList files;
     int taken = 0;
-    for (int i = qMax(0, from); i < playlist.size() && taken < 3; ++i) {
+    for (int i = qMax(0, from); i < playlist.size() && taken < 5; ++i) {
         Song *s = playlist[i];
         if (!s || (s->songType() == playingSong.songType() && s->path() == playingSong.path()))
             continue;
