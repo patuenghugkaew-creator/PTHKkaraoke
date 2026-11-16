@@ -153,6 +153,53 @@ static bool hasAnyFile(const QString &dir)
     return it.hasNext();
 }
 
+// Copies a file that another program may have open (the song database of a PTHK Karaoke that is
+// still running): opened with every share flag, written to a temporary name, then renamed.
+static bool copySharedFile(const QString &src, const QString &dst)
+{
+#ifdef Q_OS_WIN
+    HANDLE in = CreateFileW(reinterpret_cast<LPCWSTR>(QDir::toNativeSeparators(src).utf16()), GENERIC_READ,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (in == INVALID_HANDLE_VALUE)
+        return false;
+    QFile out(dst + ".part");
+    bool ok = out.open(QIODevice::WriteOnly | QIODevice::Truncate);
+    QByteArray buf(4 << 20, Qt::Uninitialized);
+    DWORD got = 0;
+    while (ok && ReadFile(in, buf.data(), DWORD(buf.size()), &got, nullptr) && got > 0)
+        ok = out.write(buf.constData(), qint64(got)) == qint64(got);
+    CloseHandle(in);
+    out.close();
+    if (ok) {
+        QFile::remove(dst);
+        ok = QFile::rename(dst + ".part", dst);
+    }
+    if (!ok)
+        QFile::remove(dst + ".part");
+    return ok;
+#else
+    return QFile::copy(src, dst);
+#endif
+}
+
+// The installer's one-folder mode on a computer that used PTHK Karaoke before brought the old
+// settings over and set "AutoSetup/ImportProfileData": the song database / lyrics index of the user
+// profile come along now (the installer itself could not read them while the old program ran).
+static void importProfileData()
+{
+    QSettings st(Config::CONFIG_APP_FILE_PATH, QSettings::IniFormat);
+    if (!st.value("AutoSetup/ImportProfileData", false).toBool())
+        return;
+    st.remove("AutoSetup/ImportProfileData");
+    st.sync();
+    const QString from = ALL_DATA_DIR_PATH + "/Data";
+    for (const QFileInfo &fi : QDir(from).entryInfoList({ "*.db3" }, QDir::Files)) {
+        const QString dst = Config::DATABASE_DIR_PATH + "/" + fi.fileName();
+        if (!QFileInfo::exists(dst))
+            copySharedFile(fi.absoluteFilePath(), dst);
+    }
+}
+
 static void autoBindAppFolders(const QString &appDir)
 {
     QSettings st(Config::CONFIG_APP_FILE_PATH, QSettings::IniFormat);
@@ -249,6 +296,7 @@ void Config::initConfigDataPath()
         CONFIG_APP_FILE_PATH = CONFIG_DIR_PATH + "/PTHKKaraoke.conf";
         CONFIG_SYNTH_FILE_PATH = CONFIG_DIR_PATH + "/SynthMixer.conf";
         rebasePortablePaths(appDir);
+        importProfileData();
         autoBindAppFolders(appDir);
     }
 

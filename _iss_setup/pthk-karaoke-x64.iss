@@ -90,10 +90,11 @@ Source: "{#DeployDir}\Data\Database.db3"; DestDir: "{%USERPROFILE}\.PTHKKaraoke\
 Source: "{#DeployDir}\Config\*.conf"; DestDir: "{app}\Config"; Tasks: portable; Flags: external skipifsourcedoesntexist onlyifdoesntexist uninsneveruninstall
 Source: "{#DeployDir}\Data\Database.db3"; DestDir: "{app}\Data"; Tasks: portable; Flags: external skipifsourcedoesntexist onlyifdoesntexist uninsneveruninstall
 ; a first one-folder install on a computer that already used PTHK Karaoke (settings in the user
-; profile): bring those settings, medley sets and the song database into the folder ("external":
-; read on that computer at install time, nothing is packed). Not when the folder already has its own.
+; profile): bring those settings and medley sets into the folder ("external": read on that computer at
+; install time, nothing is packed). Not when the folder already has its own. The song database comes
+; on the program's first start (Config.cpp importProfileData): a running PTHK Karaoke keeps it open,
+; and Setup could not read it (it stopped with "cancelled").
 Source: "{%USERPROFILE}\.PTHKKaraoke\Config\*"; DestDir: "{app}\Config"; Tasks: portable; Check: FirstOneFolderInstall; Flags: external skipifsourcedoesntexist onlyifdoesntexist recursesubdirs createallsubdirs uninsneveruninstall
-Source: "{%USERPROFILE}\.PTHKKaraoke\Data\*"; DestDir: "{app}\Data"; Tasks: portable; Check: FirstOneFolderInstall; Flags: external skipifsourcedoesntexist onlyifdoesntexist recursesubdirs createallsubdirs uninsneveruninstall
 ; the default sound for MIDI songs: GeneralUser GS by S. Christian Collins (free to redistribute,
 ; licence shipped next to it). The deploy folder's own SoundFonts / VST are never packed (third-party).
 Source: "D:\REA\downloads\GeneralUser-GS\GeneralUser-GS.sf2"; DestDir: "{app}\SoundFonts"; Flags: ignoreversion
@@ -149,5 +150,8 @@ begin
     Lines[0] := 'PTHK Karaoke: ทุกอย่างอยู่ในโฟลเดอร์นี้ (Config, Data, Songs, SoundFonts, VST, Backgrounds)';
     Lines[1] := 'ยกทั้งโฟลเดอร์ไปเครื่องอื่นหรือไดรฟ์พกพาได้ เปิด PTHKKaraoke.exe แล้วใช้ได้เลย';
     SaveStringsToUTF8File(ExpandConstant('{app}\Portable.txt'), Lines, False);
+    // settings brought from the user profile: the program brings the song database too
+    if (not HadAppConfig) and FileExists(ExpandConstant('{%USERPROFILE}\.PTHKKaraoke\Data\Database.db3')) then
+      SetIniString('AutoSetup', 'ImportProfileData', 'true', ExpandConstant('{app}\Config\PTHKKaraoke.conf'));
   end;
 end;
